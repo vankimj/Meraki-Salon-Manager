@@ -286,12 +286,23 @@ input[type="text"]:focus,input[type="password"]:focus{border-color:#3D95CE;backg
           <input type="text" id="f-venmo" placeholder="username" autocomplete="off" spellcheck="false">
         </div>
       </div>
-      <div style="margin-bottom:16px">
+      <div style="margin-bottom:12px">
         <label class="form-label"><span class="label-dot" style="background:#E1306C"></span>Instagram username</label>
         <div class="username-wrap">
           <span class="username-at">@</span>
           <input type="text" id="f-ig" placeholder="username" autocomplete="off" spellcheck="false">
         </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="form-label"><span class="label-dot" style="background:#1877F2"></span>Facebook username</label>
+        <div class="username-wrap">
+          <span class="username-at">@</span>
+          <input type="text" id="f-fb" placeholder="username" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div style="margin-bottom:16px">
+        <label class="form-label"><span class="label-dot" style="background:#374151"></span>Homepage URL</label>
+        <input type="text" id="f-url" placeholder="https://..." autocomplete="off" spellcheck="false">
       </div>
       <div class="modal-actions">
         <button onclick="DX()" style="flex:1">Cancel</button>
@@ -342,8 +353,11 @@ let GH = { token:'', owner:GH_DEFAULTS.owner, repo:GH_DEFAULTS.repo, path:GH_DEF
 
 /* ── Helpers ─────────────────────────────── */
 function clean(r){ return r.trim().replace(/^@+/,'').replace(/\s+/g,'').toLowerCase(); }
+function normURL(u){ u=u.trim(); return u&&!u.match(/^https?:\/\//)?'https://'+u:u; }
 function vURL(u){ return 'https://venmo.com/u/' + u; }
 function iURL(u){ return 'https://instagram.com/' + u; }
+function fURL(u){ return 'https://facebook.com/' + u; }
+function domainOf(u){ try{ return new URL(u).hostname.replace(/^www\./,''); }catch(e){ return u; } }
 
 function toast(msg){
   const t = document.getElementById('toast');
@@ -491,22 +505,33 @@ function sA(){ AV=true; document.getElementById('deck-actions').classList.add('v
 function hA(){ AV=false; document.getElementById('deck-actions').classList.remove('visible'); }
 function tA(){ AV ? hA() : sA(); }
 
-/* ── QR toggle ───────────────────────────── */
-window.toggleQR = function(i){
-  const vv=document.getElementById('vv'+i), iv=document.getElementById('iv'+i);
-  const d0=document.getElementById('qd0'+i), d1=document.getElementById('qd1'+i);
-  if(!vv||!iv) return;
-  const wasV = !vv.classList.contains('hidden');
-  vv.classList.toggle('hidden', wasV);
-  iv.classList.toggle('hidden', !wasV);
-  if(d0) d0.style.background = wasV ? '#ccc' : '#333';
-  if(d1) d1.style.background = wasV ? '#333' : '#ccc';
+/* ── QR cycle ────────────────────────────── */
+function qrIds(sl, i){
+  const ids = [];
+  if(sl.vu) ids.push('vv'+i);
+  if(sl.iu) ids.push('iv'+i);
+  if(sl.fu) ids.push('fv'+i);
+  if(sl.hu) ids.push('wv'+i);
+  return ids;
+}
+window.nextQR = function(i){
+  const sl = SL[i]; if(!sl) return;
+  const ids = qrIds(sl, i); if(ids.length < 2) return;
+  const cur = ids.findIndex(id => !document.getElementById(id).classList.contains('hidden'));
+  const nxt = (cur + 1) % ids.length;
+  ids.forEach((id, j) => {
+    document.getElementById(id).classList.toggle('hidden', j !== nxt);
+    const dot = document.getElementById('qd'+j+'_'+i);
+    if(dot) dot.style.background = j === nxt ? '#333' : '#ccc';
+  });
   rI();
 };
 
 /* ── SVG logos ───────────────────────────── */
 const VSG = `<svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width="148" height="44"><rect width="148" height="44" rx="8" fill="#3D95CE"/><text x="74" y="30" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="24" font-weight="700" fill="white">Venmo</text></svg>`;
 const ISG = `<svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width="148" height="44"><rect width="148" height="44" rx="8" fill="#E1306C"/><rect x="8" y="10" width="24" height="24" rx="6" fill="none" stroke="white" stroke-width="2.2"/><circle cx="20" cy="22" r="6.2" fill="none" stroke="white" stroke-width="2.2"/><circle cx="28.5" cy="13.5" r="2.5" fill="white"/><text x="95" y="30" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="19" font-weight="700" fill="white">Instagram</text></svg>`;
+const FSG = `<svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width="148" height="44"><rect width="148" height="44" rx="8" fill="#1877F2"/><text x="74" y="30" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="22" font-weight="700" fill="white">Facebook</text></svg>`;
+const WSG = `<svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width="148" height="44"><rect width="148" height="44" rx="8" fill="#374151"/><circle cx="18" cy="22" r="11" fill="none" stroke="white" stroke-width="2"/><ellipse cx="18" cy="22" rx="5" ry="11" fill="none" stroke="white" stroke-width="2"/><line x1="7" y1="22" x2="29" y2="22" stroke="white" stroke-width="2"/><text x="90" y="30" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="20" font-weight="700" fill="white">Website</text></svg>`;
 
 function phSVG(c){
   const s = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400"><rect width="300" height="400" fill="${c}"/><circle cx="150" cy="140" r="60" fill="rgba(255,255,255,.15)"/><ellipse cx="150" cy="320" rx="100" ry="70" fill="rgba(255,255,255,.1)"/></svg>`;
@@ -515,21 +540,28 @@ function phSVG(c){
 
 /* ── Build slide HTML ────────────────────── */
 function bS(sl, i){
-  const id=i===DF, hv=!!sl.vu, hi=!!sl.iu, hb=hv&&hi, hn=!!(sl.name&&sl.name.trim());
+  const isDF=i===DF, hn=!!(sl.name&&sl.name.trim());
   const photo = sl.img
     ? `<img src="${sl.img}" alt="headshot">`
     : `<div style="display:flex;flex-direction:column;align-items:center;gap:8px;color:#ccc"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg><span style="font-size:11px">No photo</span></div>`;
-  const vv = hv ? `<div id="vv${i}" class="qr-view">${VSG}<div id="qv${i}" style="width:${QS}px;height:${QS}px;display:flex;align-items:center;justify-content:center;flex-shrink:0"></div><div class="qr-handle-text">@${sl.vu}</div></div>` : '';
-  const iv = hi ? `<div id="iv${i}" class="qr-view${hv?' hidden':''}">${ISG}<div id="qi${i}" style="width:${QS}px;height:${QS}px;display:flex;align-items:center;justify-content:center;flex-shrink:0"></div><div class="qr-handle-text">@${sl.iu}</div></div>` : '';
-  const dots = hb ? `<div class="qr-dots"><div id="qd0${i}" class="qr-dot" style="background:#333"></div><div id="qd1${i}" class="qr-dot" style="background:#ccc"></div></div>` : '';
-  const hint = hb ? `<div class="tap-hint">tap to switch</div>` : '';
+  const panels = [];
+  if(sl.vu) panels.push({elId:'vv'+i, qId:'qv'+i, svg:VSG, label:'@'+sl.vu});
+  if(sl.iu) panels.push({elId:'iv'+i, qId:'qi'+i, svg:ISG, label:'@'+sl.iu});
+  if(sl.fu) panels.push({elId:'fv'+i, qId:'qf'+i, svg:FSG, label:'@'+sl.fu});
+  if(sl.hu) panels.push({elId:'wv'+i, qId:'qw'+i, svg:WSG, label:domainOf(sl.hu)});
+  const multi = panels.length > 1;
+  const panelsHTML = panels.map((p,j) =>
+    `<div id="${p.elId}" class="qr-view${j>0?' hidden':''}">${p.svg}<div id="${p.qId}" style="width:${QS}px;height:${QS}px;display:flex;align-items:center;justify-content:center;flex-shrink:0"></div><div class="qr-handle-text">${p.label}</div></div>`
+  ).join('');
+  const dots = multi ? `<div class="qr-dots">${panels.map((_,j)=>`<div id="qd${j}_${i}" class="qr-dot" style="background:${j===0?'#333':'#ccc'}"></div>`).join('')}</div>` : '';
+  const hint = multi ? `<div class="tap-hint">tap to switch</div>` : '';
   return `<div class="slide-wrap">
     <div class="slide-left">
-      <div class="slide-photo">${photo}${id?'<div class="default-badge">DEFAULT</div>':''}</div>
+      <div class="slide-photo">${photo}${isDF?'<div class="default-badge">DEFAULT</div>':''}</div>
       <div class="nameplate">${hn?`<span class="nameplate-name">${sl.name}</span>`:'<span class="nameplate-empty">No name</span>'}</div>
     </div>
-    <div class="${hb?'slide-right tappable':'slide-right'}" ${hb?`onclick="toggleQR(${i})"`:''}>
-      ${hint}${vv}${iv}${dots}
+    <div class="${multi?'slide-right tappable':'slide-right'}" ${multi?`onclick="nextQR(${i})"`:''}>
+      ${hint}${panelsHTML}${dots}
     </div>
   </div>`;
 }
@@ -545,9 +577,12 @@ function RA(){
   track.style.transform = `translateX(-${CI*100}%)`;
   UI();
   setTimeout(() => {
+    const mkQR = (elId, url) => { const e=document.getElementById(elId); if(e&&url) try{ new QRCode(e,{text:url,width:QS,height:QS,colorDark:'#1a1a1a',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.M}); }catch(x){} };
     SL.forEach((sl,i) => {
-      if(sl.vu){ const e=document.getElementById('qv'+i); if(e) try{ new QRCode(e,{text:vURL(sl.vu),width:QS,height:QS,colorDark:'#1a1a1a',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.M}); }catch(x){} }
-      if(sl.iu){ const e=document.getElementById('qi'+i); if(e) try{ new QRCode(e,{text:iURL(sl.iu),width:QS,height:QS,colorDark:'#1a1a1a',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.M}); }catch(x){} }
+      if(sl.vu) mkQR('qv'+i, vURL(sl.vu));
+      if(sl.iu) mkQR('qi'+i, iURL(sl.iu));
+      if(sl.fu) mkQR('qf'+i, fURL(sl.fu));
+      if(sl.hu) mkQR('qw'+i, sl.hu);
     });
   }, 65);
   rI();
@@ -636,6 +671,8 @@ window.DM = function(){
   document.getElementById('f-name').value = '';
   document.getElementById('f-venmo').value = '';
   document.getElementById('f-ig').value = '';
+  document.getElementById('f-fb').value = '';
+  document.getElementById('f-url').value = '';
   document.getElementById('f-file').value = '';
   document.getElementById('modal-title').textContent = 'New slide';
   document.getElementById('modal-save-btn').textContent = 'Add slide \u2192';
@@ -652,6 +689,8 @@ window.openEdit = function(){
   document.getElementById('f-name').value = sl.name || '';
   document.getElementById('f-venmo').value = sl.vu || '';
   document.getElementById('f-ig').value = sl.iu || '';
+  document.getElementById('f-fb').value = sl.fu || '';
+  document.getElementById('f-url').value = sl.hu || '';
   document.getElementById('f-file').value = '';
   document.getElementById('modal-title').textContent = 'Edit slide';
   document.getElementById('modal-save-btn').textContent = 'Save changes \u2713';
@@ -683,14 +722,16 @@ window.FI = function(ev){
 window.AS = function(){
   const vu = clean(document.getElementById('f-venmo').value);
   const iu = clean(document.getElementById('f-ig').value);
+  const fu = clean(document.getElementById('f-fb').value);
+  const hu = normURL(document.getElementById('f-url').value);
   const name = document.getElementById('f-name').value.trim();
-  if(!vu && !iu){ document.getElementById('f-venmo').focus(); return; }
+  if(!vu && !iu && !fu && !hu){ document.getElementById('f-venmo').focus(); return; }
 
   if(EI >= 0){
-    SL[EI] = { img: PI, name: name||null, vu: vu||null, iu: iu||null };
+    SL[EI] = { img: PI, name: name||null, vu: vu||null, iu: iu||null, fu: fu||null, hu: hu||null };
     toast('Slide updated');
   } else {
-    SL.push({ img: PI, name: name||null, vu: vu||null, iu: iu||null });
+    SL.push({ img: PI, name: name||null, vu: vu||null, iu: iu||null, fu: fu||null, hu: hu||null });
     CI = SL.length - 1;
     toast('Slide added');
   }
