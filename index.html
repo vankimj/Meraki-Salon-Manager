@@ -317,7 +317,7 @@ input[type="text"]:focus,input[type="password"]:focus{border-color:#3D95CE;backg
         <span style="font-size:15px;font-weight:600">GitHub Storage</span>
         <button class="btn-circle" onclick="closeGHSettings()" style="font-size:17px">&#215;</button>
       </div>
-      <p style="font-size:12px;color:#888;margin-bottom:14px;line-height:1.6">Syncs slides to <strong>vankimj/Meraki-Salon-Manager</strong>. Paste a GitHub Personal Access Token with <strong>repo</strong> write access below. <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" style="color:#3D95CE">Create one here ↗</a></p>
+      <p style="font-size:12px;color:#888;margin-bottom:14px;line-height:1.6">Syncs slides to <strong>vankimj/meraki-salon-data</strong> (private). Paste a GitHub Personal Access Token with <strong>Contents: Read &amp; Write</strong> access on that repo. <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" style="color:#3D95CE">Create one here ↗</a></p>
       <div style="margin-bottom:12px">
         <label class="form-label">Personal Access Token</label>
         <input type="password" id="gh-f-token" placeholder="ghp_..." autocomplete="off" style="font-family:monospace;font-size:12px">
@@ -348,7 +348,7 @@ input[type="text"]:focus,input[type="password"]:focus{border-color:#3D95CE;backg
 const QS = 148;
 let CI = 0, DF = 0, SL = [], PI = null, EI = -1;
 let AV = false, HT = null, IT = null;
-const GH_DEFAULTS = { owner:'vankimj', repo:'Meraki-Salon-Manager', path:'salon-data.json' };
+const GH_DEFAULTS = { owner:'vankimj', repo:'meraki-salon-data', path:'salon-data.json' };
 let GH = { token:'', owner:GH_DEFAULTS.owner, repo:GH_DEFAULTS.repo, path:GH_DEFAULTS.path, sha:null };
 
 /* ── Helpers ─────────────────────────────── */
