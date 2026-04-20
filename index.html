@@ -386,7 +386,11 @@ function resizeImg(src, mw, mh, q){
 function loadGHCfg(){
   try{
     const d = localStorage.getItem('gh_cfg');
-    if(d){ const p = JSON.parse(d); GH.token=p.token||''; GH.owner=p.owner||GH_DEFAULTS.owner; GH.repo=p.repo||GH_DEFAULTS.repo; GH.path=p.path||GH_DEFAULTS.path; }
+    if(d){
+      const p = JSON.parse(d);
+      if(p.repo==='Meraki-Salon-Manager'){ p.repo='meraki-salon-data'; saveGHCfg(); }
+      GH.token=p.token||''; GH.owner=p.owner||GH_DEFAULTS.owner; GH.repo=p.repo||GH_DEFAULTS.repo; GH.path=p.path||GH_DEFAULTS.path;
+    }
   }catch(e){}
 }
 function saveGHCfg(){
