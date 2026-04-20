@@ -306,7 +306,7 @@ input[type="text"]:focus,input[type="password"]:focus{border-color:#3D95CE;backg
         <span style="font-size:15px;font-weight:600">GitHub Storage</span>
         <button class="btn-circle" onclick="closeGHSettings()" style="font-size:17px">&#215;</button>
       </div>
-      <p style="font-size:12px;color:#888;margin-bottom:14px;line-height:1.6">Store data in a GitHub repository so slides sync across devices. Requires a Personal Access Token with <strong>repo</strong> write access.</p>
+      <p style="font-size:12px;color:#888;margin-bottom:14px;line-height:1.6">Syncs slides to <strong>vankimj/Meraki-Salon-Manager</strong>. Paste a GitHub Personal Access Token with <strong>repo</strong> write access below. <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" style="color:#3D95CE">Create one here ↗</a></p>
       <div style="margin-bottom:12px">
         <label class="form-label">Personal Access Token</label>
         <input type="password" id="gh-f-token" placeholder="ghp_..." autocomplete="off" style="font-family:monospace;font-size:12px">
@@ -337,7 +337,8 @@ input[type="text"]:focus,input[type="password"]:focus{border-color:#3D95CE;backg
 const QS = 148;
 let CI = 0, DF = 0, SL = [], PI = null, EI = -1;
 let AV = false, HT = null, IT = null;
-let GH = { token:'', owner:'', repo:'', path:'salon-data.json', sha:null };
+const GH_DEFAULTS = { owner:'vankimj', repo:'Meraki-Salon-Manager', path:'salon-data.json' };
+let GH = { token:'', owner:GH_DEFAULTS.owner, repo:GH_DEFAULTS.repo, path:GH_DEFAULTS.path, sha:null };
 
 /* ── Helpers ─────────────────────────────── */
 function clean(r){ return r.trim().replace(/^@+/,'').replace(/\s+/g,'').toLowerCase(); }
@@ -371,7 +372,7 @@ function resizeImg(src, mw, mh, q){
 function loadGHCfg(){
   try{
     const d = localStorage.getItem('gh_cfg');
-    if(d){ const p = JSON.parse(d); GH.token=p.token||''; GH.owner=p.owner||''; GH.repo=p.repo||''; GH.path=p.path||'salon-data.json'; }
+    if(d){ const p = JSON.parse(d); GH.token=p.token||''; GH.owner=p.owner||GH_DEFAULTS.owner; GH.repo=p.repo||GH_DEFAULTS.repo; GH.path=p.path||GH_DEFAULTS.path; }
   }catch(e){}
 }
 function saveGHCfg(){
@@ -699,12 +700,13 @@ window.AS = function(){
 /* ── GitHub Settings UI ──────────────────── */
 window.openGHSettings = function(){
   document.getElementById('gh-f-token').value = GH.token;
-  document.getElementById('gh-f-repo').value = GH.owner&&GH.repo ? `${GH.owner}/${GH.repo}` : '';
-  document.getElementById('gh-f-path').value = GH.path;
+  document.getElementById('gh-f-repo').value = GH.owner&&GH.repo ? `${GH.owner}/${GH.repo}` : `${GH_DEFAULTS.owner}/${GH_DEFAULTS.repo}`;
+  document.getElementById('gh-f-path').value = GH.path || GH_DEFAULTS.path;
   const el = document.getElementById('gh-overlay');
   el.style.display = 'flex';
   requestAnimationFrame(() => requestAnimationFrame(() => {
     document.getElementById('gh-modal').style.transform = 'translateY(0)';
+    if(!GH.token) setTimeout(() => document.getElementById('gh-f-token').focus(), 380);
   }));
 };
 window.closeGHSettings = function(){
@@ -759,6 +761,7 @@ if(GH.token && GH.owner && GH.repo){
   load();
   if(!SL.length) SL = DEFAULTS;
   RA();
+  if(!GH.token) setTimeout(openGHSettings, 800);
 }
 
 })();
