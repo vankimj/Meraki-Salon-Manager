@@ -4,11 +4,19 @@
     "ignore": [
       "firebase.json",
       ".firebaserc",
+      "firestore.rules",
+      "storage.rules",
       ".claude/**",
       "**/.*"
     ],
     "rewrites": [
       { "source": "**", "destination": "/index.html" }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
   }
 }
