@@ -38,11 +38,14 @@ function matchesSearch(c, q) {
   );
 }
 
+const PAGE_SIZE = 50;
+
 // ── main list ──────────────────────────────────────────
 export default function ClientsAdmin() {
   const [clients,  setClients]  = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [search,   setSearch]   = useState('');
+  const [page,     setPage]     = useState(0);
   // modal: null | { client, mode: 'view'|'edit' }
   const [modal,    setModal]    = useState(null);
 
@@ -77,7 +80,16 @@ export default function ClientsAdmin() {
     setClients(cs => cs.filter(c => c.id !== client.id));
   }
 
-  const visible = search ? clients.filter(c => matchesSearch(c, search)) : clients;
+  function handleSearch(val) {
+    setSearch(val);
+    setPage(0);
+  }
+
+  const visible   = search ? clients.filter(c => matchesSearch(c, search)) : clients;
+  const totalPages = Math.ceil(visible.length / PAGE_SIZE);
+  const pageSlice  = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const rangeStart = visible.length ? page * PAGE_SIZE + 1 : 0;
+  const rangeEnd   = Math.min((page + 1) * PAGE_SIZE, visible.length);
 
   if (loading) return <Empty>Loading clients…</Empty>;
 
@@ -86,7 +98,7 @@ export default function ClientsAdmin() {
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <input
-          value={search} onChange={e => setSearch(e.target.value)}
+          value={search} onChange={e => handleSearch(e.target.value)}
           placeholder="Search by name, phone, or email…"
           style={{ flex: 1, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '7px 12px', fontSize: 13, outline: 'none', background: '#fafafa' }}
         />
@@ -97,18 +109,44 @@ export default function ClientsAdmin() {
       {visible.length === 0
         ? <Empty>{search ? 'No clients match that search.' : 'No clients yet — click Add Client to start.'}</Empty>
         : (
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', overflow: 'hidden' }}>
-            {visible.map((c, i) => (
-              <ClientRow
-                key={c.id}
-                client={c}
-                last={i === visible.length - 1}
-                onView={() => setModal({ client: { ...c }, mode: 'view' })}
-                onEdit={() => setModal({ client: { ...c }, mode: 'edit' })}
-                onDelete={() => handleDelete(c)}
-              />
-            ))}
-          </div>
+          <>
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', overflow: 'hidden' }}>
+              {pageSlice.map((c, i) => (
+                <ClientRow
+                  key={c.id}
+                  client={c}
+                  last={i === pageSlice.length - 1}
+                  onView={() => setModal({ client: { ...c }, mode: 'view' })}
+                  onEdit={() => setModal({ client: { ...c }, mode: 'edit' })}
+                  onDelete={() => handleDelete(c)}
+                />
+              ))}
+            </div>
+
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, padding: '0 2px' }}>
+                <button
+                  onClick={() => setPage(p => p - 1)} disabled={page === 0}
+                  style={{ fontSize: 12, padding: '5px 14px', borderRadius: 8, border: '1px solid #d8d8d8', background: '#fff', color: page === 0 ? '#ccc' : '#333', cursor: page === 0 ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                  ← Prev
+                </button>
+                <span style={{ fontSize: 12, color: '#888' }}>
+                  {rangeStart}–{rangeEnd} of {visible.length} clients
+                </span>
+                <button
+                  onClick={() => setPage(p => p + 1)} disabled={page >= totalPages - 1}
+                  style={{ fontSize: 12, padding: '5px 14px', borderRadius: 8, border: '1px solid #d8d8d8', background: '#fff', color: page >= totalPages - 1 ? '#ccc' : '#333', cursor: page >= totalPages - 1 ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                  Next →
+                </button>
+              </div>
+            )}
+            {totalPages <= 1 && visible.length > 0 && (
+              <div style={{ fontSize: 11, color: '#bbb', textAlign: 'center', marginTop: 8 }}>
+                {visible.length} client{visible.length !== 1 ? 's' : ''}
+              </div>
+            )}
+          </>
         )
       }
 
