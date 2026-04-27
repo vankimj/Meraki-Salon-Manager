@@ -1,10 +1,83 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isBootstrapAdmin() {
+      return request.auth != null &&
+             request.auth.token.email in ['jvankim@gmail.com'];
+    }
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // ── Legacy path (read-only for migration) ────────────
     match /salon/{document} {
       allow read: if true;
-      allow write: if request.auth != null &&
-        request.auth.token.email in ['jvankim@gmail.com'];
+      allow write: if isBootstrapAdmin();
+    }
+    match /logs/{logId} {
+      allow read:   if isBootstrapAdmin();
+      allow create: if isAuthenticated();
+    }
+
+    // ── Tenant data ──────────────────────────────────────
+    match /tenants/{tenantId} {
+
+      // Config documents live in a data/ sub-collection (4-segment paths = valid Firestore docs)
+      match /data/slides {
+        allow read:  if true;
+        allow write: if isBootstrapAdmin();
+      }
+      match /data/users {
+        allow read:  if isAuthenticated();
+        allow write: if isBootstrapAdmin();
+      }
+      match /data/settings {
+        allow read:  if isAuthenticated();
+        allow write: if isBootstrapAdmin();
+      }
+
+      // Services sub-collection: publicly readable
+      match /services/{serviceId} {
+        allow read:  if true;
+        allow write: if isBootstrapAdmin();
+      }
+
+      // Clients: any authenticated staff can read/write
+      match /clients/{clientId} {
+        allow read:  if isAuthenticated();
+        allow write: if isAuthenticated();
+      }
+
+      // Employees: any authenticated staff can read; only admin can write
+      match /employees/{employeeId} {
+        allow read:  if isAuthenticated();
+        allow write: if isBootstrapAdmin();
+      }
+
+      // Appointments: any authenticated staff can read/write
+      match /appointments/{apptId} {
+        allow read:  if isAuthenticated();
+        allow write: if isAuthenticated();
+      }
+
+      // Logs: any authenticated user can create, only admin can read
+      match /logs/{logId} {
+        allow create: if isAuthenticated();
+        allow read:   if isBootstrapAdmin();
+      }
+
+      // Notifications — any authenticated user can create; admin can read/update (Cloud Function uses Admin SDK)
+      match /notifications/{notifId} {
+        allow create: if isAuthenticated();
+        allow read, update, delete: if isBootstrapAdmin();
+      }
+
+      // Access requests — any signed-in user can write their own (keyed by uid)
+      match /requests/{userId} {
+        allow create, update: if isAuthenticated() && request.auth.uid == userId;
+        allow read, delete:   if isBootstrapAdmin();
+      }
     }
   }
 }

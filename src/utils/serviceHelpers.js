@@ -1,0 +1,34 @@
+import { CATEGORY_ORDER } from '../data/seedServices';
+
+export function formatPrice(basePrice, priceFrom) {
+  return priceFrom ? `$${basePrice}+` : `$${basePrice}`;
+}
+
+export function formatDuration(duration, durationMin) {
+  return durationMin ? `${duration}+ min` : `${duration} min`;
+}
+
+export function groupByCategory(services) {
+  const map = {};
+  for (const svc of services) {
+    if (!map[svc.category]) map[svc.category] = [];
+    map[svc.category].push(svc);
+  }
+  // Sort categories by canonical order, unknown categories appended alphabetically
+  const known   = CATEGORY_ORDER.filter(c => map[c]);
+  const unknown = Object.keys(map).filter(c => !CATEGORY_ORDER.includes(c)).sort();
+  return [...known, ...unknown].map(cat => ({ category: cat, services: map[cat] }));
+}
+
+export function validateService(data) {
+  const errors = {};
+  if (!data.name?.trim())               errors.name     = 'Name is required';
+  if (!data.category?.trim())           errors.category = 'Category is required';
+  if (data.basePrice == null || data.basePrice < 0) errors.basePrice = 'Price must be 0 or more';
+  if (!data.duration || data.duration < 1)          errors.duration  = 'Duration must be at least 1 min';
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+export function blankService() {
+  return { name: '', category: 'Manicures', basePrice: 0, priceFrom: true, duration: 30, durationMin: false, description: '', image: '', active: true, sortOrder: 99 };
+}

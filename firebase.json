@@ -1,13 +1,11 @@
 {
+  "functions": [{ "source": "functions", "codebase": "default", "ignore": ["node_modules"] }],
   "hosting": {
-    "public": ".",
+    "public": "dist",
     "ignore": [
       "firebase.json",
-      ".firebaserc",
-      "firestore.rules",
-      "storage.rules",
-      ".claude/**",
-      "**/.*"
+      "**/.*",
+      "**/node_modules/**"
     ],
     "rewrites": [
       { "source": "**", "destination": "/index.html" }
@@ -15,8 +13,5 @@
   },
   "firestore": {
     "rules": "firestore.rules"
-  },
-  "storage": {
-    "rules": "storage.rules"
   }
 }

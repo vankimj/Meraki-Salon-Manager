@@ -1,0 +1,136 @@
+# Meraki Salon Manager — Claude Context
+
+## What this is
+A full-stack salon management web app for **Meraki Nail Studio** (Columbus, OH), owned by Jonathan (jvankim@gmail.com). It is replacing GlossGenius. Built with React 19 + Vite 8 + Firebase (Firestore + Auth + Hosting). Single-tenant for now; multi-tenant SaaS is the long-term vision.
+
+**Live URL:** https://meraki-salon-manager.web.app  
+**Firebase project:** `meraki-salon-manager`  
+**Tenant ID:** `meraki` (hardcoded in `src/lib/tenant.js`)
+
+---
+
+## Build & deploy
+```bash
+npm run build                        # Vite build → dist/
+firebase deploy --only hosting       # Push to Firebase Hosting
+firebase deploy --only firestore:rules  # Push Firestore security rules
+npm run dev                          # Local dev server
+npm test                             # Vitest unit tests
+```
+
+No CI/CD — all deploys are manual from the local machine.
+
+---
+
+## Architecture
+
+### Two app modes
+| Mode | Container | Purpose |
+|------|-----------|---------|
+| **TipFlow (kiosk)** | Fixed 700×620 card, centered | Front-desk iPad tip display |
+| **Management** | Full viewport (100vw × 100vh) | Admin/staff tools |
+
+Switching between modes is controlled by `view` state in `src/App.jsx`. The `#deck-app` div adapts its CSS (`alignSelf: stretch` for management vs fixed size for TipFlow). Splash renders once on mount inside the same div.
+
+### State & auth
+- `src/context/AppContext.jsx` — single global context: slides, users, settings, gUser (Firebase auth), syncState, toast
+- Auth: Google sign-in only (for now). `ALLOWED_EMAILS = ['jvankim@gmail.com']` in `src/lib/firebase.js` is the bootstrap admin.
+- Role system stored in Firestore `tenants/meraki/data/users` doc: `role` = `'admin' | 'readonly' | 'pending' | 'denied'`
+- Auto-logout timer: configurable (default 5 min inactivity), resets on user interaction
+- `isAdmin` = gUser is bootstrap admin OR has `role: 'admin'`
+- `isReadOnly` = role is `'readonly'`
+
+### Firestore structure
+```
+tenants/meraki/
+  data/slides        — TipFlow slide array + def/cur indexes
+  data/users         — staff user array with roles
+  data/settings      — { timeoutMin }
+  services/{id}      — service menu items
+  clients/{id}       — client profiles
+  employees/{id}     — employee profiles
+  appointments/{id}  — appointments
+  logs/{id}          — activity log entries
+```
+
+**Critical path rule:** `tenantDoc(path)` builds doc refs as `doc(db, 'tenants', TENANT_ID, 'data', ...path.split('/'))` — this maintains an even segment count (Firestore requires even segments for documents). Collections use `tenantCol(path)` = `collection(db, 'tenants', TENANT_ID, path)`.
+
+**Index gotcha:** `where(field) + orderBy(differentField)` requires a composite index in Firestore. Avoid by filtering with `where` alone and sorting client-side. Example already fixed in `fetchAppointments`.
+
+### Photo/image storage
+Photos (client `picture`, employee `photo`, TipFlow slide `img`) are stored as **base64 strings** directly in Firestore documents. `resizeImg(file, w, h, quality)` in `src/utils/helpers.js` compresses before storing.
+
+---
+
+## Module map
+
+| View key | File | Notes |
+|----------|------|-------|
+| `home` | `src/components/HomeScreen.jsx` | Tile grid + Launch TipFlow button. Content max-width 760px centered. |
+| `tipflow` | `src/modules/tipflow/TipFlow.jsx` | Kiosk slide show. Slides edited via `SlideModal.jsx`. Can import from employee records. |
+| `schedule` | `src/modules/schedule/ScheduleAdmin.jsx` | Day view grid. SLOT_H=40px, 9am–8pm, 30-min slots. Tech columns from Firestore employees (fallback hardcoded). Birthday banner on match. |
+| `clients` | `src/modules/clients/ClientsAdmin.jsx` | Client list + modal (Profile / Social / Visits tabs). View-only and edit modes. `picture` field = base64 or URL. |
+| `services` | `src/modules/services/ServicesAdmin.jsx` | Service menu CRUD. |
+| `employees` | `src/modules/employees/EmployeesAdmin.jsx` | Employee profiles: name, photo, contact, social (instagram, facebook, tiktok, venmo, homepage), compensation (admin-only). `EmpAvatar` exported. |
+| `admin` | `src/modules/admin/Admin.jsx` | Overlay (zIndex 50). Tabs: users, logs, settings. Settings tab has Demo Data section. |
+
+### Shell components
+- `src/components/ModuleShell.jsx` — top nav bar (← Home | icon + title | sync dot + admin gear + avatar) wrapping all management modules
+- `src/components/Splash.jsx` — dark bg (#0f1923), Great Vibes + Cinzel fonts, nail polish SVG flourish logo, 2.6s display + 0.7s fade
+- `src/components/Header.jsx` — used only inside TipFlow (slide dots, fullscreen toggle, user chip)
+
+---
+
+## Real salon data
+
+**10 nail techs:** Yasmin D, Audriana L, Samantha T (@gelxbysammy), Tess D, Elizabeth L, Yan W, Jen T (@kidcozynails), Marisela I (@licenced2polish), Ana P, Jenesis B
+
+Seeded via `src/data/seedEmployees.js` (run once manually, not part of demo seed).
+
+---
+
+## Demo data system (`src/data/seedDemo.js`)
+
+Three exported functions, all triggered from Admin → Settings → Demo Data:
+
+| Function | What it does |
+|----------|-------------|
+| `seedDemoData()` | Creates 500 regular + 100 celebrity clients, then ~1,200 past appointments (90 days, 30% walk-ins) + ~1,350 future appointments (90 days, per-tech scheduling). Takes 10–15 min. |
+| `addFutureAppointments()` | Top-up: fetches existing demo client IDs, adds days 91–120. Fast (~1 min). |
+| `clearDemoData()` | Deletes all records with `_demo: true`. Uses single `where('_demo','==',true)` queries (no composite index needed). |
+
+**Future appointment model:** For each day, a random `salonFactor` × per-tech random `techFactor` × `maxPerTech` (6 weekday, 7 weekend) = 0–100% utilization per tech. Times are spread evenly through 9am–6pm by slot index.
+
+**Celebrity clients** (`_celebrity: true`): 100 real celebrities with real Instagram handles, birthdays, `randomuser.me` portrait URLs (women/0–99), and VIP salon notes. Each guaranteed 2–4 past appointments + ~40% chance of future appointment.
+
+**Walk-ins** (past only): `clientId: ''`, `clientName: 'Walk-in'`.
+
+All demo records tagged `_demo: true` for targeted deletion.
+
+---
+
+## Fonts (loaded in `index.html`)
+- **Great Vibes** — cursive script, used for "Meraki" in Splash and logo mark
+- **Cinzel** — serif caps, used for "NAIL STUDIO" / "Salon Manager" labels
+
+---
+
+## Key patterns & conventions
+
+- **No comments** unless the WHY is non-obvious.
+- **All styling is inline** (`style={{...}}`). No CSS modules, no Tailwind.
+- **Brand colors:** Green `#2D7A5F`, Blue `#3D95CE`, Teal `#3D9E8A`
+- **No TypeScript** — plain JS/JSX throughout.
+- Firestore writes always include `updatedAt: new Date().toISOString()`.
+- `logActivity(action, details)` from `src/lib/logger.js` for audit trail.
+- `showToast(msg)` from `useApp()` for transient user feedback.
+
+---
+
+## Roadmap (not yet built)
+- **Reporting** — revenue dashboard, employee service history, leaderboard, IRS fiscal year report
+- **POS / Checkout** — multi-tech credit split, discounts (friends & family, promo codes, gift cards), future credits, refunds with photos
+- **HR module** — compensation info (admin-only), direct deposit, payroll reports (Gusto integration), performance reviews, bonuses
+- **Employee auth** — Firebase email magic link for staff without Google accounts
+- **Employee scheduling** — store hours, appointment-only extended hours per employee, personal calendar view with persistent tech overlay config
+- **Multi-tenant SaaS** — subdomain routing, white-label, pricing tiers
