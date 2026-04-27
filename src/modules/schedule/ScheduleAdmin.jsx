@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchAppointments, createAppointment, saveAppointment, deleteAppointment, fetchClients, fetchServices, fetchEmployees } from '../../lib/firestore';
 import CheckoutModal from '../checkout/CheckoutModal';
+import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
 import { notifyAffectedTechs } from '../../lib/notifications';
 
@@ -94,6 +95,7 @@ export default function ScheduleAdmin() {
   const [loading,      setLoading]     = useState(true);
   const [modal,        setModal]       = useState(null);
   const [checkout,     setCheckout]    = useState(null);
+  const [refund,       setRefund]      = useState(null);
   const [clients,      setClients]     = useState([]);
   const [services,     setServices]    = useState([]);
   const [techs,        setTechs]       = useState(FALLBACK_TECHS);
@@ -282,6 +284,7 @@ export default function ScheduleAdmin() {
           onDelete={() => handleDelete(modal.appt)}
           onClose={() => setModal(null)}
           onCheckout={appt => { setModal(null); setCheckout(appt); }}
+          onRefund={appt => setRefund(appt)}
         />
       )}
 
@@ -290,6 +293,14 @@ export default function ScheduleAdmin() {
           appt={checkout}
           onComplete={() => { setCheckout(null); load(); }}
           onClose={() => setCheckout(null)}
+        />
+      )}
+
+      {refund && (
+        <RefundModal
+          appt={refund}
+          onComplete={() => { setRefund(null); setModal(null); load(); }}
+          onClose={() => setRefund(null)}
         />
       )}
     </div>
@@ -429,7 +440,7 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
 }
 
 // ── Appointment modal ─────────────────────────────────
-function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, viewOnly }) {
+function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, onRefund, viewOnly }) {
   const [saving, setSaving] = useState(false);
   const isView = mode === 'view';
   const isNew  = !appt.id;
@@ -629,6 +640,17 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                   style={{ flex: 2, fontFamily: 'inherit', fontSize: 13, fontWeight: 700, cursor: 'pointer', background: 'linear-gradient(135deg,#2D7A5F 0%,#3D95CE 100%)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px' }}>
                   Checkout
                 </button>
+              )}
+              {appt.id && appt.status === 'done' && !appt.refund && (
+                <button onClick={() => onRefund(appt)}
+                  style={{ flex: 1, fontFamily: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: '#fef2f2', color: '#ef4444', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px' }}>
+                  Refund
+                </button>
+              )}
+              {appt.refund && (
+                <div style={{ flex: 1, fontSize: 11, color: '#ef4444', textAlign: 'center', fontWeight: 500 }}>
+                  Refunded ${appt.refund.amount.toFixed(2)}
+                </div>
               )}
             </>
           ) : (

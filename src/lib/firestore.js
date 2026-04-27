@@ -1,6 +1,6 @@
 import {
   doc, collection,
-  getDoc, getDocs, setDoc, addDoc, deleteDoc,
+  getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc,
   orderBy, where, query, limit,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -85,6 +85,11 @@ const CLIENTS_COL = tenantCol('clients');
 export async function fetchClients() {
   const snap = await getDocs(query(CLIENTS_COL, orderBy('name')));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function fetchClient(id) {
+  const snap = await getDoc(doc(CLIENTS_COL, id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
 export async function createClient(data) {
@@ -234,3 +239,53 @@ export async function fetchAppointmentsByRange(startDate, endDate) {
   ));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
+
+// ── Gift cards ─────────────────────────────────────────
+const GIFT_CARDS_COL = tenantCol('giftCards');
+
+export async function fetchGiftCards() {
+  const snap = await getDocs(query(GIFT_CARDS_COL, orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function fetchGiftCardByCode(code) {
+  const snap = await getDocs(query(GIFT_CARDS_COL, where('code', '==', code.trim().toUpperCase())));
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...d.data() };
+}
+
+export async function createGiftCard(data) {
+  const ref = await addDoc(GIFT_CARDS_COL, { ...data, createdAt: new Date().toISOString() });
+  return ref.id;
+}
+
+export async function updateGiftCard(id, data) {
+  await updateDoc(doc(GIFT_CARDS_COL, id), { ...data, updatedAt: new Date().toISOString() });
+}
+
+// ── Promo codes ────────────────────────────────────────
+const PROMO_COL = tenantCol('promoCodes');
+
+export async function fetchPromoCodes() {
+  const snap = await getDocs(PROMO_COL);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function fetchPromoByCode(code) {
+  const snap = await getDocs(query(PROMO_COL, where('code', '==', code.trim().toUpperCase())));
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...d.data() };
+}
+
+export async function createPromoCode(data) {
+  const ref = await addDoc(PROMO_COL, { ...data, createdAt: new Date().toISOString() });
+  return ref.id;
+}
+
+export async function savePromoCode(id, data) {
+  await updateDoc(doc(PROMO_COL, id), { ...data, updatedAt: new Date().toISOString() });
+}
+
+export const deletePromoCode = (id) => deleteDoc(doc(PROMO_COL, id));

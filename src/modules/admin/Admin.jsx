@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { fetchLogs, fetchEmployees } from '../../lib/firestore';
+import { fetchLogs, fetchEmployees, fetchPromoCodes, createPromoCode, savePromoCode, deletePromoCode,
+         fetchGiftCards, createGiftCard } from '../../lib/firestore';
 import { formatTime } from '../../utils/helpers';
 import { seedDemoData, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
 
@@ -27,7 +28,7 @@ export default function Admin({ onClose }) {
   const [storeHours,   setStoreHours]  = useState(() => initStoreHours(settings));
   const [logs,    setLogs]       = useState(null);
   const [tab,     setTab]        = useState('users');
-  const TABS = ['users', 'logs', 'settings'];
+  const TABS = ['users', 'logs', 'pos', 'settings'];
 
   function patchStoreDay(day, patch) {
     setStoreHours(prev => ({ ...prev, [day]: { ...prev[day], ...patch } }));
@@ -117,6 +118,8 @@ export default function Admin({ onClose }) {
             </Section>
           </>
         )}
+
+        {tab === 'pos' && <POSTab />}
 
         {tab === 'logs' && (
           <Section title="📄 Activity Log" action={<Btn onClick={loadLogs}>Refresh</Btn>}>
@@ -386,5 +389,158 @@ function DemoSeedSection() {
         </div>
       </div>
     </Section>
+  );
+}
+
+// ── POS Tab ────────────────────────────────────────────
+function POSTab() {
+  const [promos,     setPromos]     = useState(null);
+  const [giftCards,  setGiftCards]  = useState(null);
+  const [promoForm,  setPromoForm]  = useState({ code: '', type: 'percent', value: '', singleUse: false, active: true });
+  const [gcAmount,   setGcAmount]   = useState('');
+  const [gcNote,     setGcNote]     = useState('');
+  const [saving,     setSaving]     = useState('');
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function loadAll() {
+    const [p, g] = await Promise.all([fetchPromoCodes(), fetchGiftCards()]);
+    setPromos(p);
+    setGiftCards(g);
+  }
+
+  function randomCode(prefix = 'MERAKI') {
+    return prefix + Math.random().toString(36).slice(2, 7).toUpperCase();
+  }
+
+  async function addPromo() {
+    if (!promoForm.code.trim() || !promoForm.value) return;
+    setSaving('promo');
+    try {
+      await createPromoCode({ ...promoForm, code: promoForm.code.trim().toUpperCase(), value: Number(promoForm.value) });
+      setPromoForm({ code: '', type: 'percent', value: '', singleUse: false, active: true });
+      await loadAll();
+    } finally { setSaving(''); }
+  }
+
+  async function togglePromo(p) {
+    await savePromoCode(p.id, { ...p, active: !p.active });
+    await loadAll();
+  }
+
+  async function removePromo(p) {
+    if (!confirm(`Delete promo code "${p.code}"?`)) return;
+    await deletePromoCode(p.id);
+    await loadAll();
+  }
+
+  async function issueGC() {
+    const amt = Number(gcAmount);
+    if (!amt || amt <= 0) return;
+    setSaving('gc');
+    try {
+      const code = randomCode();
+      await createGiftCard({ code, balance: amt, initialBalance: amt, note: gcNote.trim() || '' });
+      setGcAmount(''); setGcNote('');
+      await loadAll();
+    } finally { setSaving(''); }
+  }
+
+  const inp = { fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '7px 10px', fontSize: 12, background: '#fafafa', boxSizing: 'border-box' };
+
+  return (
+    <>
+      {/* Promo codes */}
+      <Section title="🎟 Promo Codes">
+        {/* Add form */}
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 100px', minWidth: 80 }}>
+            <label style={{ fontSize: 10, color: '#aaa' }}>Code</label>
+            <input value={promoForm.code} onChange={e => setPromoForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+              placeholder="SUMMER25" style={{ ...inp, textTransform: 'uppercase' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 90 }}>
+            <label style={{ fontSize: 10, color: '#aaa' }}>Type</label>
+            <select value={promoForm.type} onChange={e => setPromoForm(f => ({ ...f, type: e.target.value }))} style={inp}>
+              <option value="percent">% Off</option>
+              <option value="fixed">$ Off</option>
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 72 }}>
+            <label style={{ fontSize: 10, color: '#aaa' }}>{promoForm.type === 'percent' ? '%' : '$'}</label>
+            <input type="number" min={0} value={promoForm.value} onChange={e => setPromoForm(f => ({ ...f, value: e.target.value }))}
+              placeholder="10" style={inp} />
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#666', cursor: 'pointer', paddingBottom: 8 }}>
+            <input type="checkbox" checked={promoForm.singleUse} onChange={e => setPromoForm(f => ({ ...f, singleUse: e.target.checked }))} />
+            One-time
+          </label>
+          <div style={{ paddingBottom: 1 }}>
+            <Btn color="#3D95CE" onClick={addPromo} disabled={saving === 'promo' || !promoForm.code.trim() || !promoForm.value}>
+              {saving === 'promo' ? '…' : '+ Add'}
+            </Btn>
+          </div>
+        </div>
+        {/* List */}
+        {promos === null ? <Empty>Loading…</Empty> : promos.length === 0 ? <Empty>No promo codes yet</Empty> : (
+          promos.map((p, i) => (
+            <div key={p.id} style={{ padding: '10px 16px', borderBottom: i < promos.length - 1 ? '1px solid #f0f0f0' : 'none', display: 'flex', alignItems: 'center', gap: 10, opacity: p.active ? 1 : .5 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', fontFamily: 'monospace' }}>{p.code}</span>
+                  {!p.active && <span style={{ fontSize: 10, color: '#bbb', fontWeight: 500 }}>inactive</span>}
+                  {p.usedAt && <span style={{ fontSize: 10, color: '#bbb' }}>used</span>}
+                </div>
+                <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                  {p.type === 'percent' ? `${p.value}% off` : `$${p.value} off`}
+                  {p.singleUse && ' · one-time'}
+                </div>
+              </div>
+              <Btn onClick={() => togglePromo(p)}>{p.active ? 'Deactivate' : 'Activate'}</Btn>
+              <Btn color="#ef4444" onClick={() => removePromo(p)}>Del</Btn>
+            </div>
+          ))
+        )}
+      </Section>
+
+      {/* Gift cards */}
+      <Section title="🎁 Gift Cards">
+        {/* Issue form */}
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 90 }}>
+            <label style={{ fontSize: 10, color: '#aaa' }}>Amount ($)</label>
+            <input type="number" min={1} value={gcAmount} onChange={e => setGcAmount(e.target.value)} placeholder="50" style={inp} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
+            <label style={{ fontSize: 10, color: '#aaa' }}>Note (optional)</label>
+            <input value={gcNote} onChange={e => setGcNote(e.target.value)} placeholder="Holiday gift for Jane…" style={inp} />
+          </div>
+          <div style={{ paddingBottom: 1 }}>
+            <Btn color="#2D7A5F" onClick={issueGC} disabled={saving === 'gc' || !(Number(gcAmount) > 0)}>
+              {saving === 'gc' ? '…' : 'Issue'}
+            </Btn>
+          </div>
+        </div>
+        {/* List */}
+        {giftCards === null ? <Empty>Loading…</Empty> : giftCards.length === 0 ? <Empty>No gift cards issued yet</Empty> : (
+          giftCards.map((gc, i) => (
+            <div key={gc.id} style={{ padding: '10px 16px', borderBottom: i < giftCards.length - 1 ? '1px solid #f0f0f0' : 'none', display: 'flex', alignItems: 'center', gap: 10, opacity: gc.balance <= 0 ? .45 : 1 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'monospace', color: '#1a1a1a' }}>{gc.code}</span>
+                  {gc.balance <= 0 && <span style={{ fontSize: 10, color: '#bbb' }}>depleted</span>}
+                </div>
+                <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                  Balance: <strong style={{ color: gc.balance > 0 ? '#166534' : '#bbb' }}>${gc.balance?.toFixed(2)}</strong>
+                  {' '}of ${gc.initialBalance?.toFixed(2)}
+                  {gc.note && <span style={{ color: '#bbb', marginLeft: 8 }}>{gc.note}</span>}
+                </div>
+              </div>
+              <span style={{ fontSize: 10, color: '#bbb' }}>{gc.createdAt ? new Date(gc.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</span>
+            </div>
+          ))
+        )}
+      </Section>
+    </>
   );
 }
