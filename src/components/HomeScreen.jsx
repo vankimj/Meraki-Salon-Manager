@@ -44,18 +44,13 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
               ⚙
             </button>
           )}
-          {gUser ? (
+          {gUser && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', padding: '5px 10px', borderRadius: 20, border: '1px solid #e8e8e8', background: '#fff' }}>
               {gUser.photoURL && <img src={gUser.photoURL} alt="" style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }} />}
               <span style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {(gUser.displayName || gUser.email).split(' ')[0]}
               </span>
             </div>
-          ) : (
-            <button onClick={() => setShowAuth(true)}
-              style={{ fontSize: 12, padding: '6px 14px', borderRadius: 20, border: '1px solid #3D95CE', background: '#3D95CE', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500 }}>
-              Sign in
-            </button>
           )}
         </div>
       </div>
@@ -96,8 +91,12 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
             </div>
           </>
         ) : !gUser ? (
-          <div style={{ textAlign: 'center', padding: '40px 20px', color: '#aaa', fontSize: 13 }}>
-            Sign in to access management tools.
+          <div style={{ textAlign: 'center', padding: '32px 20px' }}>
+            <div style={{ fontSize: 13, color: '#aaa', marginBottom: 16 }}>Sign in to access management tools.</div>
+            <button onClick={() => setShowAuth(true)}
+              style={{ fontSize: 14, fontWeight: 600, padding: '12px 32px', borderRadius: 12, border: 'none', background: '#3D95CE', color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Sign in
+            </button>
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '40px 20px', color: '#aaa', fontSize: 13 }}>
