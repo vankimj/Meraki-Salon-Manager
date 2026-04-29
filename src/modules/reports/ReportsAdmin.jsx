@@ -121,10 +121,12 @@ export default function ReportsAdmin() {
   const [activeTab,  setActiveTab]  = useState('overview');
   const [periodDays, setPeriodDays] = useState(30);
   const [appts,      setAppts]      = useState(null);
+  const [priorAppts, setPriorAppts] = useState(null);
   const [loading,    setLoading]    = useState(true);
 
   const endDate   = todayStr();
   const startDate = startOf(periodDays);
+  const showComparison = periodDays <= 90;
 
   useEffect(() => {
     if (activeTab === 'overview') load();
@@ -133,12 +135,37 @@ export default function ReportsAdmin() {
   async function load() {
     setLoading(true);
     setAppts(null);
-    try { setAppts(await fetchAppointmentsByRange(startDate, endDate)); }
-    catch (e) { console.error('[Reports] load failed:', e); setAppts([]); }
+    setPriorAppts(null);
+    try {
+      const [current, prior] = await Promise.all([
+        fetchAppointmentsByRange(startDate, endDate),
+        showComparison ? fetchAppointmentsByRange(startOf(periodDays * 2), startOf(periodDays)) : Promise.resolve([]),
+      ]);
+      setAppts(current);
+      setPriorAppts(prior);
+    } catch (e) { console.error('[Reports] load failed:', e); setAppts([]); setPriorAppts([]); }
     finally  { setLoading(false); }
   }
 
-  const metrics = useMemo(() => appts ? computeMetrics(appts) : null, [appts]);
+  const metrics      = useMemo(() => appts       ? computeMetrics(appts)       : null, [appts]);
+  const priorMetrics = useMemo(() => priorAppts  ? computeMetrics(priorAppts)  : null, [priorAppts]);
+
+  const clientRetention = useMemo(() => {
+    if (!metrics || !priorAppts || !appts) return null;
+    const priorIds = new Set(priorAppts.filter(a => a.clientId).map(a => a.clientId));
+    const today = todayStr();
+    const done  = appts.filter(a => a.status !== 'cancelled' && a.date <= today);
+    let newCount = 0, returningCount = 0, walkInCount = 0;
+    const seen = {};
+    done.forEach(a => {
+      if (!a.clientId) { walkInCount++; return; }
+      if (!seen[a.clientId]) {
+        seen[a.clientId] = true;
+        priorIds.has(a.clientId) ? returningCount++ : newCount++;
+      }
+    });
+    return { newCount, returningCount, walkInCount, total: newCount + returningCount + walkInCount };
+  }, [metrics, priorAppts, appts]);
 
   return (
     <div style={{ maxWidth: 1080, margin: '0 auto', paddingBottom: 24 }}>
@@ -181,18 +208,27 @@ export default function ReportsAdmin() {
           ) : (
             <>
               <div className="kpi-grid">
-                <KPICard label="Revenue"      value={fmt$(metrics.totalRevenue)} accent="#2D7A5F" />
-                <KPICard label="Appointments" value={metrics.totalAppts.toLocaleString()} />
-                <KPICard label="Avg Ticket"   value={fmt$(metrics.avgTicket)} />
+                <KPICard label="Revenue"      value={fmt$(metrics.totalRevenue)} accent="#2D7A5F"
+                  current={metrics.totalRevenue}   prev={showComparison ? priorMetrics?.totalRevenue   : undefined} />
+                <KPICard label="Appointments" value={metrics.totalAppts.toLocaleString()}
+                  current={metrics.totalAppts}     prev={showComparison ? priorMetrics?.totalAppts     : undefined} />
+                <KPICard label="Avg Ticket"   value={fmt$(metrics.avgTicket)}
+                  current={metrics.avgTicket}      prev={showComparison ? priorMetrics?.avgTicket      : undefined} />
                 <KPICard label="Walk-ins"
                   value={`${metrics.walkIns}`}
                   sub={`${metrics.totalAppts ? Math.round(metrics.walkIns / metrics.totalAppts * 100) : 0}% of total`}
-                />
+                  current={metrics.walkIns}        prev={showComparison ? priorMetrics?.walkIns        : undefined} />
               </div>
 
               <Card title="Walk-ins vs Scheduled" style={{ marginBottom: 12 }}>
                 <WalkInVsScheduled metrics={metrics} />
               </Card>
+
+              {clientRetention && showComparison && (
+                <Card title="New vs Returning Clients" style={{ marginBottom: 12 }}>
+                  <NewVsReturning retention={clientRetention} periodDays={periodDays} />
+                </Card>
+              )}
 
               <Card title="Daily Revenue" style={{ marginBottom: 12 }}>
                 <RevenueChart byDay={metrics.byDay} startDate={startDate} endDate={endDate} />
@@ -252,14 +288,48 @@ function WalkInVsScheduled({ metrics }) {
   );
 }
 
+// ── New vs Returning clients ───────────────────────────
+function NewVsReturning({ retention, periodDays }) {
+  const { newCount, returningCount, walkInCount, total } = retention;
+  const pctNew  = total ? Math.round(newCount       / total * 100) : 0;
+  const pctRet  = total ? Math.round(returningCount / total * 100) : 0;
+  const pctWalk = total ? Math.round(walkInCount    / total * 100) : 0;
+
+  const rows = [
+    { label: 'Returning clients',     count: returningCount, pct: pctRet,  color: '#2D7A5F' },
+    { label: 'New clients',           count: newCount,       pct: pctNew,  color: '#3D95CE' },
+    { label: 'Walk-ins (no record)',  count: walkInCount,    pct: pctWalk, color: '#F59E0B' },
+  ];
+
+  return (
+    <div>
+      <div style={{ height: 10, borderRadius: 6, overflow: 'hidden', display: 'flex', marginBottom: 16 }}>
+        <div style={{ width: `${pctRet}%`,  background: '#2D7A5F', transition: 'width .4s' }} />
+        <div style={{ width: `${pctNew}%`,  background: '#3D95CE', transition: 'width .4s' }} />
+        <div style={{ width: `${pctWalk}%`, background: '#F59E0B', transition: 'width .4s' }} />
+      </div>
+      {rows.map(r => (
+        <div key={r.label} style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: r.color, flexShrink: 0, marginRight: 8 }} />
+          <span style={{ fontSize: 13, color: '#333', flex: 1 }}>{r.label}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginRight: 12 }}>{r.count}</span>
+          <span style={{ fontSize: 11, color: '#bbb', width: 36, textAlign: 'right' }}>{r.pct}%</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+        "New" = client not seen in the prior {periodDays} days
+      </div>
+    </div>
+  );
+}
+
 // ── Revenue chart ──────────────────────────────────────
 function RevenueChart({ byDay, startDate, endDate }) {
+  const [tooltip, setTooltip] = useState(null); // { i, value, label }
   const dates  = allDatesInRange(startDate, endDate);
   const values = dates.map(d => byDay[d] || 0);
-  const maxVal = Math.max(...values, 1);
   const H = 130;
 
-  // For 90+ days aggregate into weeks so bars are readable
   const aggregate = dates.length > 45;
   let bars = [];
   if (aggregate) {
@@ -272,31 +342,52 @@ function RevenueChart({ byDay, startDate, endDate }) {
   }
   const barMax = Math.max(...bars.map(b => b.value), 1);
 
+  function barLabel(dateStr) {
+    const d = new Date(dateStr + 'T12:00:00');
+    return aggregate
+      ? 'wk ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
   return (
     <div>
       <svg viewBox={`0 0 600 ${H}`} style={{ width: '100%', display: 'block', overflow: 'visible' }}>
-        {/* Gridlines */}
         {[0.25, 0.5, 0.75, 1].map(f => (
-          <line key={f} x1="0" y1={H - f * H} x2="600" y2={H - f * H}
-            stroke="#f0f0f0" strokeWidth="1" />
+          <line key={f} x1="0" y1={H - f * H} x2="600" y2={H - f * H} stroke="#f0f0f0" strokeWidth="1" />
         ))}
-        {/* Bars */}
         {bars.map((b, i) => {
           const slotW = 600 / bars.length;
           const barW  = Math.max(slotW * 0.72, 2);
           const barH  = (b.value / barMax) * (H - 4);
           const x     = i * slotW + (slotW - barW) / 2;
           return (
-            <g key={i}>
+            <g key={i}
+              onMouseEnter={() => setTooltip({ i, value: b.value, label: barLabel(b.label) })}
+              onMouseLeave={() => setTooltip(null)}>
+              <rect x={i * slotW} y={0} width={slotW} height={H} fill="transparent" />
               <rect x={x} y={H - barH} width={barW} height={Math.max(barH, 1)}
-                fill={b.value > 0 ? '#3D95CE' : '#f0f0f0'} rx="2" opacity={b.value > 0 ? 1 : 0.4} />
+                fill={tooltip?.i === i ? '#2A7AB5' : b.value > 0 ? '#3D95CE' : '#f0f0f0'}
+                rx="2" opacity={b.value > 0 ? 1 : 0.4} />
             </g>
           );
         })}
-        {/* Zero line */}
+        {tooltip && tooltip.value > 0 && (() => {
+          const slotW = 600 / bars.length;
+          const cx = tooltip.i * slotW + slotW / 2;
+          const barH = (tooltip.value / barMax) * (H - 4);
+          const ty = Math.max(H - barH - 6, 38);
+          const tw = 90, th = 34;
+          const tx = Math.min(Math.max(cx - tw / 2, 0), 600 - tw);
+          return (
+            <g style={{ pointerEvents: 'none' }}>
+              <rect x={tx} y={ty - th} width={tw} height={th} rx={5} fill="rgba(20,20,20,.88)" />
+              <text x={tx + tw / 2} y={ty - th + 14} textAnchor="middle" fill="#fff" fontSize="11" fontWeight="700">{fmt$(tooltip.value)}</text>
+              <text x={tx + tw / 2} y={ty - th + 26} textAnchor="middle" fill="rgba(255,255,255,.5)" fontSize="9">{tooltip.label}</text>
+            </g>
+          );
+        })()}
         <line x1="0" y1={H} x2="600" y2={H} stroke="#e0e0e0" strokeWidth="1" />
       </svg>
-      {/* Y-axis labels */}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#bbb', marginTop: 4 }}>
         <span>{new Date(startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
         <span style={{ fontWeight: 500, color: '#888' }}>{aggregate ? 'weekly' : 'daily'} · max {fmt$(barMax)}</span>
@@ -886,11 +977,27 @@ function Card({ title, children, style }) {
   );
 }
 
-function KPICard({ label, value, sub, accent }) {
+function KPICard({ label, value, sub, accent, current, prev }) {
+  let delta = null;
+  if (current !== undefined && prev !== undefined && prev !== null) {
+    if (prev > 0) {
+      const pct = (current - prev) / prev * 100;
+      delta = { pct: Math.round(Math.abs(pct)), up: pct >= 0 };
+    } else if (current > 0) {
+      delta = { pct: 100, up: true };
+    }
+  }
   return (
     <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', padding: '16px 20px' }}>
       <div style={{ fontSize: 11, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: accent || '#1a1a1a', lineHeight: 1 }}>{value}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 28, fontWeight: 700, color: accent || '#1a1a1a', lineHeight: 1 }}>{value}</div>
+        {delta && (
+          <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 6, background: delta.up ? '#f0fdf4' : '#fef2f2', color: delta.up ? '#16a34a' : '#ef4444', flexShrink: 0 }}>
+            {delta.up ? '↑' : '↓'} {delta.pct}%
+          </span>
+        )}
+      </div>
       {sub && <div style={{ fontSize: 11, color: '#bbb', marginTop: 4 }}>{sub}</div>}
     </div>
   );
