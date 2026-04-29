@@ -2,6 +2,7 @@ import {
   doc, collection,
   getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc,
   orderBy, where, query, limit,
+  onSnapshot, arrayUnion, increment,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { TENANT_ID } from './tenant';
@@ -178,6 +179,11 @@ export async function saveAppointment(id, data) {
 
 export const deleteAppointment = (id) => deleteDoc(doc(APPTS_COL, id));
 
+export async function fetchClientAppointments(clientId) {
+  const snap = await getDocs(query(APPTS_COL, where('clientId', '==', clientId), orderBy('date', 'desc'), limit(100)));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
 export async function fetchDemoAppointments() {
   const snap = await getDocs(query(APPTS_COL, where('_demo', '==', true)));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -289,3 +295,401 @@ export async function savePromoCode(id, data) {
 }
 
 export const deletePromoCode = (id) => deleteDoc(doc(PROMO_COL, id));
+
+// ── Feedback ───────────────────────────────────────────
+const FEEDBACK_COL = tenantCol('feedback');
+
+export async function createFeedback(data) {
+  const ref = await addDoc(FEEDBACK_COL, { ...data, createdAt: new Date().toISOString(), status: 'open' });
+  return ref.id;
+}
+
+export async function fetchFeedback() {
+  const snap = await getDocs(query(FEEDBACK_COL, orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function updateFeedbackStatus(id, status) {
+  await updateDoc(doc(FEEDBACK_COL, id), { status, updatedAt: new Date().toISOString() });
+}
+
+// ── Performance reviews ────────────────────────────────
+const REVIEWS_COL = tenantCol('reviews');
+
+export async function fetchReviews() {
+  const snap = await getDocs(query(REVIEWS_COL, orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function saveReview(id, data) {
+  const now = new Date().toISOString();
+  if (id) {
+    await setDoc(doc(REVIEWS_COL, id), { ...data, updatedAt: now }, { merge: true });
+    return id;
+  }
+  const ref = await addDoc(REVIEWS_COL, { ...data, createdAt: now, updatedAt: now });
+  return ref.id;
+}
+
+export const deleteReview = (id) => deleteDoc(doc(REVIEWS_COL, id));
+
+// ── User preferences (per-uid, e.g. tech overlay) ─────
+const USER_PREFS_COL = tenantCol('userPrefs');
+
+export async function fetchUserPrefs(uid) {
+  const snap = await getDoc(doc(USER_PREFS_COL, uid));
+  return snap.exists() ? snap.data() : {};
+}
+
+export async function saveUserPrefs(uid, data) {
+  await setDoc(doc(USER_PREFS_COL, uid), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+}
+
+// ── Handbook ───────────────────────────────────────────
+const HANDBOOK_REF  = tenantDoc('handbook');
+const HANDBOOK_SIGS = tenantCol('handbookSigs');
+
+export async function fetchHandbook() {
+  const snap = await getDoc(HANDBOOK_REF);
+  return snap.exists() ? snap.data() : null;
+}
+
+export async function saveHandbook(data) {
+  await setDoc(HANDBOOK_REF, { ...data, updatedAt: new Date().toISOString() });
+}
+
+export async function fetchHandbookSigs() {
+  const snap = await getDocs(HANDBOOK_SIGS);
+  return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+}
+
+export async function signHandbookDoc(uid, data) {
+  await setDoc(doc(HANDBOOK_SIGS, uid), { ...data, signedAt: new Date().toISOString() });
+}
+
+export async function fetchMyHandbookSig(uid) {
+  const snap = await getDoc(doc(HANDBOOK_SIGS, uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+// ── Meetings ──────────────────────────────────────────
+const MEETINGS_COL = tenantCol('meetings');
+
+export async function fetchMeetings() {
+  const snap = await getDocs(query(MEETINGS_COL, orderBy('startTimestamp', 'asc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function createMeeting(data) {
+  const ref = await addDoc(MEETINGS_COL, {
+    ...data,
+    reminders: { sent60: false, sent15: false },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  return ref.id;
+}
+
+export async function updateMeeting(id, data) {
+  await updateDoc(doc(MEETINGS_COL, id), { ...data, updatedAt: new Date().toISOString() });
+}
+
+export async function deleteMeeting(id) {
+  await deleteDoc(doc(MEETINGS_COL, id));
+}
+
+// ── Check-in (public, no auth required) ────────────────
+export async function getAppointmentById(id) {
+  const snap = await getDoc(doc(APPTS_COL, id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
+export async function markCheckedIn(apptId, appt) {
+  const now = new Date().toISOString();
+  await updateDoc(doc(APPTS_COL, apptId), { checkedInAt: now });
+  // Notify the tech via the existing notifications collection
+  const col = collection(db, 'tenants', TENANT_ID, 'notifications');
+  await addDoc(col, {
+    apptId,
+    techName:    appt.techName || '',
+    clientName:  appt.clientName || 'A client',
+    date:        appt.date,
+    startTime:   appt.startTime || '',
+    changeType:  'client_checkin',
+    message:     `${appt.clientName || 'Your client'} has arrived and checked in! 📍`,
+    createdAt:   now,
+    sent:        false,
+  });
+}
+
+// ── Receipts (post-checkout outreach) ──────────────────
+const RECEIPTS_COL = tenantCol('receipts');
+
+export async function createReceipt(data) {
+  await addDoc(RECEIPTS_COL, { ...data, createdAt: new Date().toISOString(), sent: false });
+}
+
+// ── Notification center ────────────────────────────────
+const NOTIFS_COL   = tenantCol('notifications');
+
+export async function sendHandbookReminderNotif(techName, handbookTitle, version) {
+  await addDoc(NOTIFS_COL, {
+    changeType:    'handbook_reminder',
+    techName,
+    handbookTitle: handbookTitle || 'Employee Handbook',
+    version:       version || '1.0',
+    createdAt:     new Date().toISOString(),
+    sent:          false,
+  });
+}
+
+export async function fetchNotificationCenter(n = 150) {
+  const [notifSnap, receiptSnap, reviewSnap] = await Promise.all([
+    getDocs(query(NOTIFS_COL,           orderBy('createdAt', 'desc'), limit(n))),
+    getDocs(query(RECEIPTS_COL,         orderBy('createdAt', 'desc'), limit(n))),
+    getDocs(query(REVIEW_REQUESTS_COL,  orderBy('createdAt', 'desc'), limit(n))),
+  ]);
+  const notifs   = notifSnap.docs.map(d  => ({ id: d.id, _kind: 'notif',          ...d.data() }));
+  const receipts = receiptSnap.docs.map(d => ({ id: d.id, _kind: 'receipt',        ...d.data() }));
+  const reviews  = reviewSnap.docs.map(d  => ({ id: d.id, _kind: 'review_request', ...d.data() }));
+  return [...notifs, ...receipts, ...reviews].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+// ── Products (retail inventory) ───────────────────────────
+const PRODUCTS_COL = tenantCol('products');
+
+export async function fetchProducts() {
+  const snap = await getDocs(query(PRODUCTS_COL, orderBy('name')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function saveProduct(id, data) {
+  await setDoc(doc(PRODUCTS_COL, id), { ...data, updatedAt: new Date().toISOString() });
+}
+
+export async function createProduct(data) {
+  await addDoc(PRODUCTS_COL, { ...data, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+}
+
+export async function deleteProduct(id) {
+  await deleteDoc(doc(PRODUCTS_COL, id));
+}
+
+// ── Marketing campaigns ───────────────────────────────
+const CAMPAIGNS_COL = tenantCol('campaigns');
+
+export async function fetchCampaigns() {
+  const snap = await getDocs(query(CAMPAIGNS_COL, orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function createCampaign(data) {
+  await addDoc(CAMPAIGNS_COL, { ...data, createdAt: new Date().toISOString() });
+}
+
+const CAMPAIGN_TEMPLATES_COL = tenantCol('campaignTemplates');
+
+export async function fetchCampaignTemplates() {
+  const snap = await getDocs(query(CAMPAIGN_TEMPLATES_COL, orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function saveCampaignTemplate(data) {
+  return addDoc(CAMPAIGN_TEMPLATES_COL, { ...data, createdAt: new Date().toISOString() });
+}
+
+export async function deleteCampaignTemplate(id) {
+  return deleteDoc(doc(CAMPAIGN_TEMPLATES_COL, id));
+}
+
+// ── Review requests ───────────────────────────────────
+const REVIEW_REQUESTS_COL = tenantCol('reviewRequests');
+
+export async function createReviewRequest(data) {
+  await addDoc(REVIEW_REQUESTS_COL, { ...data, createdAt: new Date().toISOString(), sent: false });
+}
+
+// ── Client portal ──────────────────────────────────────
+export async function fetchClientByEmail(email) {
+  const normalized = email.trim().toLowerCase();
+  // Try exact match first, then lowercase match
+  for (const val of [email.trim(), normalized]) {
+    const snap = await getDocs(query(CLIENTS_COL, where('email', '==', val)));
+    if (!snap.empty) return { id: snap.docs[0].id, ...snap.docs[0].data() };
+  }
+  return null;
+}
+
+// ── Backup / Restore ────────────────────────────────────
+export async function fetchAllForBackup() {
+  const [slidesSnap, settingsSnap, usersSnap, handbookSnap] = await Promise.all([
+    getDoc(tenantDoc('slides')),
+    getDoc(tenantDoc('settings')),
+    getDoc(tenantDoc('users')),
+    getDoc(tenantDoc('handbook')),
+  ]);
+
+  const cols = ['clients', 'employees', 'services', 'appointments', 'giftCards', 'promoCodes', 'bonuses', 'payrollRuns', 'meetings', 'handbookSigs', 'products'];
+  const colSnaps = await Promise.all(cols.map(c => getDocs(tenantCol(c))));
+
+  const data = {};
+  cols.forEach((c, i) => {
+    data[c] = colSnaps[i].docs.map(d => ({ _id: d.id, ...d.data() }));
+  });
+
+  data._slides    = slidesSnap.exists()    ? slidesSnap.data()    : null;
+  data._settings  = settingsSnap.exists()  ? settingsSnap.data()  : null;
+  data._users     = usersSnap.exists()     ? usersSnap.data()     : null;
+  data._handbook  = handbookSnap.exists()  ? handbookSnap.data()  : null;
+
+  return data;
+}
+
+export async function restoreFromBackup(data) {
+  const cols = ['clients', 'employees', 'services', 'appointments', 'giftCards', 'promoCodes', 'bonuses', 'payrollRuns', 'meetings', 'handbookSigs'];
+  for (const col of cols) {
+    if (!Array.isArray(data[col])) continue;
+    for (const item of data[col]) {
+      const { _id, ...docData } = item;
+      if (_id) await setDoc(doc(tenantCol(col), _id), docData);
+    }
+  }
+  if (data._slides)    await setDoc(tenantDoc('slides'),    data._slides);
+  if (data._settings)  await setDoc(tenantDoc('settings'),  data._settings);
+  if (data._users)     await setDoc(tenantDoc('users'),     data._users);
+  if (data._handbook)  await setDoc(tenantDoc('handbook'),  data._handbook);
+}
+
+// ── Online booking config (publicly readable) ─────────
+const BOOKING_CONFIG_REF = tenantDoc('bookingConfig');
+
+export async function fetchBookingConfig() {
+  const snap = await getDoc(BOOKING_CONFIG_REF);
+  return snap.exists() ? snap.data() : { enabled: false };
+}
+
+export async function saveBookingConfig(data) {
+  await setDoc(BOOKING_CONFIG_REF, { ...data, updatedAt: new Date().toISOString() });
+}
+
+// ── Client chat ────────────────────────────────────────
+// One document per client (keyed by clientId). Messages stored as an array.
+const CHATS_COL = tenantCol('chats');
+
+export function subscribeToChats(cb) {
+  const q = query(CHATS_COL, orderBy('lastAt', 'desc'));
+  return onSnapshot(q, snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+}
+
+export function subscribeToChat(clientId, cb) {
+  return onSnapshot(doc(CHATS_COL, clientId), snap => {
+    cb(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+  });
+}
+
+export async function sendChatMessage(clientId, clientInfo, message) {
+  const now = new Date().toISOString();
+  const chatRef = doc(CHATS_COL, clientId);
+  const snap = await getDoc(chatRef);
+  const existingUnread = snap.exists() ? (snap.data().unreadStaff || 0) : 0;
+  if (!snap.exists()) {
+    await setDoc(chatRef, {
+      clientId,
+      clientName:  clientInfo.name  || 'Client',
+      clientEmail: clientInfo.email || '',
+      messages:    [message],
+      lastMessage: message.text,
+      lastAt:      now,
+      unreadStaff: message.from === 'client' ? 1 : 0,
+      updatedAt:   now,
+    });
+  } else {
+    const updates = {
+      messages:    arrayUnion(message),
+      lastMessage: message.text,
+      lastAt:      now,
+      updatedAt:   now,
+    };
+    if (message.from === 'client') updates.unreadStaff = increment(1);
+    else                           updates.unreadStaff = 0;
+    await updateDoc(chatRef, updates);
+  }
+  // Notify admins the first time a client sends unread messages in a session
+  if (message.from === 'client' && existingUnread === 0) {
+    await addDoc(tenantCol('chatNotifications'), {
+      clientId,
+      clientName:  clientInfo.name  || 'Client',
+      clientEmail: clientInfo.email || '',
+      preview:     message.text,
+      createdAt:   now,
+    }).catch(() => {});
+  }
+}
+
+export async function markChatRead(clientId) {
+  const snap = await getDoc(doc(CHATS_COL, clientId));
+  if (snap.exists()) await updateDoc(doc(CHATS_COL, clientId), { unreadStaff: 0 });
+}
+
+// ── Review received tracking ───────────────────────────
+const REVIEW_RECEIVED_COL = tenantCol('reviewReceived');
+
+export async function saveReviewReceived(data) {
+  return addDoc(REVIEW_RECEIVED_COL, { ...data, createdAt: new Date().toISOString() });
+}
+
+export async function fetchReviewReceived() {
+  const snap = await getDocs(query(REVIEW_RECEIVED_COL, orderBy('createdAt', 'desc'), limit(100)));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ── Tax forms (1099-NEC) ───────────────────────────────
+const TAX_FORMS_COL = tenantCol('taxForms');
+
+export async function fetchTaxForms() {
+  const snap = await getDocs(query(TAX_FORMS_COL, orderBy('year', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function fetchTaxFormsByEmail(email) {
+  const snap = await getDocs(query(TAX_FORMS_COL, where('techEmail', '==', email), orderBy('year', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function upsertTaxForm(year, techName, data) {
+  const id = `${year}_${techName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  await setDoc(doc(TAX_FORMS_COL, id), { ...data, year, techName, updatedAt: new Date().toISOString() }, { merge: true });
+  return id;
+}
+
+export async function deleteTaxForm(id) {
+  return deleteDoc(doc(TAX_FORMS_COL, id));
+}
+
+export async function fetchPayrollRunsForYear(year) {
+  const start = `${year}-01-01`;
+  const end   = `${year}-12-31`;
+  const snap  = await getDocs(query(PAYROLL_COL,
+    where('endDate', '>=', start),
+    where('endDate', '<=', end),
+  ));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ── Webfront config (publicly readable) ───────────────
+const WEBFRONT_CONFIG_REF = tenantDoc('webfront');
+
+export async function fetchWebfrontConfig() {
+  const snap = await getDoc(WEBFRONT_CONFIG_REF);
+  return snap.exists() ? snap.data() : {};
+}
+
+export async function saveWebfrontConfig(data) {
+  await setDoc(WEBFRONT_CONFIG_REF, { ...data, updatedAt: new Date().toISOString() });
+}
+
+// ── Google Reviews cache (populated by Cloud Function) ─
+export async function fetchGoogleReviews() {
+  const snap = await getDoc(tenantDoc('googleReviews'));
+  return snap.exists() ? snap.data() : null;
+}
