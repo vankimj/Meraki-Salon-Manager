@@ -1,0 +1,10 @@
+name            = "tipflow-subdomain-router"
+main            = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Routes — apply to every subdomain of tipflow.app
+# The root tipflow.app is served directly by Firebase Hosting (custom domain).
+routes = [
+  { pattern = "*.tipflow.app/*", zone_name = "tipflow.app" },
+  { pattern = "*.tipflow.app",   zone_name = "tipflow.app" },
+]

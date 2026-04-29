@@ -27,6 +27,7 @@ import HandbookModal from './components/HandbookModal';
 import ClientPortal from './components/ClientPortal';
 import SalonWebfront from './modules/webfront/SalonWebfront';
 import OnboardingScreen from './components/OnboardingScreen';
+import TipFlowLanding from './components/TipFlowLanding';
 
 const MODULE_TITLES = {
   schedule:   'Schedule',
@@ -164,6 +165,12 @@ function AppShell() {
 }
 
 export default function App() {
+  const { hostname } = window.location;
+  // tipflow.app root domain → marketing landing page
+  if (hostname === 'tipflow.app' || hostname === 'www.tipflow.app') {
+    return <TipFlowLanding />;
+  }
+
   const params = new URLSearchParams(window.location.search);
   const checkinId = params.get('checkin');
   const isBooking  = params.has('book');
