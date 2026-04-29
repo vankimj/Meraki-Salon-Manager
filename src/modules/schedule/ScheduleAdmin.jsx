@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchAppointments, createAppointment, saveAppointment, deleteAppointment, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs } from '../../lib/firestore';
+import { fetchAppointments, fetchAppointmentsByRange, createAppointment, saveAppointment, deleteAppointment, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs } from '../../lib/firestore';
 import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
@@ -49,6 +49,13 @@ const OVERLAY_KEY = 'meraki_visible_techs';
 
 function dayOfWeek(dateStr) {
   return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+function weekStartOf(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const dow = d.getDay(); // 0=Sun
+  d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function loadOverlay(allTechs) {
@@ -110,6 +117,9 @@ export default function ScheduleAdmin() {
   const [visibleTechNames, setVisibleTechNames] = useState(null);
   const [empWorkDays,      setEmpWorkDays]      = useState({});
   const [employees,        setEmployeesData]    = useState([]);
+  const [viewMode,         setViewMode]         = useState('day');
+  const [weekAppts,        setWeekAppts]        = useState([]);
+  const [weekLoading,      setWeekLoading]      = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,6 +129,16 @@ export default function ScheduleAdmin() {
   }, [date]);
 
   useEffect(() => { load(); }, [load]);
+
+  const weekStart = weekStartOf(date);
+  const loadWeek = useCallback(async () => {
+    setWeekLoading(true);
+    try { setWeekAppts(await fetchAppointmentsByRange(weekStart, addDays(weekStart, 6))); }
+    catch { setWeekAppts([]); }
+    finally { setWeekLoading(false); }
+  }, [weekStart]);
+
+  useEffect(() => { if (viewMode === 'week') loadWeek(); }, [viewMode, loadWeek]);
 
   useEffect(() => {
     fetchClients().then(setClients).catch(() => {});
@@ -188,7 +208,7 @@ export default function ScheduleAdmin() {
         logActivity('appt_created', logDetail);
       }
       notifyAffectedTechs(original, full, gUser).catch(e => console.error('[Notif]', e));
-      await load();
+      if (viewMode === 'week') { await loadWeek(); } else { await load(); }
       setModal(null);
     } catch (e) { console.error('[Schedule] save failed:', e); }
   }
@@ -241,26 +261,47 @@ function openNew(techName, slotMins) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Date nav */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexShrink: 0 }}>
-        <NavBtn onClick={() => setDate(d => addDays(d, -1))}>‹</NavBtn>
-        <button onClick={() => setDate(todayStr())} style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: date === todayStr() ? '#3D95CE' : '#fff', color: date === todayStr() ? '#fff' : '#555', cursor: 'pointer', fontFamily: 'inherit' }}>
-          Today
-        </button>
-        <NavBtn onClick={() => setDate(d => addDays(d, 1))}>›</NavBtn>
-        <span style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{fmtDate(date)}</span>
-        {isTech && (
-          <button onClick={() => setShowAll(v => !v)} style={{
-            fontSize: 11, padding: '5px 10px', borderRadius: 6, fontFamily: 'inherit', cursor: 'pointer',
-            border: `1px solid ${showAll ? '#3D95CE' : '#d8d8d8'}`,
-            background: showAll ? '#EBF4FB' : '#fff',
-            color: showAll ? '#1a5f8a' : '#555', fontWeight: showAll ? 600 : 400,
-          }}>
-            {showAll ? '👥 All Techs' : '👤 My Column'}
-          </button>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexShrink: 0, flexWrap: 'wrap' }}>
+        {viewMode === 'day' ? (
+          <>
+            <NavBtn onClick={() => setDate(d => addDays(d, -1))}>‹</NavBtn>
+            <button onClick={() => setDate(todayStr())} style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: date === todayStr() ? '#3D95CE' : '#fff', color: date === todayStr() ? '#fff' : '#555', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Today
+            </button>
+            <NavBtn onClick={() => setDate(d => addDays(d, 1))}>›</NavBtn>
+            <span style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{fmtDate(date)}</span>
+            {isTech && (
+              <button onClick={() => setShowAll(v => !v)} style={{ fontSize: 11, padding: '5px 10px', borderRadius: 6, fontFamily: 'inherit', cursor: 'pointer', border: `1px solid ${showAll ? '#3D95CE' : '#d8d8d8'}`, background: showAll ? '#EBF4FB' : '#fff', color: showAll ? '#1a5f8a' : '#555', fontWeight: showAll ? 600 : 400 }}>
+                {showAll ? '👥 All Techs' : '👤 My Column'}
+              </button>
+            )}
+            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+              style={{ marginLeft: 'auto', fontSize: 12, border: '1px solid #d8d8d8', borderRadius: 6, padding: '5px 8px', fontFamily: 'inherit', background: '#fafafa' }} />
+          </>
+        ) : (
+          <>
+            <NavBtn onClick={() => setDate(addDays(weekStart, -7))}>‹</NavBtn>
+            <button onClick={() => setDate(todayStr())} style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: weekStart === weekStartOf(todayStr()) ? '#3D95CE' : '#fff', color: weekStart === weekStartOf(todayStr()) ? '#fff' : '#555', cursor: 'pointer', fontFamily: 'inherit' }}>
+              This week
+            </button>
+            <NavBtn onClick={() => setDate(addDays(weekStart, 7))}>›</NavBtn>
+            <span style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>
+              Week of {new Date(weekStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – {new Date(addDays(weekStart, 6) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </span>
+            <span style={{ marginLeft: 'auto' }} />
+          </>
         )}
-        <input type="date" value={date} onChange={e => setDate(e.target.value)}
-          style={{ marginLeft: 'auto', fontSize: 12, border: '1px solid #d8d8d8', borderRadius: 6, padding: '5px 8px', fontFamily: 'inherit', background: '#fafafa' }} />
+
+        {/* Day / Week toggle */}
+        <div style={{ display: 'flex', border: '1px solid #d8d8d8', borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
+          {[['day','Day'],['week','Week']].map(([v, label]) => (
+            <button key={v} onClick={() => setViewMode(v)} style={{ padding: '5px 12px', border: 'none', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer', background: viewMode === v ? '#3D95CE' : '#fff', color: viewMode === v ? '#fff' : '#555', fontWeight: viewMode === v ? 600 : 400 }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         {isAdmin && (
           <button onClick={() => setShowHours(true)} title="Edit store hours"
             style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fff', color: '#555', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
@@ -270,8 +311,8 @@ function openNew(techName, slotMins) {
       </div>
       {showHours && <HoursModal settings={settings} updateSettings={updateSettings} onClose={() => setShowHours(false)} />}
 
-      {/* Tech overlay filter pills */}
-      {(!isTech || showAll) && visibleTechNames && (
+      {/* Tech overlay filter pills — day view only */}
+      {viewMode === 'day' && (!isTech || showAll) && visibleTechNames && (
         <div style={{ display: 'flex', gap: 4, marginBottom: 10, flexWrap: 'wrap', flexShrink: 0 }}>
           {techs.map(t => {
             const on = visibleTechNames.includes(t);
@@ -290,16 +331,16 @@ function openNew(techName, slotMins) {
         </div>
       )}
 
-      {/* Store closed banner */}
-      {isStoreClosed && (
+      {/* Store closed banner — day view only */}
+      {viewMode === 'day' && isStoreClosed && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '7px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span style={{ fontSize: 14 }}>🚫</span>
           <span style={{ fontSize: 12, color: '#991b1b', fontWeight: 500 }}>Salon is closed today — appointments can still be booked manually</span>
         </div>
       )}
 
-      {/* Client birthdays banner */}
-      {birthdayClients.length > 0 && (
+      {/* Client birthdays banner — day view only */}
+      {viewMode === 'day' && birthdayClients.length > 0 && (
         <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '7px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ fontSize: 16 }}>🎂</span>
           <span style={{ fontSize: 12, fontWeight: 600, color: '#9A3412' }}>Client birthdays today:</span>
@@ -311,8 +352,8 @@ function openNew(techName, slotMins) {
         </div>
       )}
 
-      {/* Staff birthdays banner */}
-      {birthdayEmployees.length > 0 && (
+      {/* Staff birthdays banner — day view only */}
+      {viewMode === 'day' && birthdayEmployees.length > 0 && (
         <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: '7px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ fontSize: 16 }}>🎊</span>
           <span style={{ fontSize: 12, fontWeight: 600, color: '#14532D' }}>Staff birthdays today:</span>
@@ -324,8 +365,8 @@ function openNew(techName, slotMins) {
         </div>
       )}
 
-      {/* Personal view summary strip */}
-      {myAppts && !loading && (
+      {/* Personal view summary strip — day view only */}
+      {viewMode === 'day' && myAppts && !loading && (
         <div style={{ background: 'linear-gradient(135deg,#2D7A5F,#3D95CE)', borderRadius: 10, padding: '10px 14px', marginBottom: 10, flexShrink: 0, color: '#fff' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <div>
@@ -357,22 +398,33 @@ function openNew(techName, slotMins) {
       )}
 
       {/* Grid */}
-      {loading
-        ? <div style={{ textAlign: 'center', color: '#bbb', padding: 40, fontSize: 13 }}>Loading…</div>
-        : <DayGrid
-            date={date}
-            appts={appts}
-            techs={displayTechs}
-            techExtended={techExtended}
-            empWorkDays={empWorkDays}
-            slots={slots}
-            dayStart={dayStart}
-            walkInOpen={walkInOpen}
-            walkInClose={walkInClose}
-            techColWidth={techColWidth}
-            onSlotClick={openNew}
-            onApptClick={openView}
-          />
+      {viewMode === 'week'
+        ? weekLoading
+          ? <div style={{ textAlign: 'center', color: '#bbb', padding: 40, fontSize: 13 }}>Loading…</div>
+          : <WeekGrid
+              weekStart={weekStart}
+              appts={weekAppts}
+              clients={clients}
+              employees={employees}
+              onApptClick={appt => { setDate(appt.date); openView(appt); }}
+              onDayClick={d => { setDate(d); setViewMode('day'); }}
+            />
+        : loading
+          ? <div style={{ textAlign: 'center', color: '#bbb', padding: 40, fontSize: 13 }}>Loading…</div>
+          : <DayGrid
+              date={date}
+              appts={appts}
+              techs={displayTechs}
+              techExtended={techExtended}
+              empWorkDays={empWorkDays}
+              slots={slots}
+              dayStart={dayStart}
+              walkInOpen={walkInOpen}
+              walkInClose={walkInClose}
+              techColWidth={techColWidth}
+              onSlotClick={openNew}
+              onApptClick={openView}
+            />
       }
 
       {modal && (
@@ -408,6 +460,105 @@ function openNew(techName, slotMins) {
           onClose={() => setRefund(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ── Week grid ─────────────────────────────────────────
+function WeekGrid({ weekStart, appts, clients, employees, onApptClick, onDayClick }) {
+  const today = todayStr();
+  const days  = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+
+  // Birthday map: date → [names]
+  const bdayMap = {};
+  [...clients, ...employees].forEach(p => {
+    if (!p.birthday) return;
+    const md = p.birthday.slice(5, 10);
+    days.forEach(d => {
+      if (d.slice(5, 10) === md) {
+        if (!bdayMap[d]) bdayMap[d] = [];
+        bdayMap[d].push(p.name);
+      }
+    });
+  });
+
+  // Total appointments this week
+  const weekTotal = appts.filter(a => !a._demo).length;
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Week summary strip */}
+      {weekTotal > 0 && (
+        <div style={{ fontSize: 11, color: '#aaa', marginBottom: 8, flexShrink: 0 }}>
+          {weekTotal} appointment{weekTotal !== 1 ? 's' : ''} this week
+          {[['scheduled','#3B82F6'],['in-progress','#F59E0B'],['done','#10B981'],['cancelled','#EF4444']].map(([s, c]) => {
+            const n = appts.filter(a => a.status === s).length;
+            if (!n) return null;
+            return <span key={s} style={{ marginLeft: 8, color: c, fontWeight: 600 }}>{n} {s}</span>;
+          })}
+        </div>
+      )}
+
+      {/* 7-column grid */}
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(120px, 1fr))', gap: 4, overflowX: 'auto', overflowY: 'hidden' }}>
+        {days.map(day => {
+          const isToday   = day === today;
+          const dayAppts  = appts.filter(a => a.date === day).sort((a, b) => strToMins(a.startTime) - strToMins(b.startTime));
+          const bdays     = bdayMap[day] || [];
+          const headerFmt = new Date(day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+          return (
+            <div key={day} style={{ display: 'flex', flexDirection: 'column', border: `1px solid ${isToday ? '#3D95CE' : '#e8e8e8'}`, borderRadius: 8, overflow: 'hidden', background: '#fff', minHeight: 0 }}>
+
+              {/* Day header */}
+              <div onClick={() => onDayClick(day)} style={{
+                padding: '7px 8px', cursor: 'pointer', flexShrink: 0,
+                background: isToday ? '#EBF4FB' : '#fafafa',
+                borderBottom: `2px solid ${isToday ? '#3D95CE' : '#e8e8e8'}`,
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: isToday ? '#1a5f8a' : '#333' }}>{headerFmt}</div>
+                <div style={{ fontSize: 10, color: '#aaa', marginTop: 1 }}>
+                  {dayAppts.length ? `${dayAppts.length} appt${dayAppts.length !== 1 ? 's' : ''}` : 'open'}
+                </div>
+                {bdays.length > 0 && (
+                  <div style={{ fontSize: 9, color: '#EA580C', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    🎂 {bdays.join(', ')}
+                  </div>
+                )}
+              </div>
+
+              {/* Appointment list */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '4px 3px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {dayAppts.length === 0
+                  ? <div style={{ fontSize: 10, color: '#e8e8e8', textAlign: 'center', paddingTop: 14 }}>—</div>
+                  : dayAppts.map(appt => {
+                      const colors = STATUS_COLORS[appt.status] || STATUS_COLORS.scheduled;
+                      return (
+                        <div key={appt.id} onClick={e => { e.stopPropagation(); onApptClick(appt); }}
+                          style={{ padding: '3px 5px', borderRadius: 5, background: colors.bg, borderLeft: `3px solid ${colors.border}`, cursor: 'pointer' }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: colors.text, lineHeight: 1.2 }}>
+                            {minsToStr(strToMins(appt.startTime))}
+                          </div>
+                          <div style={{ fontSize: 10, color: '#222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {appt.clientName || 'Walk-in'}
+                          </div>
+                          <div style={{ fontSize: 9, color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {appt.techName}
+                          </div>
+                        </div>
+                      );
+                    })
+                }
+              </div>
+
+              {/* Drill-down link */}
+              <div onClick={() => onDayClick(day)} style={{ padding: '4px 8px', borderTop: '1px solid #f0f0f0', fontSize: 10, color: '#3D95CE', cursor: 'pointer', textAlign: 'center', flexShrink: 0, background: '#fafafa' }}>
+                View day →
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
