@@ -46,6 +46,32 @@ const STATUS_COLORS = {
   cancelled:     { bg: '#FEE2E2', border: '#EF4444', text: '#991b1b' },
 };
 
+// One distinct color per tech, assigned by stable index in the full tech list
+const TECH_PALETTE = [
+  { solid: '#2D7A5F', bg: '#e8f5ef', text: '#1a4d3a' }, // forest green
+  { solid: '#3D95CE', bg: '#e8f2fb', text: '#1a4d7a' }, // blue
+  { solid: '#9333EA', bg: '#f3eeff', text: '#4a1d96' }, // purple
+  { solid: '#D97706', bg: '#fef3c7', text: '#78350f' }, // amber
+  { solid: '#BE185D', bg: '#fdf2f8', text: '#831843' }, // pink
+  { solid: '#059669', bg: '#d1fae5', text: '#065f46' }, // emerald
+  { solid: '#0891B2', bg: '#e0f7fa', text: '#164e63' }, // cyan
+  { solid: '#EA580C', bg: '#fff7ed', text: '#7c2d12' }, // orange
+  { solid: '#4F46E5', bg: '#eef2ff', text: '#3730a3' }, // indigo
+  { solid: '#0F766E', bg: '#f0fdfa', text: '#134e4a' }, // teal
+];
+
+function getTechColor(techName, allTechs) {
+  const idx = allTechs.indexOf(techName);
+  return TECH_PALETTE[idx >= 0 ? idx % TECH_PALETTE.length : 0];
+}
+
+const STATUS_DOT = {
+  scheduled:     { color: '#3B82F6', label: '●' },
+  'in-progress': { color: '#F59E0B', label: '●' },
+  done:          { color: '#10B981', label: '●' },
+  cancelled:     { color: '#EF4444', label: '●' },
+};
+
 const OVERLAY_KEY = 'meraki_visible_techs';
 
 function dayOfWeek(dateStr) {
@@ -396,15 +422,18 @@ function openNew(techName, slotMins) {
       {viewMode === 'day' && (!isTech || showAll) && visibleTechNames && (
         <div style={{ display: 'flex', gap: 4, marginBottom: 10, flexWrap: 'wrap', flexShrink: 0 }}>
           {techs.map(t => {
-            const on = visibleTechNames.includes(t);
+            const on  = visibleTechNames.includes(t);
+            const col = getTechColor(t, techs);
             return (
               <button key={t} onClick={() => toggleTechVisible(t)} style={{
                 fontSize: 11, padding: '3px 10px', borderRadius: 20,
-                border: `1px solid ${on ? '#3D95CE' : '#d8d8d8'}`,
-                background: on ? '#EBF4FB' : '#f5f5f5',
-                color: on ? '#1a5f8a' : '#bbb',
+                border: `1.5px solid ${on ? col.solid : '#d8d8d8'}`,
+                background: on ? col.bg : '#f5f5f5',
+                color: on ? col.text : '#bbb',
                 cursor: 'pointer', fontFamily: 'inherit', fontWeight: on ? 600 : 400,
+                display: 'flex', alignItems: 'center', gap: 5,
               }}>
+                {on && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: col.solid, flexShrink: 0 }} />}
                 {t}
               </button>
             );
@@ -487,6 +516,7 @@ function openNew(techName, slotMins) {
               appts={weekAppts}
               clients={clients}
               employees={employees}
+              allTechs={techs}
               onApptClick={appt => { setDate(appt.date); openView(appt); }}
               onDayClick={d => { setDate(d); setViewMode('day'); }}
             />
@@ -496,6 +526,7 @@ function openNew(techName, slotMins) {
               date={date}
               appts={appts}
               techs={displayTechs}
+              allTechs={techs}
               techExtended={techExtended}
               empWorkDays={empWorkDays}
               slots={slots}
@@ -636,7 +667,7 @@ function QueuePanel({ entries, onSeat, onRemove, onDone }) {
 }
 
 // ── Week grid ─────────────────────────────────────────
-function WeekGrid({ weekStart, appts, clients, employees, onApptClick, onDayClick }) {
+function WeekGrid({ weekStart, appts, clients, employees, allTechs, onApptClick, onDayClick }) {
   const today = todayStr();
   const days  = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
@@ -703,17 +734,22 @@ function WeekGrid({ weekStart, appts, clients, employees, onApptClick, onDayClic
                 {dayAppts.length === 0
                   ? <div style={{ fontSize: 10, color: '#e8e8e8', textAlign: 'center', paddingTop: 14 }}>—</div>
                   : dayAppts.map(appt => {
-                      const colors = STATUS_COLORS[appt.status] || STATUS_COLORS.scheduled;
+                      const col = getTechColor(appt.techName, allTechs || []);
+                      const dot = STATUS_DOT[appt.status] || STATUS_DOT.scheduled;
+                      const isCancelled = appt.status === 'cancelled';
                       return (
                         <div key={appt.id} onClick={e => { e.stopPropagation(); onApptClick(appt); }}
-                          style={{ padding: '3px 5px', borderRadius: 5, background: colors.bg, borderLeft: `3px solid ${colors.border}`, cursor: 'pointer' }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: colors.text, lineHeight: 1.2 }}>
-                            {minsToStr(strToMins(appt.startTime))}
+                          style={{ padding: '3px 5px', borderRadius: 5, background: isCancelled ? '#fef2f2' : col.bg, borderLeft: `3px solid ${isCancelled ? '#EF4444' : col.solid}`, cursor: 'pointer', opacity: isCancelled ? 0.6 : 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: isCancelled ? '#991b1b' : col.text, lineHeight: 1.2, flex: 1 }}>
+                              {minsToStr(strToMins(appt.startTime))}
+                            </div>
+                            <span style={{ fontSize: 8, color: dot.color }}>{dot.label}</span>
                           </div>
-                          <div style={{ fontSize: 10, color: '#222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontSize: 10, color: col.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
                             {appt.clientName || 'Walk-in'}
                           </div>
-                          <div style={{ fontSize: 9, color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontSize: 9, color: col.solid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, opacity: .8 }}>
                             {appt.techName}
                           </div>
                         </div>
@@ -735,7 +771,7 @@ function WeekGrid({ weekStart, appts, clients, employees, onApptClick, onDayClic
 }
 
 // ── Day grid ──────────────────────────────────────────
-function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStart, walkInOpen, walkInClose, techColWidth, onSlotClick, onApptClick }) {
+function DayGrid({ date, appts, techs, allTechs, techExtended, empWorkDays, slots, dayStart, walkInOpen, walkInClose, techColWidth, onSlotClick, onApptClick }) {
   const TIME_COL = 54;
   const TECH_COL = techColWidth || 120;
   const dow = dayOfWeek(date);
@@ -756,14 +792,16 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
         <div style={{ width: TIME_COL, flexShrink: 0 }} />
         {techs.map(tech => {
           const isOff = empWorkDays[tech]?.[dow]?.on === false;
+          const col   = getTechColor(tech, allTechs || techs);
           return (
-            <div key={tech} style={{ width: TECH_COL, flexShrink: 0, padding: '8px 4px', fontSize: 11, fontWeight: 600, color: isOff ? '#bbb' : '#555', textAlign: 'center', borderLeft: '1px solid #e8e8e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: isOff ? '#fafafa' : undefined }}>
-              {tech}
+            <div key={tech} style={{ width: TECH_COL, flexShrink: 0, fontSize: 11, fontWeight: 600, color: isOff ? '#bbb' : col.text, textAlign: 'center', borderLeft: '1px solid #e8e8e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: isOff ? '#fafafa' : col.bg, paddingBottom: 6 }}>
+              <div style={{ height: 3, background: isOff ? '#e0e0e0' : col.solid, marginBottom: 6 }} />
+              <div style={{ padding: '0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tech}</div>
               {isOff && (
                 <div style={{ fontSize: 8, color: '#d0d0d0', fontWeight: 500, letterSpacing: '.03em' }}>off today</div>
               )}
               {!isOff && hasApptOnlyZone && techExtended[tech] && (
-                <div style={{ fontSize: 8, color: '#3B82F6', fontWeight: 500, letterSpacing: '.03em' }}>extended</div>
+                <div style={{ fontSize: 8, color: col.solid, fontWeight: 600, letterSpacing: '.03em', opacity: .8 }}>extended hrs</div>
               )}
             </div>
           );
@@ -856,7 +894,9 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
           const topOffset = ((startMins - dayStart) / 30) * SLOT_H;
           const height    = Math.max((appt.duration / 30) * SLOT_H - 2, SLOT_H - 2);
           const left      = TIME_COL + techIdx * TECH_COL + 2;
-          const colors    = STATUS_COLORS[appt.status] || STATUS_COLORS.scheduled;
+          const col       = getTechColor(appt.techName, allTechs || techs);
+          const dot       = STATUS_DOT[appt.status] || STATUS_DOT.scheduled;
+          const isCancelled = appt.status === 'cancelled';
 
           return (
             <div
@@ -868,8 +908,10 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
                 left,
                 width: TECH_COL - 4,
                 height,
-                background: colors.bg,
-                border: `1.5px solid ${colors.border}`,
+                background: isCancelled ? '#fef2f2' : col.bg,
+                borderLeft: `3px solid ${isCancelled ? '#EF4444' : col.solid}`,
+                border: `1px solid ${isCancelled ? '#fca5a5' : col.solid}`,
+                borderLeft: `3px solid ${isCancelled ? '#EF4444' : col.solid}`,
                 borderRadius: 6,
                 padding: '3px 5px',
                 cursor: 'pointer',
@@ -878,24 +920,26 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
                 boxSizing: 'border-box',
                 display: 'flex',
                 flexDirection: 'column',
+                opacity: isCancelled ? 0.55 : 1,
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: colors.text, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: isCancelled ? '#991b1b' : col.text, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                   {appt.clientName || 'Walk-in'}
                 </div>
+                <span title={appt.status} style={{ fontSize: 8, color: dot.color, flexShrink: 0, lineHeight: 1 }}>{dot.label}</span>
                 {appt.source === 'online_booking' && (
-                  <span title="Online booking" style={{ fontSize: 9, background: '#3D95CE', color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>WEB</span>
+                  <span title="Online booking" style={{ fontSize: 9, background: col.solid, color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>WEB</span>
                 )}
                 {appt.checkedInAt && (
-                  <span title="Client checked in" style={{ fontSize: 9, background: '#2D7A5F', color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>IN</span>
+                  <span title="Client checked in" style={{ fontSize: 9, background: col.solid, color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>IN</span>
                 )}
               </div>
-              <div style={{ fontSize: 10, color: colors.text, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 10, color: col.text, opacity: .8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {appt.services?.map(s => s.name).filter(Boolean).join(', ') || '—'}
               </div>
               {height > SLOT_H && (
-                <div style={{ fontSize: 10, color: colors.text, opacity: .65 }}>
+                <div style={{ fontSize: 10, color: col.text, opacity: .6 }}>
                   {minsToStr(startMins)} · {appt.duration} min
                 </div>
               )}
