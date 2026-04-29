@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import { saveAppointment, fetchClient, saveClient,
          fetchGiftCardByCode, updateGiftCard,
-         fetchPromoByCode, savePromoCode } from '../../lib/firestore';
+         fetchPromoByCode, savePromoCode, createReceipt,
+         fetchProducts, saveProduct, createReviewRequest } from '../../lib/firestore';
+import { logActivity } from '../../lib/logger';
+import { useApp } from '../../context/AppContext';
 
 const PAYMENT_METHODS = [
   { id: 'cash',  label: 'Cash',  icon: '💵' },
@@ -19,8 +22,9 @@ const DISCOUNT_TYPES = [
 
 const QUICK_TIPS = [5, 10, 15, 20];
 
-export default function CheckoutModal({ appt, onComplete, onClose }) {
+export default function CheckoutModal({ appt, onComplete, onClose, techs = [] }) {
   const [prices,       setPrices]       = useState((appt.services || []).map(s => String(s.price ?? '')));
+  const [techNames,    setTechNames]    = useState((appt.services || []).map(() => appt.techName || ''));
   const [discountType, setDiscountType] = useState(null);
   const [discountValue,setDiscountValue]= useState('');
   const [promoInput,   setPromoInput]   = useState('');
@@ -38,7 +42,11 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
   const [tip,          setTip]          = useState('');
   const [customTip,    setCustomTip]    = useState(false);
   const [method,       setMethod]       = useState('card');
+  const [cartItems,    setCartItems]    = useState([]); // retail products: [{product, qty}]
+  const [allProducts,  setAllProducts]  = useState(null);
+  const [showPicker,   setShowPicker]   = useState(false);
   const [saving,       setSaving]       = useState(false);
+  const [receipt,      setReceipt]      = useState(null);
 
   useEffect(() => {
     if (appt.clientId) {
@@ -51,7 +59,8 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
   }, [appt.clientId]);
 
   // ── Math ───────────────────────────────────────────────
-  const subtotal = prices.reduce((s, p) => s + (Number(p) || 0), 0);
+  const productsTotal = cartItems.reduce((s, item) => s + (item.product.price || 0) * item.qty, 0);
+  const subtotal = prices.reduce((s, p) => s + (Number(p) || 0), 0) + productsTotal;
 
   const discountDef    = DISCOUNT_TYPES.find(d => d.id === discountType);
   const discountAmount = (() => {
@@ -78,6 +87,28 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
   const charged        = Math.max(afterDiscounts - gcApply - creditApply, 0);
   const total          = charged + tipAmt;
 
+  // ── Product cart ───────────────────────────────────────
+  async function openProductPicker() {
+    if (!allProducts) {
+      const prods = await fetchProducts().catch(() => []);
+      setAllProducts(prods.filter(p => p.active !== false && (p.stock || 0) > 0));
+    }
+    setShowPicker(true);
+  }
+
+  function addToCart(product) {
+    setCartItems(items => {
+      const existing = items.find(i => i.product.id === product.id);
+      if (existing) return items.map(i => i.product.id === product.id ? { ...i, qty: i.qty + 1 } : i);
+      return [...items, { product, qty: 1 }];
+    });
+  }
+
+  function setCartQty(productId, qty) {
+    if (qty < 1) { setCartItems(items => items.filter(i => i.product.id !== productId)); return; }
+    setCartItems(items => items.map(i => i.product.id === productId ? { ...i, qty } : i));
+  }
+
   // ── Actions ────────────────────────────────────────────
   function pickDiscount(id) {
     const def = DISCOUNT_TYPES.find(d => d.id === id);
@@ -93,8 +124,12 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
     setPromoLoading(true); setPromoErr(''); setPromo(null);
     try {
       const p = await fetchPromoByCode(code);
-      if (!p)                         { setPromoErr('Code not found.'); return; }
-      if (!p.active)                  { setPromoErr('Code is no longer active.'); return; }
+      if (!p)         { setPromoErr('Code not found.'); return; }
+      if (!p.active)  { setPromoErr('Code is no longer active.'); return; }
+      const today = new Date().toISOString().slice(0, 10);
+      if (p.startDate && today < p.startDate) { setPromoErr('Code is not yet active.'); return; }
+      if (p.endDate   && today > p.endDate)   { setPromoErr('Code has expired.'); return; }
+      if (p.maxUses   && (p.usedCount || 0) >= p.maxUses) { setPromoErr('Code has reached its maximum uses.'); return; }
       if (p.singleUse && p.usedAt)    { setPromoErr('Code has already been used.'); return; }
       setPromo(p);
     } catch { setPromoErr('Lookup failed.'); }
@@ -119,8 +154,26 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
     setSaving(true);
     try {
       const updatedServices = (appt.services || []).map((s, i) => ({
-        ...s, price: Number(prices[i]) || 0,
+        ...s, price: Number(prices[i]) || 0, techName: techNames[i] || appt.techName || '',
       }));
+
+      // Build per-tech revenue split (only stored when >1 tech involved)
+      const splitMap = {};
+      updatedServices.forEach(s => {
+        const t = s.techName || appt.techName || '';
+        if (!splitMap[t]) splitMap[t] = { revenue: 0, services: [] };
+        splitMap[t].revenue += s.price;
+        splitMap[t].services.push(s.name || '—');
+      });
+      const splitEntries = Object.entries(splitMap);
+      const techSplit = splitEntries.length > 1
+        ? splitEntries.map(([techName, d]) => ({ techName, revenue: d.revenue, services: d.services }))
+        : null;
+
+      const retailProducts = cartItems.length > 0
+        ? cartItems.map(i => ({ id: i.product.id, name: i.product.name, price: i.product.price, qty: i.qty }))
+        : null;
+
       const payment = {
         subtotal,
         discountType:   discountType || null,
@@ -136,34 +189,86 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
         tip:            tipAmt,
         total,
         method,
+        techSplit,
+        retailProducts,
         paidAt:         new Date().toISOString(),
       };
       const { id, createdAt, ...data } = appt;
       await saveAppointment(id, { ...data, services: updatedServices, status: 'done', payment });
 
+      const techLabel = techSplit ? techSplit.map(t => t.techName).join(', ') : (appt.techName || 'unknown');
+      logActivity('checkout_complete', `${appt.clientName || 'Walk-in'} · ${techLabel} · $${total.toFixed(2)} via ${method}${discountAmount > 0 ? ` · discount -$${discountAmount.toFixed(2)}` : ''}${promoAmount > 0 ? ` · promo ${promo?.code}` : ''}${gcApply > 0 ? ` · GC -$${gcApply.toFixed(2)}` : ''}${tipAmt > 0 ? ` · tip $${tipAmt.toFixed(2)}` : ''}`);
+
       // Side effects (fire-and-forget errors don't block checkout)
       if (giftCard && applyGC && gcApply > 0) {
         await updateGiftCard(giftCard.id, { balance: Math.max(giftCard.balance - gcApply, 0) });
       }
-      if (promo?.singleUse) {
-        await savePromoCode(promo.id, { ...promo, active: false, usedAt: new Date().toISOString() });
+      if (promo) {
+        const newCount = (promo.usedCount || 0) + 1;
+        const maxHit   = promo.maxUses && newCount >= promo.maxUses;
+        await savePromoCode(promo.id, {
+          ...promo,
+          usedCount: newCount,
+          ...(promo.singleUse || maxHit ? { active: false } : {}),
+          ...(promo.singleUse ? { usedAt: new Date().toISOString() } : {}),
+        });
       }
-      if (appt.clientId && (creditApply > 0 || Number(issueCredit) > 0)) {
+      // Decrement stock for each retail product sold
+      if (cartItems.length > 0) {
+        await Promise.all(cartItems.map(async item => {
+          const newStock = Math.max(0, (item.product.stock || 0) - item.qty);
+          await saveProduct(item.product.id, { ...item.product, stock: newStock }).catch(() => {});
+        }));
+      }
+
+      let clientEmail = '';
+      if (appt.clientId) {
         const c = await fetchClient(appt.clientId);
         if (c) {
-          const newCredit = Math.max((c.credit || 0) - creditApply, 0) + (Number(issueCredit) || 0);
-          const { id: cid, createdAt: cc, ...cd } = c;
-          await saveClient(cid, { ...cd, credit: newCredit });
+          clientEmail = c.email?.trim() || '';
+          if (creditApply > 0 || Number(issueCredit) > 0) {
+            const newCredit = Math.max((c.credit || 0) - creditApply, 0) + (Number(issueCredit) || 0);
+            const { id: cid, createdAt: cc, ...cd } = c;
+            await saveClient(cid, { ...cd, credit: newCredit });
+            if (Number(issueCredit) > 0) {
+              logActivity('credit_issued', `${appt.clientName || c.name} · +$${Number(issueCredit).toFixed(2)} → balance $${newCredit.toFixed(2)}`);
+            }
+          }
+          if (clientEmail) {
+            createReceipt({
+              clientId:    appt.clientId,
+              clientName:  appt.clientName || c.name,
+              clientEmail,
+              techName:    appt.techName,
+              date:        appt.date,
+              startTime:   appt.startTime,
+              services:    updatedServices.map(s => ({ name: s.name, price: s.price, techName: s.techName })),
+              retailProducts,
+              payment,
+            }).catch(() => {});
+          }
         }
       }
 
-      onComplete();
+      setReceipt({
+        client:         appt.clientName || 'Walk-in',
+        clientId:       appt.clientId   || null,
+        clientEmail,
+        tech:           appt.techName,
+        date:           appt.date,
+        services:       updatedServices.map(s => ({ name: s.name, price: s.price, techName: s.techName })),
+        retailProducts,
+        payment,
+      });
     } catch (e) {
       console.error('[Checkout] save failed:', e);
     } finally {
       setSaving(false);
     }
   }
+
+  // ── Receipt screen ─────────────────────────────────────
+  if (receipt) return <ReceiptScreen receipt={receipt} onDone={onComplete} />;
 
   // ── Render ─────────────────────────────────────────────
   return (
@@ -185,10 +290,19 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
 
           {/* Services */}
-          <Section title="Services">
+          <Section title={techs.length > 1 ? 'Services & Techs' : 'Services'}>
             {(appt.services || []).map((svc, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 0', borderBottom: i < appt.services.length - 1 ? '1px solid #f5f5f5' : 'none' }}>
-                <span style={{ fontSize: 13, color: '#333', flex: 1, paddingRight: 12 }}>{svc.name || '—'}</span>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 0', borderBottom: i < appt.services.length - 1 ? '1px solid #f5f5f5' : 'none' }}>
+                <span style={{ fontSize: 13, color: '#333', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.name || '—'}</span>
+                {techs.length > 1 && (
+                  <select
+                    value={techNames[i] || ''}
+                    onChange={e => setTechNames(n => n.map((v, idx) => idx === i ? e.target.value : v))}
+                    style={{ fontFamily: 'inherit', fontSize: 11, border: '1px solid #d8d8d8', borderRadius: 6, padding: '3px 4px', background: '#fafafa', color: '#555', maxWidth: 90, flexShrink: 0 }}
+                  >
+                    {techs.map(t => <option key={t} value={t}>{t.split(' ')[0]}</option>)}
+                  </select>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                   <span style={{ fontSize: 11, color: '#aaa' }}>$</span>
                   <input type="number" min={0} value={prices[i]}
@@ -200,6 +314,68 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
             ))}
             <SummaryRow label="Subtotal" value={`$${subtotal}`} bold />
           </Section>
+
+          {/* Retail Products */}
+          <Section title="Retail Products">
+            {cartItems.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                {cartItems.map(item => (
+                  <div key={item.product.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #f5f5f5' }}>
+                    <span style={{ fontSize: 13, color: '#333', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.product.name}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => setCartQty(item.product.id, item.qty - 1)} style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid #e0e0e0', background: '#fff', cursor: 'pointer', fontSize: 14, color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>−</button>
+                      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 16, textAlign: 'center' }}>{item.qty}</span>
+                      <button onClick={() => setCartQty(item.product.id, item.qty + 1)} disabled={item.qty >= (item.product.stock || 0)} style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid #e0e0e0', background: '#fff', cursor: item.qty < (item.product.stock || 0) ? 'pointer' : 'default', fontSize: 14, color: item.qty < (item.product.stock || 0) ? '#555' : '#ccc', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</button>
+                    </div>
+                    <span style={{ fontSize: 13, color: '#555', width: 56, textAlign: 'right', flexShrink: 0 }}>${(item.product.price * item.qty).toFixed(2)}</span>
+                    <button onClick={() => setCartQty(item.product.id, 0)} style={{ fontSize: 15, background: 'none', border: 'none', cursor: 'pointer', color: '#ccc', padding: '0 2px', flexShrink: 0 }}>×</button>
+                  </div>
+                ))}
+                <SummaryRow label="Products total" value={`$${productsTotal.toFixed(2)}`} />
+              </div>
+            )}
+            <button onClick={openProductPicker}
+              style={{ width: '100%', padding: '7px', borderRadius: 8, border: '1.5px dashed #d0d0d0', background: '#fafafa', color: '#888', fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>
+              + Add retail product
+            </button>
+          </Section>
+
+          {showPicker && (
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 400 }}
+              onClick={e => { if (e.target === e.currentTarget) setShowPicker(false); }}>
+              <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', width: '100%', maxWidth: 480, maxHeight: '60vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>Add Retail Product</span>
+                  <button onClick={() => setShowPicker(false)} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #e8e8e8', background: '#fafafa', cursor: 'pointer', fontSize: 16, color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto' }}>
+                  {!allProducts
+                    ? <div style={{ padding: 24, textAlign: 'center', color: '#bbb', fontSize: 13 }}>Loading…</div>
+                    : allProducts.length === 0
+                      ? <div style={{ padding: 24, textAlign: 'center', color: '#bbb', fontSize: 13 }}>No products in stock. Add some in the Products module.</div>
+                      : allProducts.map((p, i) => {
+                          const inCart = cartItems.find(c => c.product.id === p.id);
+                          return (
+                            <div key={p.id} onClick={() => { addToCart(p); setShowPicker(false); }}
+                              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 18px', borderBottom: i < allProducts.length - 1 ? '1px solid #f5f5f5' : 'none', cursor: 'pointer' }}
+                              onMouseEnter={e => e.currentTarget.style.background = '#f8f9fa'}
+                              onMouseLeave={e => e.currentTarget.style.background = ''}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{p.name}</div>
+                                {p.brand && <div style={{ fontSize: 11, color: '#aaa' }}>{p.brand}</div>}
+                              </div>
+                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: '#2D7A5F' }}>${(p.price || 0).toFixed(2)}</div>
+                                <div style={{ fontSize: 10, color: '#bbb' }}>{p.stock} in stock{inCart ? ` · ${inCart.qty} in cart` : ''}</div>
+                              </div>
+                            </div>
+                          );
+                        })
+                  }
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Discount */}
           <Section title="Discount">
@@ -381,6 +557,160 @@ export default function CheckoutModal({ appt, onComplete, onClose }) {
         </div>
 
       </div>
+    </div>
+  );
+}
+
+// ── Receipt ────────────────────────────────────────────
+function ReceiptScreen({ receipt, onDone }) {
+  const { settings, showToast } = useApp();
+  const { client, clientId, clientEmail, tech, date, services, retailProducts, payment: p } = receipt;
+  const [reviewSent,    setReviewSent]    = useState(false);
+  const [reviewSending, setReviewSending] = useState(false);
+  const canReview = clientId && clientEmail && settings?.googleReviewUrl;
+
+  async function sendReviewRequest() {
+    setReviewSending(true);
+    try {
+      await createReviewRequest({ clientId, clientName: client, clientEmail, googleReviewUrl: settings.googleReviewUrl });
+      setReviewSent(true);
+      showToast('Review request sent!');
+    } catch { showToast('Failed to send review request.'); }
+    finally { setReviewSending(false); }
+  }
+  const isMultiTech = p.techSplit && p.techSplit.length > 1;
+  const fmtDate = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const methodLabel = { card: 'Credit / Debit Card', cash: 'Cash', venmo: 'Venmo', zelle: 'Zelle', check: 'Check' }[p.method] || p.method;
+
+  function handlePrint() {
+    const w = window.open('', '_blank', 'width=400,height=650');
+    w.document.write(`
+      <html><head><title>Receipt — ${client}</title>
+      <style>
+        body { font-family: 'Helvetica Neue', sans-serif; max-width: 340px; margin: 30px auto; color: #1a1a1a; }
+        h2 { font-size: 22px; font-weight: 700; margin: 0 0 2px; }
+        .sub { font-size: 13px; color: #888; margin: 0 0 18px; }
+        hr { border: none; border-top: 1px solid #e8e8e8; margin: 14px 0; }
+        .row { display: flex; justify-content: space-between; font-size: 13px; margin: 6px 0; }
+        .row.total { font-weight: 700; font-size: 15px; margin-top: 10px; }
+        .footer { text-align: center; font-size: 12px; color: #aaa; margin-top: 24px; }
+      </style></head><body>
+      <h2>Meraki Nail Studio</h2>
+      <p class="sub">${fmtDate} &nbsp;·&nbsp; ${tech}</p>
+      <hr>
+      ${services.map(s => `<div class="row"><span>${s.name || '—'}</span><span>$${s.price.toFixed(2)}</span></div>`).join('')}
+      <hr>
+      ${p.discountAmount > 0 ? `<div class="row"><span>Discount</span><span>-$${p.discountAmount.toFixed(2)}</span></div>` : ''}
+      ${p.promoAmount    > 0 ? `<div class="row"><span>Promo (${p.promoCode})</span><span>-$${p.promoAmount.toFixed(2)}</span></div>` : ''}
+      ${p.giftCard       ? `<div class="row"><span>Gift card</span><span>-$${p.giftCard.applied.toFixed(2)}</span></div>` : ''}
+      ${p.creditApplied  > 0 ? `<div class="row"><span>Credit applied</span><span>-$${p.creditApplied.toFixed(2)}</span></div>` : ''}
+      ${p.tip            > 0 ? `<div class="row"><span>Tip</span><span>$${p.tip.toFixed(2)}</span></div>` : ''}
+      <div class="row total"><span>Total</span><span>$${p.total.toFixed(2)}</span></div>
+      <hr>
+      <div class="row"><span>Paid via</span><span>${methodLabel}</span></div>
+      <div class="footer">Thank you, ${client}! We appreciate your visit 💅</div>
+      </body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '94%', maxWidth: 400, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,.3)', overflow: 'hidden' }}>
+        {/* Header */}
+        <div style={{ background: 'linear-gradient(135deg,#2D7A5F,#3D95CE)', padding: '18px 20px', textAlign: 'center', color: '#fff', flexShrink: 0 }}>
+          <div style={{ fontSize: 28, marginBottom: 6 }}>✓</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Payment Complete</div>
+          <div style={{ fontSize: 12, opacity: .85, marginTop: 2 }}>{client} · {tech}</div>
+        </div>
+
+        {/* Receipt body */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 12 }}>{fmtDate}</div>
+
+          {isMultiTech ? (
+            p.techSplit.map(split => (
+              <div key={split.techName} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>{split.techName}</div>
+                {services.filter(s => s.techName === split.techName).map((s, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0', borderBottom: '1px solid #f5f5f5' }}>
+                    <span style={{ color: '#333' }}>{s.name || '—'}</span>
+                    <span style={{ fontWeight: 500 }}>${s.price.toFixed(2)}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#aaa', padding: '3px 0' }}>
+                  <span>subtotal</span><span>${split.revenue.toFixed(2)}</span>
+                </div>
+              </div>
+            ))
+          ) : (
+            services.map((s, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '5px 0', borderBottom: '1px solid #f5f5f5' }}>
+                <span style={{ color: '#333' }}>{s.name || '—'}</span>
+                <span style={{ fontWeight: 500 }}>${s.price.toFixed(2)}</span>
+              </div>
+            ))
+          )}
+
+          {retailProducts?.length > 0 && (
+            <div style={{ marginTop: 10, borderTop: '1px solid #f0f0f0', paddingTop: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>Retail Products</div>
+              {retailProducts.map((rp, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0', borderBottom: '1px solid #f5f5f5' }}>
+                  <span style={{ color: '#333' }}>{rp.name}{rp.qty > 1 ? ` ×${rp.qty}` : ''}</span>
+                  <span style={{ fontWeight: 500 }}>${(rp.price * rp.qty).toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ marginTop: 12, paddingTop: 4 }}>
+            {p.discountAmount > 0 && <RRow label={`Discount`}      value={`-$${p.discountAmount.toFixed(2)}`} color="#ef4444" />}
+            {p.promoAmount    > 0 && <RRow label={`Promo (${p.promoCode})`} value={`-$${p.promoAmount.toFixed(2)}`} color="#ef4444" />}
+            {p.giftCard           && <RRow label="Gift card"        value={`-$${p.giftCard.applied.toFixed(2)}`} color="#ef4444" />}
+            {p.creditApplied > 0  && <RRow label="Credit applied"  value={`-$${p.creditApplied.toFixed(2)}`} color="#ef4444" />}
+            {p.tip           > 0  && <RRow label="Tip"             value={`$${p.tip.toFixed(2)}`} />}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 6px', borderTop: '2px solid #1a1a1a', marginTop: 6 }}>
+              <span style={{ fontSize: 15, fontWeight: 700 }}>Total</span>
+              <span style={{ fontSize: 15, fontWeight: 700 }}>${p.total.toFixed(2)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#888', paddingBottom: 4 }}>
+              <span>Paid via</span><span>{methodLabel}</span>
+            </div>
+          </div>
+
+          <div style={{ textAlign: 'center', fontSize: 12, color: '#aaa', marginTop: 16 }}>
+            Thank you, {client}! We appreciate your visit 💅
+          </div>
+        </div>
+
+        {/* Footer buttons */}
+        <div style={{ display: 'flex', gap: 8, padding: '12px 18px', borderTop: '1px solid #f0f0f0', flexShrink: 0, flexWrap: 'wrap' }}>
+          <button onClick={handlePrint}
+            style={{ flex: 1, minWidth: 70, padding: '10px 0', borderRadius: 10, border: '1px solid #d8d8d8', background: '#fafafa', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', color: '#555' }}>
+            🖨 Print
+          </button>
+          {canReview && (
+            <button onClick={!reviewSent && !reviewSending ? sendReviewRequest : undefined}
+              style={{ flex: 1, minWidth: 70, padding: '10px 0', borderRadius: 10, border: `1px solid ${reviewSent ? '#bbf7d0' : '#fde68a'}`, background: reviewSent ? '#f0fdf4' : '#fffbeb', fontSize: 12, fontWeight: 600, cursor: reviewSent || reviewSending ? 'default' : 'pointer', fontFamily: 'inherit', color: reviewSent ? '#16a34a' : '#92400e' }}>
+              {reviewSent ? '✓ Sent!' : reviewSending ? 'Sending…' : '⭐ Review'}
+            </button>
+          )}
+          <button onClick={onDone}
+            style={{ flex: 2, minWidth: 100, padding: '10px 0', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#2D7A5F,#3D95CE)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', color: '#fff' }}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RRow({ label, value, color }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', color: '#555' }}>
+      <span>{label}</span><span style={{ color: color || '#1a1a1a', fontWeight: 500 }}>{value}</span>
     </div>
   );
 }

@@ -7,12 +7,26 @@ import { resizeImg } from '../../utils/helpers';
 import { useApp } from '../../context/AppContext';
 
 export default function ServicesAdmin() {
-  const { isTech } = useApp();
-  const [services, setServices] = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [editing,  setEditing]  = useState(null);
-  const [saving,   setSaving]   = useState(false);
-  const [errors,   setErrors]   = useState({});
+  const { isTech, showToast } = useApp();
+  const [services,   setServices]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [editing,    setEditing]    = useState(null);
+  const [saving,     setSaving]     = useState(false);
+  const [errors,     setErrors]     = useState({});
+  const [undoStack,  setUndoStack]  = useState([]);
+  const [redoStack,  setRedoStack]  = useState([]);
+  const undoRef = useRef([]);
+
+  function syncUndo(next) { undoRef.current = next; setUndoStack(next); }
+
+  function commitDelete(svc) {
+    deleteService(svc.id).catch(() => {});
+    logActivity('service_deleted', svc.name);
+  }
+
+  useEffect(() => {
+    return () => { undoRef.current.forEach(commitDelete); };
+  }, []); // eslint-disable-line
 
   useEffect(() => { load(); }, []);
 
@@ -80,11 +94,34 @@ export default function ServicesAdmin() {
     }
   }
 
-  async function handleDelete(svc) {
+  function handleDelete(svc) {
     if (!confirm(`Delete "${svc.name}"?`)) return;
-    await deleteService(svc.id);
-    logActivity('service_deleted', svc.name);
     setServices(s => s.filter(x => x.id !== svc.id));
+    setRedoStack([]);
+    const next = [svc, ...undoRef.current];
+    if (next.length > 2) { commitDelete(next[next.length - 1]); }
+    syncUndo(next.slice(0, 2));
+    showToast(`Deleted "${svc.name}" — use Undo above to revert`);
+  }
+
+  function handleUndo() {
+    const [item, ...rest] = undoRef.current;
+    if (!item) return;
+    setServices(s => [...s, item].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+    setRedoStack(r => [item, ...r]);
+    syncUndo(rest);
+  }
+
+  function handleRedo() {
+    setRedoStack(prev => {
+      const [item, ...rest] = prev;
+      if (!item) return prev;
+      setServices(s => s.filter(x => x.id !== item.id));
+      const next = [item, ...undoRef.current];
+      if (next.length > 2) { commitDelete(next[next.length - 1]); }
+      syncUndo(next.slice(0, 2));
+      return rest;
+    });
   }
 
   async function toggleActive(svc) {
@@ -93,29 +130,33 @@ export default function ServicesAdmin() {
   }
 
   const groups = groupByCategory(services);
+  const activeCount = services.filter(s => s.active !== false).length;
 
   if (loading) return <Empty>Loading services…</Empty>;
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8 }}>
         {!isTech && (
           <button onClick={handleReseed} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid #d0d0d0', background: '#fafafa', color: '#888', cursor: 'pointer', fontFamily: 'inherit' }}>
             ↺ Reset to defaults
           </button>
         )}
-        {isTech
-          ? <div style={{ fontSize: 12, color: '#aaa' }}>{services.length} services · view only</div>
-          : <Btn color="#3D95CE" onClick={() => { setEditing(blankService()); setErrors({}); }}>+ Add Service</Btn>
-        }
+        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#aaa' }}>{services.length} total · {activeCount} active</span>
+          {undoStack.length > 0 && <Btn onClick={handleUndo}>↩ Undo</Btn>}
+          {redoStack.length > 0 && <Btn onClick={handleRedo}>↪ Redo</Btn>}
+          {!isTech && <Btn color="#3D95CE" onClick={() => { setEditing(blankService()); setErrors({}); }}>+ Add Service</Btn>}
+        </div>
       </div>
 
       {groups.length === 0 && <Empty>No services yet — click Add Service to start.</Empty>}
 
       {groups.map(({ category, services: svcs }) => (
         <div key={category} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', marginBottom: 14, overflow: 'hidden' }}>
-          <div style={{ padding: '10px 16px', borderBottom: '1px solid #e8e8e8', fontSize: 12, fontWeight: 600, color: '#888', letterSpacing: '.06em', textTransform: 'uppercase', background: '#fafafa' }}>
-            {category}
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid #e8e8e8', fontSize: 12, fontWeight: 600, color: '#888', letterSpacing: '.06em', textTransform: 'uppercase', background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>{category}</span>
+            <span style={{ fontSize: 11, fontWeight: 500, color: '#bbb', letterSpacing: 0, textTransform: 'none' }}>{svcs.length}</span>
           </div>
           {svcs.map(svc => (
             <div key={svc.id} style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 12, opacity: svc.active ? 1 : .45 }}>

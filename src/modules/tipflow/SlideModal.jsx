@@ -27,24 +27,36 @@ export default function SlideModal({ editIndex, onClose }) {
       .catch(() => {});
   }, []);
 
-  function importEmployee() {
+  async function importEmployee() {
     const emp = employees.find(e => e.id === pickEmp);
     if (!emp) return;
+    const strip = v => (v || '').replace(/^@/, '');
     if (emp.name)      setName(emp.name);
-    if (emp.venmo)     setVenmo(emp.venmo);
-    if (emp.instagram) setIg(emp.instagram);
-    if (emp.facebook)  setFb(emp.facebook);
-    if (emp.homepage)  setUrl(emp.homepage);
-    if (emp.photo)     setImgData(emp.photo);
-    showToast(`Imported from ${emp.name}`);
+    if (emp.venmo)     setVenmo(strip(emp.venmo));
+    if (emp.instagram) setIg(strip(emp.instagram));
+    if (emp.facebook)  setFb(strip(emp.facebook));
+    if (emp.homepage)  setUrl(emp.homepage || '');
+    if (emp.photo) {
+      const isExtUrl = emp.photo.startsWith('http://') || emp.photo.startsWith('https://');
+      if (isExtUrl) {
+        setImgData(emp.photo);
+      } else {
+        try {
+          setImgData(await resizeImg(emp.photo, 400, 500, 0.75));
+        } catch {
+          setImgData(emp.photo);
+        }
+      }
+    }
+    const filled = [emp.name, emp.venmo, emp.instagram, emp.facebook, emp.homepage, emp.photo].filter(Boolean).length;
+    showToast(filled <= 1 ? `Imported ${emp.name} — add a photo and social handles in their employee profile` : `Imported from ${emp.name}`);
   }
 
-  function handleFile(e) {
+  async function handleFile(e) {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => resizeImg(ev.target.result, 400, 500, 0.6).then(setImgData);
-    reader.readAsDataURL(file);
+    try { setImgData(await resizeImg(file, 400, 500, 0.6)); }
+    catch { showToast('Could not process photo', 3000); }
   }
 
   async function handleSave() {
@@ -109,7 +121,7 @@ export default function SlideModal({ editIndex, onClose }) {
                 </>
             }
           </div>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFile} />
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: 'none' }} onChange={handleFile} />
         </Field>
 
         <Field label={<><Dot color="#3D95CE" /> Venmo username</>}>

@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchClients, createClient, saveClient, deleteClient, fetchServices } from '../../lib/firestore';
+import { fetchClients, createClient, saveClient, deleteClient, fetchServices, fetchClientAppointments, createReviewRequest, saveReviewReceived } from '../../lib/firestore';
 import { resizeImg, formatTime } from '../../utils/helpers';
-import { logActivity } from '../../lib/logger';
+import { logActivity, logError } from '../../lib/logger';
+
 import { useApp } from '../../context/AppContext';
 
 // ── helpers ────────────────────────────────────────────
@@ -42,12 +43,27 @@ const PAGE_SIZE = 50;
 
 // ── main list ──────────────────────────────────────────
 export default function ClientsAdmin() {
-  const [clients,  setClients]  = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [search,   setSearch]   = useState('');
-  const [page,     setPage]     = useState(0);
-  // modal: null | { client, mode: 'view'|'edit' }
-  const [modal,    setModal]    = useState(null);
+  const { showToast } = useApp();
+  const [clients,    setClients]    = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [search,     setSearch]     = useState('');
+  const [page,       setPage]       = useState(0);
+  const [modal,      setModal]      = useState(null);
+  // undo/redo — items live here instead of Firestore until evicted
+  const [undoStack,  setUndoStack]  = useState([]); // pending deletes (max 2)
+  const [redoStack,  setRedoStack]  = useState([]);
+  const undoRef = useRef([]);
+
+  function syncUndo(next) { undoRef.current = next; setUndoStack(next); }
+
+  function commitDelete(client) {
+    deleteClient(client.id).catch(() => {});
+    logActivity('client_deleted', client.name);
+  }
+
+  useEffect(() => {
+    return () => { undoRef.current.forEach(commitDelete); };
+  }, []); // eslint-disable-line
 
   useEffect(() => { load(); }, []);
 
@@ -63,27 +79,76 @@ export default function ClientsAdmin() {
       if (client.id) {
         const { id, createdAt, ...data } = client;
         await saveClient(id, data);
-        logActivity('client_updated', client.name);
+        logActivity('client_updated', `${client.name}${client.phone ? ' · ' + client.phone : ''}${client.email ? ' · ' + client.email : ''}`);
       } else {
         await createClient(client);
-        logActivity('client_added', client.name);
+        logActivity('client_added', `${client.name}${client.phone ? ' · ' + client.phone : ''}${client.email ? ' · ' + client.email : ''}`);
       }
       await load();
       setModal(null);
     } catch (e) { console.error('[Clients] save failed:', e); }
   }
 
-  async function handleDelete(client) {
-    if (!confirm(`Delete client "${client.name}"? This cannot be undone.`)) return;
-    await deleteClient(client.id);
-    logActivity('client_deleted', client.name);
+  function handleDelete(client) {
+    if (!confirm(`Delete client "${client.name}"?`)) return;
     setClients(cs => cs.filter(c => c.id !== client.id));
+    setRedoStack([]);
+    const next = [client, ...undoRef.current];
+    if (next.length > 2) { commitDelete(next[next.length - 1]); }
+    syncUndo(next.slice(0, 2));
+    showToast(`Deleted "${client.name}" — use Undo above to revert`);
+  }
+
+  function handleUndo() {
+    const [item, ...rest] = undoRef.current;
+    if (!item) return;
+    setClients(cs => [...cs, item].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+    setRedoStack(r => [item, ...r]);
+    syncUndo(rest);
+  }
+
+  function handleRedo() {
+    setRedoStack(prev => {
+      const [item, ...rest] = prev;
+      if (!item) return prev;
+      setClients(cs => cs.filter(c => c.id !== item.id));
+      const next = [item, ...undoRef.current];
+      if (next.length > 2) { commitDelete(next[next.length - 1]); }
+      syncUndo(next.slice(0, 2));
+      return rest;
+    });
   }
 
   function handleSearch(val) {
     setSearch(val);
     setPage(0);
   }
+
+  function exportCSV() {
+    const refCounts = {};
+    clients.forEach(c => { if (c.referredBy?.id) refCounts[c.referredBy.id] = (refCounts[c.referredBy.id] || 0) + 1; });
+    const cols = ['Name','Phone','Email','Address','Birthday','Instagram','Facebook','TikTok','Venmo','Notes','Referred By','Referrals Given','Credit Balance','Visits'];
+    const esc  = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [cols.join(','), ...clients.map(c => [
+      c.name, c.phone, c.email, c.address, c.birthday,
+      c.instagram, c.facebook, c.tiktok, c.venmo, c.notes,
+      c.referredBy?.name || '',
+      refCounts[c.id] || 0,
+      c.credit ? Number(c.credit).toFixed(2) : '',
+      (c.visits?.length || 0),
+    ].map(esc).join(','))];
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `meraki-clients-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    logActivity('export_csv', `${clients.length} clients`);
+  }
+
+  const refCounts  = {};
+  clients.forEach(c => { if (c.referredBy?.id) refCounts[c.referredBy.id] = (refCounts[c.referredBy.id] || 0) + 1; });
 
   const visible   = search ? clients.filter(c => matchesSearch(c, search)) : clients;
   const totalPages = Math.ceil(visible.length / PAGE_SIZE);
@@ -96,12 +161,16 @@ export default function ClientsAdmin() {
   return (
     <div>
       {/* Toolbar */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input
           value={search} onChange={e => handleSearch(e.target.value)}
           placeholder="Search by name, phone, or email…"
           style={{ flex: 1, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '7px 12px', fontSize: 13, outline: 'none', background: '#fafafa' }}
         />
+        {undoStack.length > 0 && <Btn onClick={handleUndo}>↩ Undo</Btn>}
+        {redoStack.length > 0 && <Btn onClick={handleRedo}>↪ Redo</Btn>}
+        <span style={{ fontSize: 12, color: '#aaa', whiteSpace: 'nowrap' }}>{clients.length} clients</span>
+        <Btn onClick={exportCSV}>⬇ CSV</Btn>
         <Btn color="#3D95CE" onClick={() => setModal({ client: blankClient(), mode: 'edit' })}>+ Add Client</Btn>
       </div>
 
@@ -115,6 +184,7 @@ export default function ClientsAdmin() {
                 <ClientRow
                   key={c.id}
                   client={c}
+                  referralCount={refCounts[c.id] || 0}
                   last={i === pageSlice.length - 1}
                   onView={() => setModal({ client: { ...c }, mode: 'view' })}
                   onEdit={() => setModal({ client: { ...c }, mode: 'edit' })}
@@ -153,6 +223,7 @@ export default function ClientsAdmin() {
       {modal && (
         <ClientModal
           client={modal.client}
+          allClients={clients}
           initialMode={modal.mode}
           onChange={patch => setModal(m => ({ ...m, client: { ...m.client, ...patch } }))}
           onSave={() => handleSave(modal.client)}
@@ -163,14 +234,21 @@ export default function ClientsAdmin() {
   );
 }
 
-function ClientRow({ client, last, onView, onEdit, onDelete }) {
+function ClientRow({ client, referralCount, last, onView, onEdit, onDelete }) {
   const lastVisit = client.visits?.slice(-1)[0];
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: last ? 'none' : '1px solid #f0f0f0' }}>
       <div onClick={onView} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, cursor: 'pointer' }}>
         <Avatar picture={client.picture} name={client.name} size={40} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{client.name || '—'}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{client.name || '—'}</span>
+            {referralCount > 0 && (
+              <span style={{ fontSize: 10, background: '#e8f4ee', color: '#2D7A5F', borderRadius: 10, padding: '1px 7px', fontWeight: 600, flexShrink: 0 }}>
+                ↗ {referralCount} referred
+              </span>
+            )}
+          </div>
           <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>
             {[client.phone, client.email].filter(Boolean).join(' · ') || 'No contact info'}
           </div>
@@ -188,13 +266,18 @@ function ClientRow({ client, last, onView, onEdit, onDelete }) {
 }
 
 // ── modal ──────────────────────────────────────────────
-function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }) {
-  const [mode,      setMode]      = useState(initialMode);
-  const [tab,       setTab]       = useState('profile');
-  const [saving,    setSaving]    = useState(false);
-  const [services,  setServices]  = useState([]);
-  const [addingVisit, setAddingVisit] = useState(false);
-  const [newVisit,  setNewVisit]  = useState(blankVisit());
+function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, onSave, onClose }) {
+  const { showToast, isAdmin, settings } = useApp();
+  const [mode,             setMode]             = useState(initialMode);
+  const [tab,              setTab]              = useState('profile');
+  const [saving,           setSaving]           = useState(false);
+  const [requestingReview, setRequestingReview] = useState(false);
+  const [recordingReview,  setRecordingReview]  = useState(false);
+  const [reviewForm,       setReviewForm]       = useState({ rating: 5, date: new Date().toISOString().slice(0, 10), note: '', techName: '' });
+  const [services,     setServices]     = useState([]);
+  const [apptHistory,  setApptHistory]  = useState(null);
+  const [addingVisit,  setAddingVisit]  = useState(false);
+  const [newVisit,     setNewVisit]     = useState(blankVisit());
   const fileRef = useRef(null);
   const isNew   = !client.id;
   const isView  = mode === 'view';
@@ -204,17 +287,75 @@ function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }
     fetchServices().then(s => setServices(s.map(sv => sv.name))).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (tab === 'visits' && client.id && apptHistory === null) {
+      fetchClientAppointments(client.id)
+        .then(setApptHistory)
+        .catch(() => setApptHistory([]));
+    }
+  }, [tab, client.id]); // eslint-disable-line
+
   async function handlePhoto(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     try { onChange({ picture: await resizeImg(file, 300, 300, 0.82) }); }
-    catch {}
+    catch (err) { logError('client_photo', err, { fileType: file.type, fileSize: file.size }); }
   }
 
   async function submit() {
     if (!client.name?.trim()) return;
     setSaving(true);
     try { await onSave(); } finally { setSaving(false); }
+  }
+
+  async function handleRequestReview() {
+    if (!client.email || !settings?.googleReviewUrl) return;
+    setRequestingReview(true);
+    try {
+      await createReviewRequest({
+        clientId:       client.id,
+        clientName:     client.name,
+        clientEmail:    client.email,
+        googleReviewUrl: settings.googleReviewUrl,
+      });
+      const now = new Date().toISOString();
+      await saveClient(client.id, { reviewRequestedAt: now });
+      onChange({ reviewRequestedAt: now });
+      logActivity('review_requested', `${client.name}${client.email ? ' · ' + client.email : ''}`);
+      showToast('Review request sent!');
+    } catch (e) {
+      showToast('Failed to send: ' + e.message, 3000);
+    } finally {
+      setRequestingReview(false);
+    }
+  }
+
+  async function handleRecordReview() {
+    const entry = {
+      rating:   reviewForm.rating,
+      date:     reviewForm.date || new Date().toISOString().slice(0, 10),
+      text:     reviewForm.note,
+      techName: reviewForm.techName || null,
+      url:      '',
+    };
+    const updated = [...(client.googleReviews || []), entry];
+    onChange({ googleReviews: updated });
+    try {
+      await saveClient(client.id, { googleReviews: updated });
+      await saveReviewReceived({
+        clientId:   client.id,
+        clientName: client.name,
+        rating:     entry.rating,
+        date:       entry.date,
+        techName:   entry.techName,
+      });
+      logActivity('review_received', `${client.name} · ${'★'.repeat(entry.rating)}${entry.techName ? ' · ' + entry.techName : ''}`);
+      showToast('Review recorded!');
+    } catch (e) {
+      showToast('Failed to save: ' + e.message, 3000);
+    }
+    setRecordingReview(false);
+    setReviewForm({ rating: 5, date: new Date().toISOString().slice(0, 10), note: '', techName: '' });
   }
 
   function addVisit() {
@@ -281,7 +422,7 @@ function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }
                   {!isView && (
                     <>
                       <div style={{ fontSize: 10, color: '#aaa', textAlign: 'center', marginTop: 3, cursor: 'pointer' }} onClick={() => fileRef.current?.click()}>photo</div>
-                      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhoto} />
+                      <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: 'none' }} onChange={handlePhoto} />
                     </>
                   )}
                 </div>
@@ -303,19 +444,43 @@ function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }
 
               <Field label="Phone">
                 {isView
-                  ? <ViewVal>{client.phone || '—'}</ViewVal>
-                  : <input value={client.phone || ''} onChange={e => onChange({ phone: e.target.value })} placeholder="(555) 000-0000" style={inp} />
+                  ? <CopyVal value={client.phone} />
+                  : (() => {
+                      const phone = client.phone?.trim();
+                      const dup = phone && allClients.find(c => c.id !== client.id && c.phone?.trim() === phone);
+                      return (
+                        <>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <input value={client.phone || ''} onChange={e => onChange({ phone: e.target.value })} placeholder="(555) 000-0000" style={{ ...inp, flex: 1 }} />
+                            {phone && <CopyBtn value={phone} />}
+                          </div>
+                          {dup && <DupWarn name={dup.name} />}
+                        </>
+                      );
+                    })()
                 }
               </Field>
               <Field label="Email">
                 {isView
-                  ? <ViewVal>{client.email || '—'}</ViewVal>
-                  : <input type="email" value={client.email || ''} onChange={e => onChange({ email: e.target.value })} placeholder="jane@example.com" style={inp} />
+                  ? <CopyVal value={client.email} />
+                  : (() => {
+                      const email = client.email?.trim().toLowerCase();
+                      const dup = email && allClients.find(c => c.id !== client.id && c.email?.trim().toLowerCase() === email);
+                      return (
+                        <>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <input type="email" value={client.email || ''} onChange={e => onChange({ email: e.target.value })} placeholder="jane@example.com" style={{ ...inp, flex: 1 }} />
+                            {email && <CopyBtn value={client.email} />}
+                          </div>
+                          {dup && <DupWarn name={dup.name} />}
+                        </>
+                      );
+                    })()
                 }
               </Field>
               <Field label="Address">
                 {isView
-                  ? <ViewVal>{client.address || '—'}</ViewVal>
+                  ? <CopyVal value={client.address} />
                   : <input value={client.address || ''} onChange={e => onChange({ address: e.target.value })} placeholder="123 Main St, City, State" style={inp} />
                 }
               </Field>
@@ -325,8 +490,102 @@ function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }
                   : <textarea value={client.notes || ''} onChange={e => onChange({ notes: e.target.value })} rows={3} placeholder="Allergies, preferences, special notes…" style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }} />
                 }
               </Field>
+              <Field label="Referred by">
+                {isView
+                  ? (() => {
+                      const count = allClients.filter(c => c.referredBy?.id === client.id).length;
+                      return (
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                          <ViewVal>{client.referredBy?.name || '—'}</ViewVal>
+                          {count > 0 && (
+                            <span style={{ fontSize: 11, background: '#e8f4ee', color: '#2D7A5F', borderRadius: 10, padding: '2px 9px', fontWeight: 600 }}>
+                              Referred {count} {count === 1 ? 'client' : 'clients'}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()
+                  : <select value={client.referredBy?.id || ''} onChange={e => {
+                      const ref = allClients.find(c => c.id === e.target.value);
+                      onChange({ referredBy: ref ? { id: ref.id, name: ref.name } : null });
+                    }} style={inp}>
+                      <option value="">— None —</option>
+                      {allClients.filter(c => c.id !== client.id).sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                }
+              </Field>
             </>
           )}
+
+              {/* Review request — view mode only, admin only, existing clients with email */}
+              {isView && client.id && client.email && isAdmin && (
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #f0f0f0' }}>
+                  <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>
+                    GOOGLE REVIEW
+                    {client.reviewRequestedAt && (
+                      <span style={{ marginLeft: 8, fontWeight: 400 }}>
+                        · last requested {(() => {
+                          const days = Math.floor((Date.now() - new Date(client.reviewRequestedAt)) / 86400000);
+                          return days === 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+                        })()}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleRequestReview}
+                    disabled={requestingReview || !settings?.googleReviewUrl}
+                    title={!settings?.googleReviewUrl ? 'Set Google Review URL in Admin → Settings first' : ''}
+                    style={{ width: '100%', padding: '8px', borderRadius: 8, border: `1px solid ${settings?.googleReviewUrl ? '#f59e0b' : '#e0e0e0'}`, background: settings?.googleReviewUrl ? '#fffbeb' : '#fafafa', color: requestingReview ? '#aaa' : settings?.googleReviewUrl ? '#92400e' : '#bbb', fontSize: 12, fontWeight: 600, cursor: settings?.googleReviewUrl && !requestingReview ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                    {requestingReview ? 'Sending…' : '⭐ Request Google Review'}
+                  </button>
+                  {!settings?.googleReviewUrl && (
+                    <div style={{ fontSize: 10, color: '#bbb', textAlign: 'center', marginTop: 4 }}>
+                      Set Google Review URL in Admin → Settings to enable
+                    </div>
+                  )}
+                  <div style={{ marginTop: 6 }}>
+                    {!recordingReview ? (
+                      <button
+                        onClick={() => setRecordingReview(true)}
+                        style={{ width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#16a34a', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        📥 Record review received
+                      </button>
+                    ) : (
+                      <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#16a34a', marginBottom: 8 }}>Record Google Review</div>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                          {[1,2,3,4,5].map(n => (
+                            <button key={n} onClick={() => setReviewForm(f => ({ ...f, rating: n }))}
+                              style={{ flex: 1, padding: '6px 0', border: `1px solid ${reviewForm.rating >= n ? '#f59e0b' : '#e0e0e0'}`, borderRadius: 6, background: reviewForm.rating >= n ? '#fffbeb' : '#fff', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>
+                              ★
+                            </button>
+                          ))}
+                        </div>
+                        <input type="date" value={reviewForm.date} onChange={e => setReviewForm(f => ({ ...f, date: e.target.value }))}
+                          style={{ width: '100%', fontFamily: 'inherit', border: '1px solid #d0d0d0', borderRadius: 6, padding: '5px 8px', fontSize: 12, marginBottom: 6, boxSizing: 'border-box' }} />
+                        <input value={reviewForm.techName} onChange={e => setReviewForm(f => ({ ...f, techName: e.target.value }))}
+                          placeholder="Tech name (optional)"
+                          style={{ width: '100%', fontFamily: 'inherit', border: '1px solid #d0d0d0', borderRadius: 6, padding: '5px 8px', fontSize: 12, marginBottom: 6, boxSizing: 'border-box' }} />
+                        <input value={reviewForm.note} onChange={e => setReviewForm(f => ({ ...f, note: e.target.value }))}
+                          placeholder="Note (optional)"
+                          style={{ width: '100%', fontFamily: 'inherit', border: '1px solid #d0d0d0', borderRadius: 6, padding: '5px 8px', fontSize: 12, marginBottom: 8, boxSizing: 'border-box' }} />
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => setRecordingReview(false)}
+                            style={{ flex: 1, padding: '6px', border: '1px solid #d0d0d0', borderRadius: 6, background: '#fff', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: '#555' }}>
+                            Cancel
+                          </button>
+                          <button onClick={handleRecordReview}
+                            style={{ flex: 2, padding: '6px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
           {/* ── Social tab ── */}
           {tab === 'social' && (
@@ -340,8 +599,13 @@ function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }
               ].map(({ key, label, icon, placeholder }) => (
                 <Field key={key} label={`${icon} ${label}`}>
                   {isView
-                    ? <ViewVal>{client[key] || '—'}</ViewVal>
-                    : <input value={client[key] || ''} onChange={e => onChange({ [key]: e.target.value })} placeholder={placeholder} style={inp} />
+                    ? <CopyVal value={client[key]} />
+                    : (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input value={client[key] || ''} onChange={e => onChange({ [key]: e.target.value })} placeholder={placeholder} style={{ ...inp, flex: 1 }} />
+                        {client[key] && <CopyBtn value={client[key]} />}
+                      </div>
+                    )
                   }
                 </Field>
               ))}
@@ -452,7 +716,46 @@ function ClientModal({ client, initialMode = 'edit', onChange, onSave, onClose }
           {/* ── Visits tab ── */}
           {tab === 'visits' && (
             <>
-              {(client.visits || []).length === 0 && !addingVisit && (
+              {/* Appointment history from scheduling system */}
+              {client.id && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                    Appointment history
+                  </div>
+                  {apptHistory === null ? (
+                    <div style={{ fontSize: 12, color: '#bbb', padding: '8px 0' }}>Loading…</div>
+                  ) : apptHistory.length === 0 ? (
+                    <div style={{ fontSize: 12, color: '#bbb', padding: '8px 0' }}>No appointments on record.</div>
+                  ) : (
+                    apptHistory.map(a => (
+                      <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: '#fff', borderRadius: 8, border: '1px solid #e8e8e8', marginBottom: 6 }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{formatDate(a.date)}</div>
+                          <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>
+                            {a.techName} · {(a.services || []).map(s => s.name).filter(Boolean).join(', ') || '—'}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: '#1a1a1a' }}>
+                            ${(a.services || []).reduce((s, sv) => s + (Number(sv.price) || 0), 0).toFixed(2)}
+                          </div>
+                          <div style={{ fontSize: 10, color: a.status === 'done' ? '#16a34a' : a.status === 'cancelled' ? '#ef4444' : '#888', marginTop: 1, textTransform: 'capitalize' }}>
+                            {a.status}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Manual visit notes */}
+              {(client.visits || []).length > 0 && (
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                  Manual notes
+                </div>
+              )}
+              {(client.visits || []).length === 0 && !addingVisit && !client.id && (
                 <Empty>No visits recorded yet.</Empty>
               )}
               {[...(client.visits || [])].reverse().map(v => (
@@ -621,6 +924,45 @@ function ViewVal({ children, style }) {
   return (
     <div style={{ fontSize: 13, color: '#1a1a1a', padding: '6px 0', minHeight: 28, lineHeight: 1.5, ...style }}>
       {children}
+    </div>
+  );
+}
+
+function CopyBtn({ value }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard?.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+  }
+  return (
+    <button onClick={copy} title="Copy" style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: '1px solid #d8d8d8', background: '#fafafa', color: copied ? '#2D7A5F' : '#888', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0, height: 28 }}>
+      {copied ? '✓' : 'Copy'}
+    </button>
+  );
+}
+
+function DupWarn({ name }) {
+  return (
+    <div style={{ fontSize: 11, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 9px', marginTop: 4 }}>
+      ⚠ Already used by <strong>{name}</strong>
+    </div>
+  );
+}
+
+function CopyVal({ value }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return <ViewVal>—</ViewVal>;
+  function copy() {
+    navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <ViewVal style={{ flex: 1, padding: '6px 0' }}>{value}</ViewVal>
+      <button onClick={copy} title="Copy" style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: '1px solid #d8d8d8', background: '#fafafa', color: copied ? '#2D7A5F' : '#888', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
+        {copied ? '✓' : 'Copy'}
+      </button>
     </div>
   );
 }

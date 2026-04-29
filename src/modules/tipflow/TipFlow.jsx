@@ -5,8 +5,8 @@ import SlideModal from './SlideModal';
 import AuthModal from '../../components/AuthModal';
 import { logActivity } from '../../lib/logger';
 
-export default function TipFlow({ onOpenAdmin }) {
-  const { slides, def, cur, setCur, deleteSlide, setDefault, isReadOnly, isAdmin, gUser, showToast, resetInactivity } = useApp();
+export default function TipFlow() {
+  const { slides, def, cur, setCur, deleteSlide, setDefault, isReadOnly, gUser, showToast, resetInactivity } = useApp();
 
   const [actionsVisible, setActionsVisible]   = useState(false);
   const [showSlideModal, setShowSlideModal]   = useState(false);
@@ -126,7 +126,6 @@ export default function TipFlow({ onOpenAdmin }) {
           <ActionBtn onClick={handleEdit}>✎ Edit</ActionBtn>
           <ActionBtn onClick={handleAdd}>+ Add</ActionBtn>
           <ActionBtn onClick={handleSetDefault}>{isDefault ? '★ Default ✓' : '★ Default'}</ActionBtn>
-          {isAdmin && <ActionBtn onClick={() => { requireAuth(onOpenAdmin); hideActions(); }}>⚙ Admin</ActionBtn>}
         </div>
 
         <button onClick={() => navigate(1)} disabled={cur === slides.length - 1 || !slides.length} style={circleBtn}>

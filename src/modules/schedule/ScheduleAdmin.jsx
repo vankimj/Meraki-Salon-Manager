@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { fetchAppointments, createAppointment, saveAppointment, deleteAppointment, fetchClients, fetchServices, fetchEmployees } from '../../lib/firestore';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchAppointments, createAppointment, saveAppointment, deleteAppointment, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs } from '../../lib/firestore';
 import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
+import { logActivity } from '../../lib/logger';
 import { notifyAffectedTechs } from '../../lib/notifications';
 
 const FALLBACK_TECHS = ['Yasmin D', 'Audriana L', 'Samantha T', 'Tess D', 'Elizabeth L', 'Yan W', 'Jen T', 'Marisela I', 'Ana P', 'Jenesis B'];
@@ -38,10 +39,10 @@ function fmtDate(dateStr) {
 }
 
 const STATUS_COLORS = {
-  scheduled:   { bg: '#EBF4FB', border: '#3D95CE', text: '#1a5f8a' },
-  'in-progress': { bg: '#FEF9EC', border: '#F59E0B', text: '#92400e' },
-  done:        { bg: '#EDFAF3', border: '#22C55E', text: '#166534' },
-  cancelled:   { bg: '#FEF2F2', border: '#EF4444', text: '#991b1b' },
+  scheduled:     { bg: '#DBEAFE', border: '#3B82F6', text: '#1e40af' },
+  'in-progress': { bg: '#FEF3C7', border: '#F59E0B', text: '#78350f' },
+  done:          { bg: '#D1FAE5', border: '#10B981', text: '#065f46' },
+  cancelled:     { bg: '#FEE2E2', border: '#EF4444', text: '#991b1b' },
 };
 
 const OVERLAY_KEY = 'meraki_visible_techs';
@@ -80,18 +81,21 @@ function blankAppt(date, techName, startMins) {
 
 // ── Main ──────────────────────────────────────────────
 export default function ScheduleAdmin() {
-  const { settings, isTech, myTechName, gUser } = useApp();
+  const { settings, updateSettings, isTech, isAdmin, myTechName, gUser } = useApp();
 
-  const walkInOpen  = strToMins(settings.walkIn?.open   || '09:00');
-  const walkInClose = strToMins(settings.walkIn?.close  || '18:00');
+  const [date,         setDate]        = useState(todayStr());
+
+  // Derive walk-in hours from per-day store hours (fall back to global walkIn setting)
+  const dow_ = dayOfWeek(date);
+  const storeDay = settings.storeHours?.[dow_] || {};
+  const walkInOpen  = strToMins(storeDay.open  || settings.walkIn?.open  || '09:00');
+  const walkInClose = strToMins(storeDay.close || settings.walkIn?.close || '18:00');
   const apptOpen    = strToMins(settings.apptHours?.open  || '09:00');
   const apptClose   = strToMins(settings.apptHours?.close || '20:00');
   const dayStart    = Math.min(walkInOpen, apptOpen);
   const dayEnd      = Math.max(walkInClose, apptClose);
   const slots = [];
   for (let m = dayStart; m < dayEnd; m += 30) slots.push(m);
-
-  const [date,         setDate]        = useState(todayStr());
   const [appts,        setAppts]       = useState([]);
   const [loading,      setLoading]     = useState(true);
   const [modal,        setModal]       = useState(null);
@@ -102,8 +106,10 @@ export default function ScheduleAdmin() {
   const [techs,        setTechs]       = useState(FALLBACK_TECHS);
   const [techExtended,     setTechExtended]     = useState({});
   const [showAll,          setShowAll]          = useState(false);
+  const [showHours,        setShowHours]        = useState(false);
   const [visibleTechNames, setVisibleTechNames] = useState(null);
   const [empWorkDays,      setEmpWorkDays]      = useState({});
+  const [employees,        setEmployeesData]    = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -117,12 +123,27 @@ export default function ScheduleAdmin() {
   useEffect(() => {
     fetchClients().then(setClients).catch(() => {});
     fetchServices().then(s => setServices(s.filter(sv => sv.active !== false))).catch(() => {});
-    fetchEmployees().then(emps => {
+    fetchEmployees().then(async emps => {
       const active = emps.filter(e => e.active !== false);
+      setEmployeesData(active);
       if (active.length) {
         const names = active.map(e => e.name);
         setTechs(names);
+        // Fast initial render from localStorage while Firestore loads
         setVisibleTechNames(loadOverlay(names));
+        // Override with Firestore prefs if available
+        if (gUser?.uid) {
+          try {
+            const prefs = await fetchUserPrefs(gUser.uid);
+            if (Array.isArray(prefs.visibleTechs)) {
+              const kept  = prefs.visibleTechs.filter(t => names.includes(t));
+              const added = names.filter(t => !prefs.visibleTechs.includes(t));
+              const merged = [...kept, ...added];
+              setVisibleTechNames(merged);
+              localStorage.setItem(OVERLAY_KEY, JSON.stringify(merged));
+            }
+          } catch {}
+        }
         const ext = {};
         const wd  = {};
         active.forEach(e => {
@@ -143,16 +164,28 @@ export default function ScheduleAdmin() {
     return bm === dm && bd === dd;
   });
 
+  const birthdayEmployees = employees.filter(e => {
+    if (!e.birthday) return false;
+    const [, bm, bd] = e.birthday.split('-');
+    const [, dm, dd] = date.split('-');
+    return bm === dm && bd === dd;
+  });
+
   async function handleSave(appt, original) {
     try {
       const dur  = appt.services.reduce((sum, s) => sum + (Number(s.duration) || 0), 0) || 60;
       const full = { ...appt, duration: dur };
+      const svcSummary = (full.services || []).map(s => s.name || s.customName).filter(Boolean).join(', ') || 'no services';
+      const totalPrice = (full.services || []).reduce((s, sv) => s + Number(sv.price || 0), 0);
+      const logDetail  = `${appt.clientName || 'walk-in'} with ${appt.techName} on ${appt.date} at ${appt.startTime} — ${svcSummary}${totalPrice > 0 ? ` ($${totalPrice.toFixed(2)})` : ''}`;
       if (appt.id) {
         const { id, createdAt, ...data } = full;
         await saveAppointment(id, data);
+        logActivity('appt_updated', logDetail);
       } else {
         const newId = await createAppointment(full);
         full.id = newId;
+        logActivity('appt_created', logDetail);
       }
       notifyAffectedTechs(original, full, gUser).catch(e => console.error('[Notif]', e));
       await load();
@@ -163,11 +196,13 @@ export default function ScheduleAdmin() {
   async function handleDelete(appt) {
     if (!confirm(`Delete this appointment for ${appt.clientName || 'walk-in'}?`)) return;
     await deleteAppointment(appt.id);
+    const svcNames = (appt.services || []).map(s => s.name || s.customName).filter(Boolean).join(', ') || 'no services';
+    logActivity('appt_deleted', `${appt.clientName || 'walk-in'} with ${appt.techName} on ${appt.date} — ${svcNames}`);
     setAppts(a => a.filter(x => x.id !== appt.id));
     setModal(null);
   }
 
-  function openNew(techName, slotMins) {
+function openNew(techName, slotMins) {
     setModal({ appt: blankAppt(date, techName, slotMins), original: null, mode: 'edit' });
   }
 
@@ -179,6 +214,7 @@ export default function ScheduleAdmin() {
       const next = prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name];
       if (next.length === 0) return prev;
       localStorage.setItem(OVERLAY_KEY, JSON.stringify(next));
+      if (gUser?.uid) saveUserPrefs(gUser.uid, { visibleTechs: next }).catch(() => {});
       return next;
     });
   }
@@ -188,6 +224,20 @@ export default function ScheduleAdmin() {
   const displayTechs   = isTech && !showAll
     ? techs.filter(t => t === myTechName)
     : visibleTechNames ? techs.filter(t => visibleTechNames.includes(t)) : techs;
+
+  const personalView   = isTech && !showAll;
+  const techColWidth   = displayTechs.length === 1 ? 360 : displayTechs.length <= 3 ? 180 : 120;
+
+  // Today's summary (personal view only)
+  const myAppts = personalView && date === todayStr()
+    ? appts.filter(a => a.techName === myTechName)
+    : null;
+  const nowMinsGlobal = new Date().getHours() * 60 + new Date().getMinutes();
+  const nextAppt = myAppts
+    ? myAppts
+        .filter(a => a.status === 'scheduled' && strToMins(a.startTime) > nowMinsGlobal)
+        .sort((a, b) => strToMins(a.startTime) - strToMins(b.startTime))[0]
+    : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -211,7 +261,14 @@ export default function ScheduleAdmin() {
         )}
         <input type="date" value={date} onChange={e => setDate(e.target.value)}
           style={{ marginLeft: 'auto', fontSize: 12, border: '1px solid #d8d8d8', borderRadius: 6, padding: '5px 8px', fontFamily: 'inherit', background: '#fafafa' }} />
+        {isAdmin && (
+          <button onClick={() => setShowHours(true)} title="Edit store hours"
+            style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fff', color: '#555', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
+            🕐 Hours
+          </button>
+        )}
       </div>
+      {showHours && <HoursModal settings={settings} updateSettings={updateSettings} onClose={() => setShowHours(false)} />}
 
       {/* Tech overlay filter pills */}
       {(!isTech || showAll) && visibleTechNames && (
@@ -241,16 +298,61 @@ export default function ScheduleAdmin() {
         </div>
       )}
 
-      {/* Birthdays banner */}
+      {/* Client birthdays banner */}
       {birthdayClients.length > 0 && (
         <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '7px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ fontSize: 16 }}>🎂</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#9A3412' }}>Birthdays today:</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#9A3412' }}>Client birthdays today:</span>
           {birthdayClients.map(c => (
             <span key={c.id} style={{ fontSize: 12, color: '#7C2D12', background: '#FFEDD5', borderRadius: 20, padding: '2px 10px', border: '1px solid #FED7AA' }}>
               {c.name}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Staff birthdays banner */}
+      {birthdayEmployees.length > 0 && (
+        <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: '7px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+          <span style={{ fontSize: 16 }}>🎊</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#14532D' }}>Staff birthdays today:</span>
+          {birthdayEmployees.map(e => (
+            <span key={e.id} style={{ fontSize: 12, color: '#166534', background: '#DCFCE7', borderRadius: 20, padding: '2px 10px', border: '1px solid #BBF7D0' }}>
+              {e.name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Personal view summary strip */}
+      {myAppts && !loading && (
+        <div style={{ background: 'linear-gradient(135deg,#2D7A5F,#3D95CE)', borderRadius: 10, padding: '10px 14px', marginBottom: 10, flexShrink: 0, color: '#fff' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                {myAppts.length === 0 ? 'No appointments today' : `${myAppts.length} appointment${myAppts.length !== 1 ? 's' : ''} today`}
+              </div>
+              {nextAppt && (
+                <div style={{ fontSize: 11, opacity: .85, marginTop: 2 }}>
+                  Next: {nextAppt.clientName || 'Walk-in'} at {minsToStr(strToMins(nextAppt.startTime))}
+                </div>
+              )}
+              {!nextAppt && myAppts.length > 0 && (
+                <div style={{ fontSize: 11, opacity: .85, marginTop: 2 }}>All done for the day 🎉</div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginLeft: 'auto', flexWrap: 'wrap' }}>
+              {[['scheduled', '#DBEAFE', '#1e40af'], ['in-progress', '#FEF3C7', '#78350f'], ['done', '#D1FAE5', '#065f46']].map(([st, bg, fg]) => {
+                const count = myAppts.filter(a => a.status === st).length;
+                if (count === 0) return null;
+                return (
+                  <div key={st} style={{ background: bg, color: fg, fontSize: 11, fontWeight: 600, borderRadius: 20, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                    {count} {st}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -267,6 +369,7 @@ export default function ScheduleAdmin() {
             dayStart={dayStart}
             walkInOpen={walkInOpen}
             walkInClose={walkInClose}
+            techColWidth={techColWidth}
             onSlotClick={openNew}
             onApptClick={openView}
           />
@@ -292,6 +395,7 @@ export default function ScheduleAdmin() {
       {checkout && (
         <CheckoutModal
           appt={checkout}
+          techs={techs}
           onComplete={() => { setCheckout(null); load(); }}
           onClose={() => setCheckout(null)}
         />
@@ -309,29 +413,35 @@ export default function ScheduleAdmin() {
 }
 
 // ── Day grid ──────────────────────────────────────────
-function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStart, walkInOpen, walkInClose, onSlotClick, onApptClick }) {
+function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStart, walkInOpen, walkInClose, techColWidth, onSlotClick, onApptClick }) {
   const TIME_COL = 54;
-  const TECH_COL = 120;
+  const TECH_COL = techColWidth || 120;
   const dow = dayOfWeek(date);
 
-  // appointment-only zone exists when appt hours extend beyond walk-in hours
+  const isToday = date === todayStr();
+  const nowMins = isToday ? (new Date().getHours() * 60 + new Date().getMinutes()) : -1;
+  const nowHour = isToday ? new Date().getHours() : -1;
+  const nowLineTop = (isToday && nowMins >= dayStart && nowMins < dayStart + slots.length * 30)
+    ? ((nowMins - dayStart) / 30) * SLOT_H
+    : null;
+
   const hasApptOnlyZone = slots.some(m => m < walkInOpen || m >= walkInClose);
 
   return (
     <div style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', borderRadius: 10, border: '1px solid #e8e8e8', background: '#fff' }}>
       {/* Header row */}
-      <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 10, background: '#fafafa', borderBottom: '1px solid #e8e8e8' }}>
+      <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 10, background: '#fafafa', borderBottom: '2px solid #e8e8e8' }}>
         <div style={{ width: TIME_COL, flexShrink: 0 }} />
         {techs.map(tech => {
           const isOff = empWorkDays[tech]?.[dow]?.on === false;
           return (
-            <div key={tech} style={{ width: TECH_COL, flexShrink: 0, padding: '8px 4px', fontSize: 11, fontWeight: 600, color: isOff ? '#bbb' : '#555', textAlign: 'center', borderLeft: '1px solid #f0f0f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: isOff ? '#fafafa' : undefined }}>
+            <div key={tech} style={{ width: TECH_COL, flexShrink: 0, padding: '8px 4px', fontSize: 11, fontWeight: 600, color: isOff ? '#bbb' : '#555', textAlign: 'center', borderLeft: '1px solid #e8e8e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: isOff ? '#fafafa' : undefined }}>
               {tech}
               {isOff && (
                 <div style={{ fontSize: 8, color: '#d0d0d0', fontWeight: 500, letterSpacing: '.03em' }}>off today</div>
               )}
               {!isOff && hasApptOnlyZone && techExtended[tech] && (
-                <div style={{ fontSize: 8, color: '#3D95CE', fontWeight: 500, letterSpacing: '.03em' }}>extended</div>
+                <div style={{ fontSize: 8, color: '#3B82F6', fontWeight: 500, letterSpacing: '.03em' }}>extended</div>
               )}
             </div>
           );
@@ -341,20 +451,36 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
       {/* Time slots */}
       <div style={{ position: 'relative' }}>
         {slots.map((slotMins) => {
-          const inWalkIn   = slotMins >= walkInOpen && slotMins < walkInClose;
-          const isBoundary = slotMins === walkInClose && hasApptOnlyZone;
+          const inWalkIn    = slotMins >= walkInOpen && slotMins < walkInClose;
+          const isBoundary  = slotMins === walkInClose && hasApptOnlyZone;
+          const slotHour    = Math.floor(slotMins / 60);
+          const isCurrentHr = isToday && slotHour === nowHour;
+          const isPast      = isToday && slotMins + 30 <= nowMins;
+          const isEvenHour  = slotHour % 2 === 0;
+          const isHourStart = slotMins % 60 === 0;
 
           return (
-          <div key={slotMins} style={{ display: 'flex', height: SLOT_H, borderBottom: '1px solid #f5f5f5', position: 'relative' }}>
-            {/* Walk-in → appt-only separator */}
+          <div key={slotMins} style={{
+            display: 'flex', height: SLOT_H, position: 'relative',
+            borderBottom: isHourStart ? '1px solid #e8e8e8' : '1px solid #f5f5f5',
+            background: isCurrentHr
+              ? 'rgba(254,243,199,0.7)'
+              : isPast
+              ? 'rgba(0,0,0,.018)'
+              : isEvenHour && inWalkIn
+              ? 'rgba(248,250,252,1)'
+              : 'transparent',
+          }}>
             {isBoundary && (
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: 'linear-gradient(90deg,rgba(245,158,11,.6),rgba(245,158,11,.1))', zIndex: 6, pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: 'linear-gradient(90deg,rgba(245,158,11,.7),rgba(245,158,11,.1))', zIndex: 6, pointerEvents: 'none' }} />
             )}
 
             {/* Time label */}
             <div style={{ width: TIME_COL, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-start', paddingRight: 6, paddingTop: 3, position: 'relative' }}>
               {slotMins % 60 === 0 && (
-                <span style={{ fontSize: 10, color: '#bbb', fontWeight: 500 }}>{minsToStr(slotMins)}</span>
+                <span style={{ fontSize: 10, color: isCurrentHr ? '#ef4444' : isPast ? '#ccc' : '#aaa', fontWeight: isCurrentHr ? 700 : 500 }}>
+                  {minsToStr(slotMins)}
+                </span>
               )}
               {isBoundary && (
                 <span style={{ fontSize: 7, color: '#f59e0b', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', lineHeight: 1.2 }}>appt only</span>
@@ -370,18 +496,20 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
                   key={tech}
                   onClick={() => allowed && onSlotClick(tech, slotMins)}
                   style={{
-                    width: TECH_COL, flexShrink: 0, borderLeft: '1px solid #f0f0f0',
+                    width: TECH_COL, flexShrink: 0, borderLeft: '1px solid #ececec',
                     cursor: allowed ? 'pointer' : 'default',
                     position: 'relative',
                     background: isOff
-                      ? 'repeating-linear-gradient(45deg,#fafafa,#fafafa 4px,#f4f4f4 4px,#f4f4f4 8px)'
-                      : (!inWalkIn ? (allowed ? 'rgba(61,149,206,.04)' : '#f4f4f4') : undefined),
+                      ? 'repeating-linear-gradient(45deg,#fafafa,#fafafa 4px,#f0f0f0 4px,#f0f0f0 8px)'
+                      : !inWalkIn
+                      ? (allowed ? 'rgba(59,130,246,.06)' : 'rgba(0,0,0,.025)')
+                      : 'transparent',
                   }}
                   title={isOff ? `${tech} · off today` : (allowed ? `${tech} · ${minsToStr(slotMins)}` : `${tech} · appointment-only hours`)}
                 >
                   {allowed && (
                     <div style={{ position: 'absolute', inset: 0, transition: 'background .1s' }}
-                         onMouseEnter={e => e.currentTarget.style.background = inWalkIn ? '#f0f7ff' : 'rgba(61,149,206,.1)'}
+                         onMouseEnter={e => e.currentTarget.style.background = inWalkIn ? 'rgba(59,130,246,.08)' : 'rgba(59,130,246,.13)'}
                          onMouseLeave={e => e.currentTarget.style.background = ''} />
                   )}
                 </div>
@@ -390,6 +518,13 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
           </div>
           );
         })}
+
+        {/* Now line */}
+        {nowLineTop !== null && (
+          <div style={{ position: 'absolute', top: nowLineTop, left: 0, right: 0, height: 2, background: '#ef4444', zIndex: 8, pointerEvents: 'none', boxShadow: '0 0 4px rgba(239,68,68,.4)' }}>
+            <div style={{ position: 'absolute', left: TIME_COL - 5, top: -4, width: 10, height: 10, borderRadius: '50%', background: '#ef4444' }} />
+          </div>
+        )}
 
         {/* Appointment overlays */}
         {appts.map(appt => {
@@ -419,12 +554,22 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
                 overflow: 'hidden',
                 zIndex: 5,
                 boxSizing: 'border-box',
+                display: 'flex',
+                flexDirection: 'column',
               }}
             >
-              <div style={{ fontSize: 11, fontWeight: 600, color: colors.text, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {appt.clientName || 'Walk-in'}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: colors.text, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {appt.clientName || 'Walk-in'}
+                </div>
+                {appt.source === 'online_booking' && (
+                  <span title="Online booking" style={{ fontSize: 9, background: '#3D95CE', color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>WEB</span>
+                )}
+                {appt.checkedInAt && (
+                  <span title="Client checked in" style={{ fontSize: 9, background: '#2D7A5F', color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>IN</span>
+                )}
               </div>
-              <div style={{ fontSize: 10, color: colors.text, opacity: .8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 10, color: colors.text, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {appt.services?.map(s => s.name).filter(Boolean).join(', ') || '—'}
               </div>
               {height > SLOT_H && (
@@ -442,8 +587,17 @@ function DayGrid({ date, appts, techs, techExtended, empWorkDays, slots, dayStar
 
 // ── Appointment modal ─────────────────────────────────
 function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, onRefund, viewOnly }) {
-  const [saving, setSaving] = useState(false);
+  const [saving,    setSaving]    = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const isView = mode === 'view';
+
+  function copyCheckinLink() {
+    const url = `${window.location.origin}?checkin=${appt.id}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    });
+  }
   const isNew  = !appt.id;
 
   const totalDur = appt.services?.reduce((s, sv) => s + (Number(sv.duration) || 0), 0) || 0;
@@ -505,7 +659,14 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
           {/* Status badge (view) or selector (edit) */}
           <div style={{ marginBottom: 12 }}>
             {isView ? (
-              <StatusChip status={appt.status} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <StatusChip status={appt.status} />
+                {appt.checkedInAt && (
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0' }}>
+                    ✓ Checked in
+                  </span>
+                )}
+              </div>
             ) : (
               <div style={{ display: 'flex', gap: 6 }}>
                 {statusOpts.map(o => {
@@ -527,10 +688,12 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
             {isView ? (
               <ViewVal>{appt.clientName || 'Walk-in'}</ViewVal>
             ) : (
-              <select value={appt.clientId || ''} onChange={e => pickClient(e.target.value)} style={inp}>
-                <option value="">Walk-in / no client</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <ClientSearch
+                clients={clients}
+                clientId={appt.clientId}
+                clientName={appt.clientName}
+                onChange={patch => onChange(patch)}
+              />
             )}
           </Field>
 
@@ -632,6 +795,12 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                   Delete
                 </button>
               )}
+              {appt.id && (
+                <button onClick={copyCheckinLink} title="Copy check-in link for client"
+                  style={{ fontSize: 12, padding: '8px 12px', borderRadius: 8, border: `1px solid ${linkCopied ? '#bbf7d0' : '#d0d0d0'}`, background: linkCopied ? '#f0fdf4' : '#fff', color: linkCopied ? '#166534' : '#555', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500, flexShrink: 0 }}>
+                  {linkCopied ? '✓ Copied!' : '🔗 Check-in'}
+                </button>
+              )}
               <button onClick={onClose} style={{ flex: 1, ...btnBase }}>Close</button>
               {!viewOnly && (
                 <button onClick={onSwitchEdit} style={{ flex: 1, ...btnBase, background: '#3D95CE', color: '#fff', borderColor: '#3D95CE' }}>Edit</button>
@@ -649,8 +818,16 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                 </button>
               )}
               {appt.refund && (
-                <div style={{ flex: 1, fontSize: 11, color: '#ef4444', textAlign: 'center', fontWeight: 500 }}>
-                  Refunded ${appt.refund.amount.toFixed(2)}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 600, marginBottom: appt.refund.reason || appt.refund.photo ? 6 : 0 }}>
+                    Refunded ${appt.refund.amount.toFixed(2)}
+                  </div>
+                  {appt.refund.reason && (
+                    <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{appt.refund.reason}</div>
+                  )}
+                  {appt.refund.photo && (
+                    <img src={appt.refund.photo} alt="Refund" style={{ marginTop: 6, width: '100%', maxHeight: 140, objectFit: 'cover', borderRadius: 6, border: '1px solid #fca5a5' }} />
+                  )}
                 </div>
               )}
             </>
@@ -665,6 +842,91 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Client search typeahead ───────────────────────────
+function ClientSearch({ clients, clientId, clientName, onChange }) {
+  const [query,   setQuery]   = useState('');
+  const [open,    setOpen]    = useState(false);
+  const wrapRef = useRef(null);
+
+  const selected = clients.find(c => c.id === clientId);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const filtered = query.length >= 1
+    ? clients.filter(c => c.name.toLowerCase().includes(query.toLowerCase()) || (c.phone || '').includes(query)).slice(0, 15)
+    : clients.slice(0, 10);
+
+  function selectClient(c) {
+    onChange({ clientId: c.id, clientName: c.name });
+    setQuery('');
+    setOpen(false);
+  }
+
+  function clearClient() {
+    onChange({ clientId: '', clientName: '' });
+    setQuery('');
+  }
+
+  if (selected) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...inp, cursor: 'default', paddingTop: 6, paddingBottom: 6 }}>
+        <span style={{ flex: 1, fontSize: 13, color: '#1a1a1a' }}>{selected.name}</span>
+        {selected.phone && <span style={{ fontSize: 11, color: '#aaa' }}>{selected.phone}</span>}
+        <button onClick={clearClient} style={{ border: 'none', background: 'none', color: '#bbb', cursor: 'pointer', fontSize: 18, padding: 0, lineHeight: 1, flexShrink: 0 }}>×</button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <input
+        value={clientId ? (clientName || '') : query}
+        onChange={e => {
+          const val = e.target.value;
+          setQuery(val);
+          setOpen(true);
+          if (!clientId) onChange({ clientId: '', clientName: val });
+        }}
+        onFocus={() => setOpen(true)}
+        placeholder="Search clients by name, or type walk-in name…"
+        style={inp}
+      />
+      {open && (
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(100% + 2px)', background: '#fff', border: '1px solid #d8d8d8', borderRadius: 8, zIndex: 200, maxHeight: 220, overflowY: 'auto', boxShadow: '0 6px 20px rgba(0,0,0,.12)' }}>
+          <div
+            onMouseDown={() => { onChange({ clientId: '', clientName: query || '' }); setOpen(false); }}
+            style={{ padding: '8px 12px', fontSize: 12, color: '#888', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <span style={{ fontSize: 14 }}>👤</span>
+            Walk-in{query ? ` — record name "${query}"` : ' (anonymous)'}
+          </div>
+          {filtered.map(c => (
+            <div
+              key={c.id}
+              onMouseDown={() => selectClient(c)}
+              style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #f5f5f5' }}
+              onMouseEnter={e => e.currentTarget.style.background = '#f5f9ff'}
+              onMouseLeave={e => e.currentTarget.style.background = ''}
+            >
+              <span style={{ flex: 1, color: '#1a1a1a' }}>{c.name}</span>
+              {c.phone && <span style={{ fontSize: 11, color: '#bbb' }}>{c.phone}</span>}
+            </div>
+          ))}
+          {filtered.length === 0 && query && (
+            <div style={{ padding: '8px 12px', fontSize: 12, color: '#bbb' }}>No clients found — will be recorded as walk-in with name "{query}"</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -707,3 +969,88 @@ function ViewVal({ children, style }) {
 
 const inp     = { fontFamily: 'inherit', width: '100%', border: '1px solid #d8d8d8', borderRadius: 8, padding: '7px 10px', fontSize: 13, color: '#333', outline: 'none', background: '#fafafa', boxSizing: 'border-box' };
 const btnBase = { fontFamily: 'inherit', fontSize: 13, fontWeight: 500, cursor: 'pointer', background: '#fff', border: '1px solid #d0d0d0', borderRadius: 8, padding: '8px 14px', color: '#333' };
+
+// ── Hours modal ────────────────────────────────────────
+const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DEFAULT_DAY = { open: '09:00', close: '18:00', closed: false };
+
+function HoursModal({ settings, updateSettings, onClose }) {
+  const saved = settings.storeHours || {};
+  const [hours,     setHours]     = useState(() => {
+    const h = {};
+    WEEK_DAYS.forEach(d => { h[d] = { ...DEFAULT_DAY, ...saved[d] }; });
+    return h;
+  });
+  const [apptOpen,  setApptOpen]  = useState(settings.apptHours?.open  || '09:00');
+  const [apptClose, setApptClose] = useState(settings.apptHours?.close || '20:00');
+  const [saving,    setSaving]    = useState(false);
+
+  function patch(day, delta) {
+    setHours(h => ({ ...h, [day]: { ...h[day], ...delta } }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateSettings({ ...settings, storeHours: hours, apptHours: { open: apptOpen, close: apptClose } });
+      onClose();
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}
+         onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '94%', maxWidth: 440, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 }}>
+          <span style={{ fontSize: 15, fontWeight: 600 }}>🕐 Store Hours</span>
+          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #d0d0d0', background: '#fff', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
+          {/* Per-day hours */}
+          {WEEK_DAYS.map((day, i) => {
+            const h = hours[day];
+            return (
+              <div key={day} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: i > 0 ? '1px solid #f5f5f5' : 'none' }}>
+                <div style={{ width: 32, fontSize: 13, fontWeight: 500, color: h.closed ? '#bbb' : '#333' }}>{day}</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#888', cursor: 'pointer', userSelect: 'none', minWidth: 62 }}>
+                  <input type="checkbox" checked={!!h.closed} onChange={e => patch(day, { closed: e.target.checked })} />
+                  Closed
+                </label>
+                {!h.closed && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+                    <input type="time" value={h.open}  onChange={e => patch(day, { open:  e.target.value })}
+                      style={{ fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '5px 7px', fontSize: 12 }} />
+                    <span style={{ color: '#bbb' }}>–</span>
+                    <input type="time" value={h.close} onChange={e => patch(day, { close: e.target.value })}
+                      style={{ fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '5px 7px', fontSize: 12 }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Extended appt hours */}
+          <div style={{ marginTop: 16, padding: '12px', background: '#f0f7ff', borderRadius: 10, border: '1px solid #c7dff7' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#1a5f8a', marginBottom: 8 }}>Extended appointment hours</div>
+            <div style={{ fontSize: 11, color: '#5a8fba', marginBottom: 10 }}>Appointment-only slots outside published store hours. Set same as store open/close to disable.</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="time" value={apptOpen}  onChange={e => setApptOpen(e.target.value)}
+                style={{ fontFamily: 'inherit', border: '1px solid #c7dff7', borderRadius: 8, padding: '6px 8px', fontSize: 12, flex: 1 }} />
+              <span style={{ color: '#bbb' }}>–</span>
+              <input type="time" value={apptClose} onChange={e => setApptClose(e.target.value)}
+                style={{ fontFamily: 'inherit', border: '1px solid #c7dff7', borderRadius: 8, padding: '6px 8px', fontSize: 12, flex: 1 }} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, padding: '12px 18px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
+          <button onClick={onClose} style={{ flex: 1, ...btnBase }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ flex: 2, ...btnBase, background: '#3D95CE', color: '#fff', borderColor: '#3D95CE', opacity: saving ? .6 : 1 }}>
+            {saving ? 'Saving…' : 'Save Hours'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

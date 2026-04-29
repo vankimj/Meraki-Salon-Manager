@@ -3,6 +3,8 @@ import { fetchEmployees, createEmployee, saveEmployee, deleteEmployee, employees
 import { resizeImg } from '../../utils/helpers';
 import { SEED_EMPLOYEES } from '../../data/seedEmployees';
 import { useApp } from '../../context/AppContext';
+import { logActivity, logError } from '../../lib/logger';
+
 
 const WORK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DEFAULT_WORK_DAY = { on: true, start: '09:00', end: '18:00' };
@@ -20,7 +22,7 @@ function blankEmployee() {
 }
 
 export default function EmployeesAdmin() {
-  const { isAdmin } = useApp();
+  const { isAdmin, showToast } = useApp();
   const [employees, setEmployees] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [editing,   setEditing]   = useState(null);
@@ -40,22 +42,29 @@ export default function EmployeesAdmin() {
       if (emp.id) {
         const { id, createdAt, ...data } = emp;
         await saveEmployee(id, data);
+        logActivity('employee_updated', emp.name);
       } else {
         await createEmployee({ ...emp, sortOrder: employees.length });
+        logActivity('employee_created', emp.name);
       }
       await load();
       setEditing(null);
-    } catch (e) { console.error('[Employees] save failed:', e); }
+    } catch (e) {
+      console.error('[Employees] save failed:', e);
+      showToast('Save failed — ' + (e.message || 'unknown error'), 4000);
+    }
   }
 
   async function handleDelete(emp) {
     if (!confirm(`Remove ${emp.name} from the team?`)) return;
     await deleteEmployee(emp.id);
+    logActivity('employee_deleted', emp.name);
     setEmployees(es => es.filter(e => e.id !== emp.id));
   }
 
   async function handleToggleActive(emp) {
     await saveEmployee(emp.id, { ...emp, active: !emp.active });
+    logActivity(emp.active ? 'employee_deactivated' : 'employee_activated', emp.name);
     setEmployees(es => es.map(e => e.id === emp.id ? { ...e, active: !e.active } : e));
   }
 
@@ -144,6 +153,7 @@ function EmployeeRow({ emp, last, onEdit, onDelete, onToggleActive }) {
 }
 
 function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
+  const { showToast } = useApp();
   const [tab,    setTab]    = useState('profile');
   const [saving, setSaving] = useState(false);
   const fileRef = useRef(null);
@@ -159,7 +169,10 @@ function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
     const file = e.target.files?.[0];
     if (!file) return;
     try { onChange({ photo: await resizeImg(file, 300, 300, 0.82) }); }
-    catch {}
+    catch (err) {
+      logError('employee_photo', err, { fileType: file.type, fileSize: file.size });
+      showToast(`Could not process photo (${file.type || 'unknown'})`, 5000);
+    }
   }
 
   async function submit() {
@@ -203,11 +216,14 @@ function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
                     }
                   </div>
                   <div style={{ fontSize: 10, color: '#aaa', textAlign: 'center', marginTop: 3, cursor: 'pointer' }} onClick={() => fileRef.current?.click()}>photo</div>
-                  <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhoto} />
+                  <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: 'none' }} onChange={handlePhoto} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <Field label="Full name *">
-                    <input value={emp.name} onChange={e => onChange({ name: e.target.value })} placeholder="Jane Smith" style={inp} autoFocus />
+                    <input value={emp.name} onChange={e => onChange({ name: e.target.value })} placeholder="Jane Smith" style={{ ...inp, borderColor: emp.name?.trim() ? undefined : '#fca5a5' }} autoFocus />
+                  </Field>
+                  <Field label="Login email *">
+                    <input type="email" value={emp.email || ''} onChange={e => onChange({ email: e.target.value })} placeholder="jane@example.com" style={{ ...inp, borderColor: emp.email?.trim() ? undefined : '#fca5a5' }} />
                   </Field>
                   <Field label="Sort order" style={{ marginBottom: 0 }}>
                     <input type="number" min={0} value={emp.sortOrder ?? 0} onChange={e => onChange({ sortOrder: Number(e.target.value) })} style={{ ...inp, width: 80 }} />
@@ -315,6 +331,11 @@ function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
                 </div>
               </Field>
 
+              <Field label="Tax ID / SSN (for 1099)">
+                <input value={emp.taxId || ''} onChange={e => onChange({ taxId: e.target.value })} placeholder="XXX-XX-XXXX"
+                  style={inp} />
+              </Field>
+
               <Field label="Payment notes (banking info, instructions)">
                 <textarea value={emp.paymentNotes || ''} onChange={e => onChange({ paymentNotes: e.target.value })} rows={3}
                   placeholder="Routing #, account #, Venmo handle, etc." style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }} />
@@ -363,8 +384,9 @@ function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
 
 function EmpAvatar({ emp, size = 36 }) {
   const [err, setErr] = useState(false);
-  if (emp.photo && !err) {
-    return <img src={emp.photo} alt="" onError={() => setErr(true)} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />;
+  const photo = emp.photo || '';
+  if (photo && !err) {
+    return <img src={photo} alt="" onError={() => setErr(true)} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, display: 'block' }} />;
   }
   const initials = emp.name?.trim().split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
   const colors   = ['#4A7DB5', '#2D7A5F', '#B57A4A', '#7A4AB5', '#B54A7A', '#3D95CE', '#22C55E', '#F59E0B', '#EF4444', '#8B5CF6'];

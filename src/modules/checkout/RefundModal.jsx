@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { saveAppointment, fetchClient, saveClient } from '../../lib/firestore';
 import { resizeImg } from '../../utils/helpers';
+import { logActivity } from '../../lib/logger';
 
 export default function RefundModal({ appt, onComplete, onClose }) {
   const payment     = appt.payment || {};
@@ -34,6 +35,7 @@ export default function RefundModal({ appt, onComplete, onClose }) {
       };
       const { id, createdAt, ...data } = appt;
       await saveAppointment(id, { ...data, refund });
+      logActivity('refund_issued', `${appt.clientName || 'Walk-in'} · $${amt.toFixed(2)}${reason.trim() ? ' · ' + reason.trim() : ''}${addCredit && appt.clientId ? ' · credit added' : ''}`);
 
       if (addCredit && appt.clientId) {
         const c = await fetchClient(appt.clientId);
@@ -80,10 +82,12 @@ export default function RefundModal({ appt, onComplete, onClose }) {
           </div>
 
           <div style={{ marginBottom: 14 }}>
-            <label style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 3 }}>Reason</label>
+            <label style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 3 }}>
+              Reason <span style={{ color: '#ef4444' }}>*</span>
+            </label>
             <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
-              placeholder="Describe the issue (optional)…"
-              style={{ width: '100%', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13, background: '#fafafa', resize: 'vertical', lineHeight: 1.5, boxSizing: 'border-box' }}
+              placeholder="Describe the issue…"
+              style={{ width: '100%', fontFamily: 'inherit', border: `1px solid ${reason.trim() ? '#d8d8d8' : '#fca5a5'}`, borderRadius: 8, padding: '8px 10px', fontSize: 13, background: '#fafafa', resize: 'vertical', lineHeight: 1.5, boxSizing: 'border-box' }}
             />
           </div>
 
@@ -116,8 +120,8 @@ export default function RefundModal({ appt, onComplete, onClose }) {
           <button onClick={onClose} style={{ flex: 1, fontFamily: 'inherit', fontSize: 13, fontWeight: 500, cursor: 'pointer', background: '#fff', border: '1px solid #d0d0d0', borderRadius: 8, padding: '10px' }}>
             Cancel
           </button>
-          <button onClick={submit} disabled={saving || !(Number(amount) > 0)}
-            style={{ flex: 2, fontFamily: 'inherit', fontSize: 13, fontWeight: 700, cursor: 'pointer', background: saving || !(Number(amount) > 0) ? '#d0d0d0' : '#ef4444', color: '#fff', border: 'none', borderRadius: 8, padding: '10px' }}>
+          <button onClick={submit} disabled={saving || !(Number(amount) > 0) || !reason.trim()}
+            style={{ flex: 2, fontFamily: 'inherit', fontSize: 13, fontWeight: 700, cursor: 'pointer', background: saving || !(Number(amount) > 0) || !reason.trim() ? '#d0d0d0' : '#ef4444', color: '#fff', border: 'none', borderRadius: 8, padding: '10px' }}>
             {saving ? 'Processing…' : `Issue Refund · $${(Number(amount) || 0).toFixed(2)}`}
           </button>
         </div>
