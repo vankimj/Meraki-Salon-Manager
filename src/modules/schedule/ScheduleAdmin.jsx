@@ -5,6 +5,7 @@ import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
 import { logActivity } from '../../lib/logger';
 import { notifyAffectedTechs } from '../../lib/notifications';
+import { resizeImg } from '../../utils/helpers';
 
 const FALLBACK_TECHS = ['Yasmin D', 'Audriana L', 'Samantha T', 'Tess D', 'Elizabeth L', 'Yan W', 'Jen T', 'Marisela I', 'Ana P', 'Jenesis B'];
 
@@ -1060,6 +1061,14 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                 placeholder="Special requests, reminders…" style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }} />
             )}
           </Field>
+
+          {/* Photos */}
+          <PhotoSection
+            photosBefore={appt.photosBefore || []}
+            photosAfter={appt.photosAfter || []}
+            isView={isView}
+            onChange={onChange}
+          />
         </div>
 
         {/* Footer */}
@@ -1119,6 +1128,90 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Before / After photos ─────────────────────────────
+function PhotoSection({ photosBefore, photosAfter, isView, onChange }) {
+  const [uploading, setUploading] = useState(null); // 'before' | 'after' | null
+  const [lightbox,  setLightbox]  = useState(null); // { src, label }
+  const beforeRef = useRef(null);
+  const afterRef  = useRef(null);
+
+  const hasPhotos = photosBefore.length > 0 || photosAfter.length > 0;
+  if (isView && !hasPhotos) return null;
+
+  async function upload(file, type) {
+    setUploading(type);
+    try {
+      const b64 = await resizeImg(file, 720, 960, 0.72);
+      if (type === 'before') onChange({ photosBefore: [...photosBefore, b64] });
+      else                   onChange({ photosAfter:  [...photosAfter,  b64] });
+    } catch { /* ignore */ }
+    finally { setUploading(null); }
+  }
+
+  function remove(type, idx) {
+    if (type === 'before') onChange({ photosBefore: photosBefore.filter((_, i) => i !== idx) });
+    else                   onChange({ photosAfter:  photosAfter.filter((_, i) => i !== idx) });
+  }
+
+  function PhotoRow({ photos, type, label, max }) {
+    const ref = type === 'before' ? beforeRef : afterRef;
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>{label}</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {photos.map((src, i) => (
+            <div key={i} style={{ position: 'relative' }}>
+              <img src={src} alt="" onClick={() => setLightbox({ src, label })}
+                style={{ width: 68, height: 68, objectFit: 'cover', borderRadius: 8, border: '1px solid #e8e8e8', cursor: 'pointer', display: 'block' }} />
+              {!isView && (
+                <button onClick={() => remove(type, i)}
+                  style={{ position: 'absolute', top: -5, right: -5, width: 18, height: 18, borderRadius: '50%', background: '#ef4444', border: 'none', color: '#fff', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+          {!isView && photos.length < max && (
+            <>
+              <input ref={ref} type="file" accept="image/*,.heic,.heif,.dng" style={{ display: 'none' }}
+                onChange={async e => { if (e.target.files[0]) await upload(e.target.files[0], type); e.target.value = ''; }} />
+              <button onClick={() => ref.current?.click()} disabled={uploading === type}
+                style={{ width: 68, height: 68, borderRadius: 8, border: '2px dashed #d8d8d8', background: '#fafafa', cursor: 'pointer', fontSize: 22, color: '#ccc', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>
+                {uploading === type ? '…' : '+'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ marginBottom: 10 }}>
+        <label style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 6 }}>📸 Photos</label>
+        <PhotoRow photos={photosBefore} type="before" label="Before" max={3} />
+        <PhotoRow photos={photosAfter}  type="after"  label="After"  max={4} />
+      </div>
+
+      {lightbox && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.92)', zIndex: 300, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}
+             onClick={() => setLightbox(null)}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,.45)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+            {lightbox.label}
+          </div>
+          <img src={lightbox.src} alt="" style={{ maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain', borderRadius: 10 }}
+               onClick={e => e.stopPropagation()} />
+          <button onClick={() => setLightbox(null)}
+            style={{ position: 'absolute', top: 16, right: 16, width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,.15)', border: 'none', color: '#fff', fontSize: 20, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            ×
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

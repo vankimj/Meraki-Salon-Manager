@@ -276,6 +276,8 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
   const [reviewForm,       setReviewForm]       = useState({ rating: 5, date: new Date().toISOString().slice(0, 10), note: '', techName: '' });
   const [services,     setServices]     = useState([]);
   const [apptHistory,  setApptHistory]  = useState(null);
+  const [expandedApptId, setExpandedApptId] = useState(null);
+  const [clientLightbox,  setClientLightbox]  = useState(null);
   const [addingVisit,  setAddingVisit]  = useState(false);
   const [newVisit,     setNewVisit]     = useState(blankVisit());
   const fileRef = useRef(null);
@@ -727,24 +729,64 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
                   ) : apptHistory.length === 0 ? (
                     <div style={{ fontSize: 12, color: '#bbb', padding: '8px 0' }}>No appointments on record.</div>
                   ) : (
-                    apptHistory.map(a => (
-                      <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: '#fff', borderRadius: 8, border: '1px solid #e8e8e8', marginBottom: 6 }}>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{formatDate(a.date)}</div>
-                          <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>
-                            {a.techName} · {(a.services || []).map(s => s.name).filter(Boolean).join(', ') || '—'}
+                    apptHistory.map(a => {
+                      const photoCount = (a.photosBefore?.length || 0) + (a.photosAfter?.length || 0);
+                      const isExpanded = expandedApptId === a.id;
+                      return (
+                        <div key={a.id} style={{ background: '#fff', borderRadius: 8, border: '1px solid #e8e8e8', marginBottom: 6, overflow: 'hidden' }}>
+                          <div onClick={() => setExpandedApptId(isExpanded ? null : a.id)}
+                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', cursor: photoCount > 0 ? 'pointer' : 'default' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{formatDate(a.date)}</span>
+                                {photoCount > 0 && (
+                                  <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: '#f0f4ff', color: '#3D95CE', border: '1px solid #c7dff7' }}>
+                                    📸 {photoCount}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>
+                                {a.techName} · {(a.services || []).map(s => s.name).filter(Boolean).join(', ') || '—'}
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: '#1a1a1a' }}>
+                                ${(a.services || []).reduce((s, sv) => s + (Number(sv.price) || 0), 0).toFixed(2)}
+                              </div>
+                              <div style={{ fontSize: 10, color: a.status === 'done' ? '#16a34a' : a.status === 'cancelled' ? '#ef4444' : '#888', marginTop: 1, textTransform: 'capitalize' }}>
+                                {a.status}
+                              </div>
+                            </div>
                           </div>
+                          {isExpanded && photoCount > 0 && (
+                            <div style={{ borderTop: '1px solid #f5f5f5', padding: '10px 12px', background: '#fafafa' }}>
+                              {(a.photosBefore || []).length > 0 && (
+                                <div style={{ marginBottom: 8 }}>
+                                  <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>Before</div>
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                    {(a.photosBefore || []).map((src, i) => (
+                                      <img key={i} src={src} alt="" onClick={() => setClientLightbox({ src, label: 'Before' })}
+                                        style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid #e8e8e8', cursor: 'pointer' }} />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {(a.photosAfter || []).length > 0 && (
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>After</div>
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                    {(a.photosAfter || []).map((src, i) => (
+                                      <img key={i} src={src} alt="" onClick={() => setClientLightbox({ src, label: 'After' })}
+                                        style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid #e8e8e8', cursor: 'pointer' }} />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: '#1a1a1a' }}>
-                            ${(a.services || []).reduce((s, sv) => s + (Number(sv.price) || 0), 0).toFixed(2)}
-                          </div>
-                          <div style={{ fontSize: 10, color: a.status === 'done' ? '#16a34a' : a.status === 'cancelled' ? '#ef4444' : '#888', marginTop: 1, textTransform: 'capitalize' }}>
-                            {a.status}
-                          </div>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               )}
@@ -849,6 +891,21 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
           )}
         </div>
       </div>
+
+      {clientLightbox && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.92)', zIndex: 300, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}
+             onClick={() => setClientLightbox(null)}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,.45)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+            {clientLightbox.label}
+          </div>
+          <img src={clientLightbox.src} alt="" style={{ maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain', borderRadius: 10 }}
+               onClick={e => e.stopPropagation()} />
+          <button onClick={() => setClientLightbox(null)}
+            style={{ position: 'absolute', top: 16, right: 16, width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,.15)', border: 'none', color: '#fff', fontSize: 20, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
