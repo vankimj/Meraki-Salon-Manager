@@ -193,6 +193,11 @@ service cloud.firestore {
         allow read, write: if isBootstrapAdmin();
       }
 
+      // Automation dedup records: admin reads; Cloud Functions write via admin SDK
+      match /automationSent/{docId} {
+        allow read, write: if isBootstrapAdmin();
+      }
+
       // Tax forms (1099-NEC): admin manages all; authenticated users read their own (matched by email)
       match /taxForms/{formId} {
         allow read:                if isBootstrapAdmin() ||

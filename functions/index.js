@@ -1067,6 +1067,160 @@ exports.refreshGoogleReviews = onCall(async (request) => {
   return { count: reviews.length, rating: result.rating, total: result.user_ratings_total };
 });
 
+// ── Auto-campaigns ────────────────────────────────────
+
+function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl) {
+  return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
+    <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
+      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">${headerSub}</div>
+    </div>
+    <div style="padding:24px;">
+      <p style="font-size:15px;color:#222;margin:0 0 12px;font-weight:600;">Hi ${firstName}!</p>
+      ${bodyHtml}
+      ${ctaUrl ? `<div style="text-align:center;margin:24px 0;">
+        <a href="${ctaUrl}" style="display:inline-block;background:#2D7A5F;color:#fff;font-size:14px;font-weight:700;padding:13px 32px;border-radius:10px;text-decoration:none;">${ctaText}</a>
+      </div>` : ''}
+      <p style="font-size:12px;color:#aaa;margin:16px 0 0;">— The Meraki Nail Studio Team</p>
+    </div>
+    <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
+      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:10px;color:#ccc;margin:4px 0 0;">Reply to unsubscribe.</p>
+    </div>
+  </div></body></html>`;
+}
+
+// Runs daily at 10am Eastern. Sends birthday email to clients whose birthday is today.
+// Deduplicates via automationSent collection (one per client per year).
+exports.autoBirthdayCampaign = onSchedule(
+  { schedule: 'every day 10:00', timeZone: 'America/New_York' },
+  async () => {
+    const db     = getFirestore();
+    const apiKey = resendKey.value();
+    if (!apiKey) return;
+
+    const settingsSnap = await db.doc(`tenants/${TENANT_ID}/data/settings`).get();
+    const settings     = settingsSnap.exists ? settingsSnap.data() : {};
+    if (!settings.autoBirthday) { console.log('[BirthdayAuto] Disabled — skipping'); return; }
+
+    const now  = new Date();
+    const mm   = String(now.getMonth() + 1).padStart(2, '0');
+    const dd   = String(now.getDate()).padStart(2, '0');
+    const mdKey = `${mm}-${dd}`;
+    const year  = now.getFullYear();
+
+    const clientsSnap = await db.collection(`tenants/${TENANT_ID}/clients`).get();
+    const targets = clientsSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => c.email && !c.marketingOptOut && c.birthday && c.birthday.slice(5, 10) === mdKey);
+
+    if (!targets.length) { console.log('[BirthdayAuto] No birthdays today'); return; }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    for (const client of targets) {
+      const sentDocId  = `birthday_${year}_${client.id}`;
+      const alreadySent = await db.doc(`tenants/${TENANT_ID}/automationSent/${sentDocId}`).get();
+      if (alreadySent.exists) continue;
+
+      const firstName = (client.name || 'there').split(' ')[0];
+      const bookingUrl = settings.bookingUrl || 'https://meraki-salon-manager.web.app/?book';
+      const body = `<p style="font-size:14px;line-height:1.7;color:#555;margin:0 0 8px;">
+        🎉 Happy Birthday! We hope your special day is as fabulous as you are.
+        As a little gift from all of us at Meraki, we'd love to treat you to something special this month.
+        Come celebrate with us — you deserve it!
+      </p>`;
+      const html = buildAutoEmail("Happy Birthday! 🎂", firstName, body, "Book Your Birthday Visit", bookingUrl);
+
+      try {
+        const { error } = await resend.emails.send({
+          from:    resendFrom.value(),
+          to:      client.email,
+          subject: `Happy Birthday, ${firstName}! 🎂 A gift from Meraki`,
+          html,
+        });
+        if (!error) {
+          await db.doc(`tenants/${TENANT_ID}/automationSent/${sentDocId}`).set({
+            type: 'birthday', clientId: client.id, clientName: client.name, year, sentAt: new Date().toISOString(),
+          });
+          sent++;
+        }
+      } catch (e) { console.error('[BirthdayAuto] Failed for', client.name, ':', e.message); }
+    }
+    console.log(`[BirthdayAuto] Sent ${sent}/${targets.length} birthday emails`);
+  }
+);
+
+// Runs every Monday at 11am Eastern. Sends re-engagement email to clients who
+// haven't visited in N days. Deduplicates: won't re-email the same client until
+// another full lapse window has passed.
+exports.autoLapsedCampaign = onSchedule(
+  { schedule: 'every monday 11:00', timeZone: 'America/New_York' },
+  async () => {
+    const db     = getFirestore();
+    const apiKey = resendKey.value();
+    if (!apiKey) return;
+
+    const settingsSnap = await db.doc(`tenants/${TENANT_ID}/data/settings`).get();
+    const settings     = settingsSnap.exists ? settingsSnap.data() : {};
+    if (!settings.autoLapsed) { console.log('[LapsedAuto] Disabled — skipping'); return; }
+
+    const lapDays  = settings.autoLapsedDays || 60;
+    const now      = new Date();
+    const endDate  = now.toISOString().slice(0, 10);
+    const startDate = new Date(now - lapDays * 86400000).toISOString().slice(0, 10);
+    const cutoffIso = new Date(now - lapDays * 86400000).toISOString();
+
+    const clientsSnap = await db.collection(`tenants/${TENANT_ID}/clients`).get();
+    const clients = clientsSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => c.email && !c.marketingOptOut);
+
+    const apptsSnap = await db.collection(`tenants/${TENANT_ID}/appointments`)
+      .where('date', '>=', startDate)
+      .where('date', '<=', endDate)
+      .get();
+    const activeIds = new Set(apptsSnap.docs.map(d => d.data().clientId).filter(Boolean));
+
+    const lapsed = clients.filter(c => !activeIds.has(c.id));
+    if (!lapsed.length) { console.log('[LapsedAuto] No lapsed clients'); return; }
+
+    const resend = new Resend(apiKey);
+    let sent = 0;
+    for (const client of lapsed) {
+      const sentDocId  = `lapsed_${client.id}`;
+      const sentSnap   = await db.doc(`tenants/${TENANT_ID}/automationSent/${sentDocId}`).get();
+      if (sentSnap.exists && sentSnap.data().sentAt > cutoffIso) continue;
+
+      const firstName  = (client.name || 'there').split(' ')[0];
+      const bookingUrl = settings.bookingUrl || 'https://meraki-salon-manager.web.app/?book';
+      const body = `<p style="font-size:14px;line-height:1.7;color:#555;margin:0 0 8px;">
+        It's been a while since your last visit, and we genuinely miss you!
+        We have exciting new styles and services waiting for you.
+        Come back and let us take care of you — your nails (and you!) deserve it.
+      </p>`;
+      const html = buildAutoEmail("We miss you! 💅", firstName, body, "Book Your Next Visit", bookingUrl);
+
+      try {
+        const { error } = await resend.emails.send({
+          from:    resendFrom.value(),
+          to:      client.email,
+          subject: `We miss you, ${firstName}! Come see us 💅`,
+          html,
+        });
+        if (!error) {
+          await db.doc(`tenants/${TENANT_ID}/automationSent/${sentDocId}`).set({
+            type: 'lapsed', clientId: client.id, clientName: client.name, lapDays, sentAt: new Date().toISOString(),
+          });
+          sent++;
+        }
+      } catch (e) { console.error('[LapsedAuto] Failed for', client.name, ':', e.message); }
+    }
+    console.log(`[LapsedAuto] Sent ${sent}/${lapsed.length} lapsed emails`);
+  }
+);
+
 // Tracks when a client clicks the review link in their email, then redirects to Google.
 exports.trackReviewClick = onRequest({ cors: false }, async (req, res) => {
   const reqId = req.query.r;

@@ -16,10 +16,14 @@ import FeedbackModal from '../../components/FeedbackModal';
 
 export default function Admin({ onClose }) {
   const { gUser, users, settings, grantAccess, grantPendingAccess, loadPendingRequests, updateSettings, signOut, isAdmin, syncState } = useApp();
-  const [timeout,      setTimeoutVal]  = useState(settings.timeoutMin || 5);
-  const [pin,          setPin]         = useState(settings.adminPin || '');
-  const [reviewUrl,    setReviewUrl]   = useState(settings.googleReviewUrl || '');
-  const [ein,          setEin]         = useState(settings.ein || '');
+  const [timeout,        setTimeoutVal]    = useState(settings.timeoutMin || 5);
+  const [pin,            setPin]           = useState(settings.adminPin || '');
+  const [reviewUrl,      setReviewUrl]     = useState(settings.googleReviewUrl || '');
+  const [ein,            setEin]           = useState(settings.ein || '');
+  const [autoBirthday,   setAutoBirthday]  = useState(!!settings.autoBirthday);
+  const [autoLapsed,     setAutoLapsed]    = useState(!!settings.autoLapsed);
+  const [autoLapsedDays, setAutoLapsedDays]= useState(settings.autoLapsedDays || 60);
+  const [autoSaving,     setAutoSaving]    = useState(false);
   const [bookingCfg,   setBookingCfg]  = useState(null);
   const [pendingReqs,  setPendingReqs] = useState([]);
   const [reqsLoading,  setReqsLoading] = useState(false);
@@ -254,6 +258,47 @@ export default function Admin({ onClose }) {
               </div>
               <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
                 <Btn color="#3D95CE" onClick={() => updateSettings({ ...settings, timeoutMin: timeout, adminPin: pin || null, googleReviewUrl: reviewUrl.trim() || null, ein: ein.trim() || null })}>Save</Btn>
+              </div>
+            </Section>
+            <Section title="🤖 Automations">
+              {[
+                { key: 'birthday', label: 'Birthday emails', val: autoBirthday, set: setAutoBirthday,
+                  desc: 'Sends a happy birthday email at 10am on each client\'s birthday.' },
+                { key: 'lapsed',   label: 'Lapsed client emails', val: autoLapsed,   set: setAutoLapsed,
+                  desc: `Sends a "we miss you" re-engagement email every Monday to clients with no visit in the last ${autoLapsedDays} days.` },
+              ].map(({ key, label, val, set, desc }) => (
+                <div key={key} style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, color: '#333' }}>{label}</div>
+                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>{desc}</div>
+                  </div>
+                  <button onClick={() => set(v => !v)} style={{
+                    width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', padding: 0,
+                    background: val ? '#2D7A5F' : '#d1d5db', position: 'relative', transition: 'background .2s', flexShrink: 0,
+                  }}>
+                    <div style={{
+                      position: 'absolute', top: 3, left: val ? 22 : 2, width: 18, height: 18,
+                      borderRadius: '50%', background: '#fff', transition: 'left .2s',
+                      boxShadow: '0 1px 3px rgba(0,0,0,.2)',
+                    }} />
+                  </button>
+                </div>
+              ))}
+              {autoLapsed && (
+                <div style={{ padding: '8px 16px 12px', display: 'flex', alignItems: 'center', gap: 10, borderTop: '1px solid #f0f0f0' }}>
+                  <span style={{ fontSize: 12, color: '#555' }}>Lapse threshold:</span>
+                  <input type="number" min={14} max={365} value={autoLapsedDays}
+                    onChange={e => setAutoLapsedDays(Math.max(14, Number(e.target.value)))}
+                    style={{ width: 70, textAlign: 'center', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '6px 10px', fontSize: 13 }} />
+                  <span style={{ fontSize: 12, color: '#aaa' }}>days</span>
+                </div>
+              )}
+              <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+                <Btn color="#2D7A5F" onClick={async () => {
+                  setAutoSaving(true);
+                  await updateSettings({ ...settings, autoBirthday, autoLapsed, autoLapsedDays });
+                  setAutoSaving(false);
+                }}>{autoSaving ? 'Saving…' : 'Save Automations'}</Btn>
               </div>
             </Section>
             <BookingSection bookingCfg={bookingCfg} setBookingCfg={setBookingCfg} />
