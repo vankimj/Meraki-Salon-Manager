@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context/AppContext';
 import { BUILD_LABEL } from './lib/version';
 import Splash from './components/Splash';
 import Toast from './components/Toast';
+import ThemeProvider from './components/ThemeProvider';
 import HomeScreen from './components/HomeScreen';
 import ModuleShell from './components/ModuleShell';
 import Header from './components/Header';
@@ -25,6 +26,7 @@ import QueueKiosk from './components/QueueKiosk';
 import HandbookModal from './components/HandbookModal';
 import ClientPortal from './components/ClientPortal';
 import SalonWebfront from './modules/webfront/SalonWebfront';
+import OnboardingScreen from './components/OnboardingScreen';
 
 const MODULE_TITLES = {
   schedule:   'Schedule',
@@ -164,19 +166,23 @@ function AppShell() {
 export default function App() {
   const params = new URLSearchParams(window.location.search);
   const checkinId = params.get('checkin');
-  const isBooking = params.has('book');
-  const isQueue   = params.has('queue');
-  const isWeb     = params.has('web') || window.location.search === '?web';
+  const isBooking  = params.has('book');
+  const isQueue    = params.has('queue');
+  const isWeb      = params.has('web') || window.location.search === '?web';
+  const isSignup   = params.has('signup');
   if (checkinId) return <CheckInScreen apptId={checkinId} />;
   if (isBooking)  return <BookingScreen />;
   if (isQueue)    return <QueueKiosk />;
   if (isWeb)      return <SalonWebfront />;
+  if (isSignup)   return <OnboardingScreen />;
 
   return (
     <AppProvider>
-      <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#eef0f3', overflow: 'hidden' }}>
-        <AppShell />
-      </div>
+      <ThemeProvider>
+        <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#eef0f3', overflow: 'hidden' }}>
+          <AppShell />
+        </div>
+      </ThemeProvider>
     </AppProvider>
   );
 }

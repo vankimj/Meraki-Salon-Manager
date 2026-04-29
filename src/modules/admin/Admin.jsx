@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { CORE_THEMES, HOLIDAY_THEMES, detectAutoTheme } from '../../lib/themes';
 import { fetchLogs, fetchEmployees, createEmployee, saveEmployee,
          fetchFeedback, updateFeedbackStatus,
          fetchNotificationCenter,
@@ -7,7 +8,9 @@ import { fetchLogs, fetchEmployees, createEmployee, saveEmployee,
          fetchBookingConfig, saveBookingConfig,
          fetchWebfrontConfig, saveWebfrontConfig,
          fetchReviewReceived, fetchReviewRequests,
-         saveReviewReceived } from '../../lib/firestore';
+         saveReviewReceived,
+         fetchTenants, createTenantRecord, updateTenantRecord,
+         provisionNewTenant, fetchTenantStats } from '../../lib/firestore';
 import { formatTime } from '../../utils/helpers';
 import { logActivity } from '../../lib/logger';
 import { seedDemoData, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
@@ -24,6 +27,9 @@ export default function Admin({ onClose }) {
   const [autoLapsed,     setAutoLapsed]    = useState(!!settings.autoLapsed);
   const [autoLapsedDays, setAutoLapsedDays]= useState(settings.autoLapsedDays || 60);
   const [autoSaving,     setAutoSaving]    = useState(false);
+  const [themeId,        setThemeId]       = useState(settings.themeId   || 'meraki');
+  const [autoTheme,      setAutoTheme]     = useState(!!settings.autoTheme);
+  const [themeSaving,    setThemeSaving]   = useState(false);
   const [bookingCfg,   setBookingCfg]  = useState(null);
   const [pendingReqs,  setPendingReqs] = useState([]);
   const [reqsLoading,  setReqsLoading] = useState(false);
@@ -35,6 +41,8 @@ export default function Admin({ onClose }) {
   const [showFeedback, setShowFeedback] = useState(false);
   const [webfrontCfg,  setWebfrontCfg] = useState(null);
   const [reviewsData,  setReviewsData]  = useState(null);
+  const [tenants,      setTenants]      = useState(null);
+  const isSuperAdmin = gUser?.email === 'jvankim@gmail.com';
   const TABS = [
     { id: 'users',    label: 'Users'    },
     { id: 'notifs',   label: 'Notifs'   },
@@ -43,6 +51,7 @@ export default function Admin({ onClose }) {
     { id: 'webfront', label: 'Webfront' },
     { id: 'feedback', label: 'Feedback' },
     { id: 'logs',     label: 'Logs'     },
+    ...(isSuperAdmin ? [{ id: 'tenants', label: 'Tenants' }] : []),
   ];
 
   useEffect(() => { if (tab === 'settings' && !bookingCfg) fetchBookingConfig().then(setBookingCfg).catch(() => {}); }, [tab]); // eslint-disable-line
@@ -51,6 +60,7 @@ export default function Admin({ onClose }) {
   useEffect(() => { if (tab === 'feedback') loadFeedback(); }, [tab]); // eslint-disable-line
   useEffect(() => { if (tab === 'notifs')   loadNotifs(); },   [tab]); // eslint-disable-line
   useEffect(() => { if (tab === 'reviews')  loadReviews(); },  [tab]); // eslint-disable-line
+  useEffect(() => { if (tab === 'tenants' && isSuperAdmin) loadTenants(); }, [tab]); // eslint-disable-line
   useEffect(() => {
     if (tab === 'users') {
       setReqsLoading(true);
@@ -83,6 +93,12 @@ export default function Admin({ onClose }) {
       const [requests, received] = await Promise.all([fetchReviewRequests(), fetchReviewReceived()]);
       setReviewsData({ requests, received });
     } catch { setReviewsData({ requests: [], received: [] }); }
+  }
+
+  async function loadTenants() {
+    setTenants(null);
+    try { setTenants(await fetchTenants()); }
+    catch { setTenants([]); }
   }
 
   async function handleFeedbackStatus(id, status) {
@@ -157,6 +173,7 @@ export default function Admin({ onClose }) {
                       style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fafafa', fontFamily: 'inherit' }}>
                       <option value="readonly">Read only</option>
                       <option value="tech">Tech</option>
+                      <option value="scheduler">Scheduler</option>
                       <option value="admin">Admin</option>
                       <option value="denied">Denied</option>
                     </select>
@@ -302,6 +319,16 @@ export default function Admin({ onClose }) {
               </div>
             </Section>
             <BookingSection bookingCfg={bookingCfg} setBookingCfg={setBookingCfg} />
+            <AppearanceSection
+              themeId={themeId}    setThemeId={setThemeId}
+              autoTheme={autoTheme} setAutoTheme={setAutoTheme}
+              saving={themeSaving}
+              onSave={async () => {
+                setThemeSaving(true);
+                await updateSettings({ ...settings, themeId, autoTheme });
+                setThemeSaving(false);
+              }}
+            />
             <Section title="ℹ Store &amp; appointment hours are edited from the Calendar view.">
               <div style={{ padding: '10px 16px', fontSize: 12, color: '#aaa' }}>
                 Open the Calendar module and click the <strong>🕐 Hours</strong> button in the toolbar.
@@ -311,6 +338,15 @@ export default function Admin({ onClose }) {
             <ProductSeedSection />
             <DemoSeedSection />
           </>
+        )}
+
+        {tab === 'tenants' && isSuperAdmin && (
+          <TenantsTab
+            tenants={tenants}
+            onRefresh={loadTenants}
+            onCreate={createTenantRecord}
+            onUpdate={updateTenantRecord}
+          />
         )}
 
         <div style={{ textAlign: 'center', padding: '12px 0 4px' }}>
@@ -469,6 +505,96 @@ function Toggle({ active, onChange, disabled }) {
   );
 }
 
+function ThemeCard({ th, isSelected, badge, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      border: `2px solid ${isSelected ? 'var(--tm-accent, #3D95CE)' : '#e8e8e8'}`,
+      borderRadius: 12, padding: 0, cursor: 'pointer', background: '#fff',
+      overflow: 'hidden',
+      boxShadow: isSelected ? '0 0 0 3px rgba(61,149,206,.18)' : 'none',
+      transition: 'border-color .15s, box-shadow .15s',
+      position: 'relative', fontFamily: 'inherit', textAlign: 'left',
+    }}>
+      <div style={{ height: 38, background: `linear-gradient(135deg, ${th.gradStart} 0%, ${th.gradEnd} 100%)`, position: 'relative' }}>
+        <span style={{ position: 'absolute', bottom: 4, right: 6, fontSize: 15 }}>{th.icon}</span>
+        {badge && (
+          <span style={{ position: 'absolute', top: 3, left: 4, fontSize: 8, background: 'rgba(255,255,255,.92)', borderRadius: 4, padding: '1px 4px', fontWeight: 700, color: '#333', letterSpacing: '.02em' }}>{badge}</span>
+        )}
+      </div>
+      <div style={{ padding: '5px 6px 6px' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#1a1a1a', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{th.name}</div>
+      </div>
+      {isSelected && (
+        <div style={{ position: 'absolute', top: 4, left: 4, width: 16, height: 16, borderRadius: '50%', background: 'rgba(255,255,255,.92)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>✓</div>
+      )}
+    </button>
+  );
+}
+
+function AppearanceSection({ themeId, setThemeId, autoTheme, setAutoTheme, saving, onSave }) {
+  const autoDetected = detectAutoTheme();
+
+  const grid = (themes) => (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+      {themes.map(th => (
+        <ThemeCard
+          key={th.id}
+          th={th}
+          isSelected={themeId === th.id}
+          badge={autoTheme && autoDetected?.id === th.id ? 'NOW' : null}
+          onClick={() => setThemeId(th.id)}
+        />
+      ))}
+    </div>
+  );
+
+  return (
+    <Section title="🎨 Appearance">
+      {/* Auto-seasonal toggle */}
+      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, color: '#333' }}>Auto-seasonal themes</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+            {autoTheme && autoDetected
+              ? `Active now: ${autoDetected.icon} ${autoDetected.name}`
+              : 'Switches to holiday themes automatically based on the date'}
+          </div>
+        </div>
+        <button onClick={() => setAutoTheme(v => !v)} style={{
+          width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', padding: 0,
+          background: autoTheme ? 'var(--tm-primary, #2D7A5F)' : '#d1d5db',
+          position: 'relative', transition: 'background .2s', flexShrink: 0,
+        }}>
+          <div style={{
+            position: 'absolute', top: 3, left: autoTheme ? 22 : 2, width: 18, height: 18,
+            borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)',
+          }} />
+        </button>
+      </div>
+
+      {/* Core palettes */}
+      <div style={{ padding: '0 12px 14px', borderTop: '1px solid #f0f0f0' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#bbb', letterSpacing: '.07em', textTransform: 'uppercase', padding: '10px 4px 8px' }}>
+          {autoTheme ? 'Default palette (when no holiday is active)' : 'Core palettes'}
+        </div>
+        {grid(CORE_THEMES)}
+      </div>
+
+      {/* Holiday / seasonal */}
+      <div style={{ padding: '0 12px 14px', borderTop: '1px solid #f0f0f0' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#bbb', letterSpacing: '.07em', textTransform: 'uppercase', padding: '10px 4px 8px' }}>
+          Holidays &amp; seasons{autoTheme ? ' — auto-activate by date' : ' — select to pin'}
+        </div>
+        {grid(HOLIDAY_THEMES)}
+      </div>
+
+      <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+        <Btn color="var(--tm-accent, #3D95CE)" onClick={onSave}>{saving ? 'Saving…' : 'Save Appearance'}</Btn>
+      </div>
+    </Section>
+  );
+}
+
 function Section({ title, children, action }) {
   return (
     <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', marginBottom: 14, overflow: 'hidden' }}>
@@ -568,6 +694,7 @@ function PendingRow({ req, employees, onGrant }) {
       <select value={role} onChange={e => setRole(e.target.value)} style={sel}>
         <option value="readonly">Read only</option>
         <option value="tech">Tech</option>
+        <option value="scheduler">Scheduler</option>
         <option value="admin">Admin</option>
       </select>
       {role === 'tech' && (
@@ -745,7 +872,7 @@ function CountBadge({ label, count, color }) {
 }
 
 function RoleBadge({ role }) {
-  const colors = { admin: ['rgba(61,149,206,.15)', '#3D95CE'], readonly: ['rgba(34,197,94,.15)', '#16a34a'], tech: ['rgba(245,158,11,.15)', '#d97706'], pending: ['rgba(245,158,11,.15)', '#d97706'], denied: ['rgba(239,68,68,.15)', '#ef4444'] };
+  const colors = { admin: ['rgba(61,149,206,.15)', '#3D95CE'], readonly: ['rgba(34,197,94,.15)', '#16a34a'], tech: ['rgba(245,158,11,.15)', '#d97706'], scheduler: ['rgba(139,92,246,.15)', '#7c3aed'], pending: ['rgba(245,158,11,.15)', '#d97706'], denied: ['rgba(239,68,68,.15)', '#ef4444'] };
   const [bg, fg] = colors[role] || ['#eee', '#888'];
   return <span style={{ display: 'inline-block', fontSize: 9, fontWeight: 600, padding: '2px 7px', borderRadius: 20, letterSpacing: '.04em', textTransform: 'uppercase', background: bg, color: fg }}>{role}</span>;
 }
@@ -1229,6 +1356,80 @@ function WebfrontTab({ cfg, setCfg, employees }) {
         )}
       </Section>
 
+      {/* Appearance — layout + theme for the public website */}
+      <Section title="🎨 Appearance">
+        {/* Layout picker */}
+        <div style={{ padding: '12px 16px 0' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#bbb', letterSpacing: '.07em', textTransform: 'uppercase', marginBottom: 10 }}>Layout</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 14 }}>
+            {[
+              { id: 'classic',  icon: '🌑', name: 'Classic',  desc: 'Dark hero, bold & dramatic' },
+              { id: 'boutique', icon: '🌸', name: 'Boutique', desc: 'Light & airy, soft tones' },
+              { id: 'minimal',  icon: '◻',  name: 'Minimal',  desc: 'Clean, wide-open, editorial' },
+            ].map(l => (
+              <button key={l.id} onClick={() => patch('layout', l.id)} style={{
+                border: `2px solid ${(cfg.layout || 'classic') === l.id ? '#3D95CE' : '#e8e8e8'}`,
+                borderRadius: 10, padding: '10px 8px', cursor: 'pointer', background: '#fff',
+                boxShadow: (cfg.layout || 'classic') === l.id ? '0 0 0 3px rgba(61,149,206,.18)' : 'none',
+                fontFamily: 'inherit', textAlign: 'center', transition: 'border-color .15s',
+                position: 'relative',
+              }}>
+                <div style={{ fontSize: 20, marginBottom: 4 }}>{l.icon}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#1a1a1a' }}>{l.name}</div>
+                <div style={{ fontSize: 10, color: '#aaa', marginTop: 2, lineHeight: 1.3 }}>{l.desc}</div>
+                {(cfg.layout || 'classic') === l.id && (
+                  <div style={{ position: 'absolute', top: 4, right: 6, fontSize: 10, color: '#3D95CE', fontWeight: 700 }}>✓</div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Theme picker — auto-seasonal toggle */}
+        <div style={{ padding: '10px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, color: '#333' }}>Auto-seasonal themes</div>
+            <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+              {cfg.autoTheme && detectAutoTheme() ? `Active now: ${detectAutoTheme().icon} ${detectAutoTheme().name}` : 'Switches to holiday themes by date'}
+            </div>
+          </div>
+          <button onClick={() => patch('autoTheme', !cfg.autoTheme)} style={{
+            width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', padding: 0,
+            background: cfg.autoTheme ? '#2D7A5F' : '#d1d5db', position: 'relative', transition: 'background .2s', flexShrink: 0,
+          }}>
+            <div style={{ position: 'absolute', top: 3, left: cfg.autoTheme ? 22 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+          </button>
+        </div>
+
+        {/* Core palettes */}
+        <div style={{ padding: '0 12px 14px', borderTop: '1px solid #f0f0f0' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#bbb', letterSpacing: '.07em', textTransform: 'uppercase', padding: '10px 4px 8px' }}>
+            {cfg.autoTheme ? 'Default palette (when no holiday active)' : 'Core palettes'}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+            {CORE_THEMES.map(th => (
+              <ThemeCard key={th.id} th={th} isSelected={(cfg.themeId || 'meraki') === th.id}
+                badge={cfg.autoTheme && detectAutoTheme()?.id === th.id ? 'NOW' : null}
+                onClick={() => patch('themeId', th.id)} />
+            ))}
+          </div>
+        </div>
+
+        {/* Holidays & seasonal */}
+        <div style={{ padding: '0 12px 14px', borderTop: '1px solid #f0f0f0' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#bbb', letterSpacing: '.07em', textTransform: 'uppercase', padding: '10px 4px 8px' }}>
+            Holidays &amp; seasons{cfg.autoTheme ? ' — auto-activate by date' : ' — select to pin'}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+            {HOLIDAY_THEMES.map(th => (
+              <ThemeCard key={th.id} th={th} isSelected={(cfg.themeId || 'meraki') === th.id}
+                badge={cfg.autoTheme && detectAutoTheme()?.id === th.id ? 'NOW' : null}
+                onClick={() => patch('themeId', th.id)} />
+            ))}
+          </div>
+        </div>
+      </Section>
+
       {/* Save */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4, marginBottom: 16 }}>
         <button onClick={() => window.open(webUrl, '_blank')}
@@ -1482,5 +1683,201 @@ function NotifRow({ item, last }) {
       {/* Time */}
       <div style={{ fontSize: 10, color: '#bbb', flexShrink: 0, textAlign: 'right', paddingTop: 2 }}>{timeStr}</div>
     </div>
+  );
+}
+
+// ── Tenant management (super-admin only) ─────────────────────────────────────
+const PLANS = ['starter', 'pro', 'enterprise'];
+
+function PlanBadge({ p }) {
+  const colors = { starter: ['#f0fdf4','#16a34a'], pro: ['#eff6ff','#2563eb'], enterprise: ['#faf5ff','#7c3aed'] };
+  const [bg, c] = colors[p] || ['#f5f5f5','#888'];
+  return <span style={{ background: bg, color: c, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, textTransform: 'uppercase' }}>{p}</span>;
+}
+
+function TenantsTab({ tenants, onRefresh, onCreate, onUpdate }) {
+  const [modal,        setModal]       = useState(null); // null | 'new' | tenantObject
+  const [saving,       setSaving]      = useState(false);
+  const [provisioning, setProvisioning]= useState(null); // tenantId currently being provisioned
+  const [stats,        setStats]       = useState({});   // { [tenantId]: { provisioned, userCount, apptCount } }
+  const [id,    setId]    = useState('');
+  const [name,  setName]  = useState('');
+  const [owner, setOwner] = useState('');
+  const [plan,  setPlan]  = useState('starter');
+  const [active,setActive]= useState(true);
+
+  // Load stats in parallel whenever tenant list refreshes
+  useEffect(() => {
+    if (!tenants?.length) return;
+    Promise.allSettled(
+      tenants.map(t => fetchTenantStats(t.id).then(s => [t.id, s]))
+    ).then(results => {
+      const map = {};
+      results.forEach(r => { if (r.status === 'fulfilled') { const [tid, s] = r.value; map[tid] = s; } });
+      setStats(map);
+    });
+  }, [tenants]); // eslint-disable-line
+
+  function openNew() {
+    setId(''); setName(''); setOwner(''); setPlan('starter'); setActive(true);
+    setModal('new');
+  }
+
+  function openEdit(t) {
+    setId(t.id); setName(t.name || ''); setOwner(t.ownerEmail || ''); setPlan(t.plan || 'starter'); setActive(t.active !== false);
+    setModal(t);
+  }
+
+  async function handleSave() {
+    if (!id.trim() || !name.trim()) return;
+    setSaving(true);
+    try {
+      const slugId = id.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const data   = { name: name.trim(), ownerEmail: owner.trim(), plan, active };
+      if (modal === 'new') {
+        await onCreate(slugId, data);
+        await provisionNewTenant(slugId, owner.trim(), name.trim());
+      } else {
+        await onUpdate(modal.id, data);
+      }
+      await onRefresh();
+      setModal(null);
+    } finally { setSaving(false); }
+  }
+
+  async function handleProvision(t) {
+    setProvisioning(t.id);
+    try {
+      await provisionNewTenant(t.id, t.ownerEmail, t.name);
+      const s = await fetchTenantStats(t.id);
+      setStats(prev => ({ ...prev, [t.id]: s }));
+    } finally { setProvisioning(null); }
+  }
+
+  return (
+    <>
+      <Section title="🏢 Tenant Registry" action={
+        <div style={{ display: 'flex', gap: 6 }}>
+          <Btn onClick={onRefresh}>Refresh</Btn>
+          <Btn onClick={openNew} color="#2D7A5F">+ New Tenant</Btn>
+        </div>
+      }>
+        {tenants === null
+          ? <Empty>Loading…</Empty>
+          : tenants.length === 0
+            ? <Empty>No tenants yet. Click "+ New Tenant" to add one.</Empty>
+            : tenants.map(t => {
+                const s = stats[t.id];
+                return (
+                  <div key={t.id} style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {/* Name row */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{t.name || t.id}</span>
+                          <PlanBadge p={t.plan || 'starter'} />
+                          {t.active === false && (
+                            <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 700, background: '#fef2f2', padding: '1px 6px', borderRadius: 8 }}>INACTIVE</span>
+                          )}
+                          {s && (s.provisioned
+                            ? <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 700 }}>✓ Provisioned</span>
+                            : <span style={{ fontSize: 10, color: '#f59e0b', fontWeight: 700 }}>⚠ Not provisioned</span>
+                          )}
+                        </div>
+                        {/* Meta row */}
+                        <div style={{ fontSize: 11, color: '#888', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+                          <span>ID: <code style={{ background: '#f5f5f5', padding: '1px 5px', borderRadius: 4, fontSize: 10 }}>{t.id}</code></span>
+                          {t.ownerEmail && <span>{t.ownerEmail}</span>}
+                          {s?.userCount > 0 && <span>👤 {s.userCount} user{s.userCount !== 1 ? 's' : ''}</span>}
+                          {s?.apptCount > 0 && <span>📅 {s.apptCount}+ appts</span>}
+                          {t.createdAt && <span>Created {t.createdAt.slice(0, 10)}</span>}
+                        </div>
+                      </div>
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginTop: 2 }}>
+                        {s && !s.provisioned && (
+                          <button
+                            onClick={() => handleProvision(t)}
+                            disabled={provisioning === t.id}
+                            style={{ fontSize: 11, color: '#fff', background: provisioning === t.id ? '#ccc' : '#f59e0b', border: 'none', borderRadius: 6, padding: '5px 10px', cursor: provisioning === t.id ? 'default' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
+                          >
+                            {provisioning === t.id ? 'Provisioning…' : 'Provision'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => openEdit(t)}
+                          style={{ fontSize: 11, color: '#3D95CE', background: 'none', border: '1px solid #d0e8f8', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+        }
+      </Section>
+
+      {modal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: 380, boxShadow: '0 8px 40px rgba(0,0,0,.18)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18 }}>
+              {modal === 'new' ? '🏢 New Tenant' : `Edit: ${modal.id}`}
+            </div>
+
+            {modal === 'new' && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Tenant ID <span style={{ color: '#bbb' }}>(slug — becomes the subdomain)</span></div>
+                <input value={id} onChange={e => setId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="e.g. luxenails"
+                  style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit' }} />
+                {id && <div style={{ fontSize: 10, color: '#888', marginTop: 4 }}>URL: {id}.tipflow.app</div>}
+              </div>
+            )}
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Salon Name</div>
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Luxe Nails Studio"
+                style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit' }} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Owner Email</div>
+              <input value={owner} onChange={e => setOwner(e.target.value)} placeholder="owner@email.com"
+                style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit' }} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Plan</div>
+              <select value={plan} onChange={e => setPlan(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', background: '#fff' }}>
+                {PLANS.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <input type="checkbox" id="tActive" checked={active} onChange={e => setActive(e.target.checked)} />
+              <label htmlFor="tActive" style={{ fontSize: 13, color: '#333', cursor: 'pointer' }}>Active</label>
+            </div>
+
+            {modal === 'new' && (
+              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 12px', marginBottom: 16, fontSize: 12, color: '#166534', lineHeight: 1.5 }}>
+                Saving will auto-provision Firestore data for this tenant: default settings, empty slide deck, and the owner email set as admin.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setModal(null)}
+                style={{ border: '1px solid #e0e0e0', background: '#fff', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving || !id.trim() || !name.trim()}
+                style={{ background: saving || !id.trim() || !name.trim() ? '#aaa' : '#2D7A5F', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                {saving ? 'Creating…' : modal === 'new' ? 'Create & Provision' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

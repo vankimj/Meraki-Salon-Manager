@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { getTheme, detectAutoTheme } from '../lib/themes';
 import { onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { auth, ALLOWED_EMAILS } from '../lib/firebase';
 import { loadAll, saveSlides, saveUsers, saveSettings, submitAccessRequest, fetchAccessRequests, deleteAccessRequest, fetchHandbook, fetchMyHandbookSig, signHandbookDoc, fetchClientByEmail, subscribeToChats } from '../lib/firestore';
@@ -34,6 +35,7 @@ export function AppProvider({ children }) {
   const [handbookDoc,     setHandbookDoc]     = useState(null);
   const [portalClientId,    setPortalClientId]    = useState(null);
   const [totalChatUnread,   setTotalChatUnread]   = useState(0);
+  const [viewAs,            setViewAs]            = useState(null); // null | 'tech'
 
   const logoutTimer    = useRef(null);
   const inactivityTimer= useRef(null);
@@ -350,11 +352,21 @@ export function AppProvider({ children }) {
     showToast('Signed out');
   }, [showToast]);
 
+  const activeTheme = useMemo(() => {
+    if (settings?.autoTheme) {
+      const auto = detectAutoTheme();
+      if (auto) return auto;
+    }
+    return getTheme(settings?.themeId);
+  }, [settings?.themeId, settings?.autoTheme]);
+
   const _rec        = gUser ? users.find(u => u.email === gUser.email) : null;
-  const isAdmin     = _rec?.role === 'admin';
-  const isReadOnly  = ['admin', 'readonly'].includes(_rec?.role);
-  const isTech      = _rec?.role === 'tech';
-  const myTechName  = _rec?.techName || null;
+  const realIsAdmin = _rec?.role === 'admin';
+  const isAdmin     = viewAs ? false : realIsAdmin;
+  const isReadOnly  = viewAs ? false : ['admin', 'readonly'].includes(_rec?.role);
+  const isTech      = viewAs === 'tech'      ? true : _rec?.role === 'tech';
+  const isScheduler = viewAs === 'scheduler' ? true : _rec?.role === 'scheduler';
+  const myTechName  = viewAs ? null : (_rec?.techName || null);
   const isPortalUser = !!portalClientId;
 
   return (
@@ -362,7 +374,7 @@ export function AppProvider({ children }) {
       slides, def, cur, setCur,
       users, settings,
       gUser, syncState, toast, toastAction, loaded,
-      isAdmin, isReadOnly, isTech, myTechName,
+      isAdmin, isReadOnly, isTech, isScheduler, myTechName, realIsAdmin, viewAs, setViewAs,
       isPortalUser, portalClientId,
       showToast, resetInactivity, resetLogoutTimer,
       addSlide, updateSlide, deleteSlide, setDefault,
@@ -370,6 +382,7 @@ export function AppProvider({ children }) {
       signIn, signOut, switchAccount, sendMagicLink, completeMagicLink, magicLinkPending,
       handbookPending, handbookDoc, signHandbook,
       totalChatUnread,
+      activeTheme,
     }}>
       {children}
     </Ctx.Provider>

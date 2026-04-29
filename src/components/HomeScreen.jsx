@@ -29,7 +29,7 @@ function greeting() {
 const PIN_LOCKED_VIEWS = new Set(['hr', 'reports']);
 
 export default function HomeScreen({ onNavigate, onAdmin }) {
-  const { gUser, isAdmin, isReadOnly, isTech, settings, totalChatUnread } = useApp();
+  const { gUser, isAdmin, isReadOnly, isTech, isScheduler, settings, totalChatUnread, activeTheme: t } = useApp();
   const [showAuth,     setShowAuth]     = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [pinTarget,    setPinTarget]    = useState(null);
@@ -46,28 +46,30 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', background: '#f8f9fa', overflowY: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', background: 'var(--tm-bg, #f8f9fa)', overflowY: 'auto' }}>
 
       {/* Top bar */}
-      <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, width: '100%', boxSizing: 'border-box' }}>
+      <div style={{ background: '#fff', borderBottom: `1px solid var(--tm-border, #ebebeb)`, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg,#2D7A5F,#4A7DB5)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <svg viewBox="0 0 60 60" fill="none" width={18} height={18}><circle cx="30" cy="22" r="7" fill="white"/><path d="M14 50c0-8.8 7.2-16 16-16s16 7.2 16 16" stroke="white" strokeWidth="3.5" strokeLinecap="round"/></svg>
           </div>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a1a', lineHeight: 1.2 }}>Meraki Nail Studio</div>
-            <div style={{ fontSize: 11, color: '#aaa' }}>Salon Manager</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--tm-text, #1a1a1a)', lineHeight: 1.2 }}>Meraki Nail Studio</div>
+            <div style={{ fontSize: 11, color: 'var(--tm-muted, #aaa)' }}>
+              Salon Manager{t?.seasonal ? ` · ${t.seasonal.emoji}` : ''}
+            </div>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {isAdmin && (
             <button onClick={onAdmin} title="Admin Settings"
-              style={{ height: 40, borderRadius: 20, border: 'none', background: '#2D7A5F', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(45,122,95,.35)' }}>
+              style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-primary, #2D7A5F)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}>
               <span style={{ fontSize: 17 }}>⚙</span> Admin
             </button>
           )}
           <button onClick={() => setShowFeedback(true)} title="Report a bug or idea"
-            style={{ height: 40, borderRadius: 20, border: 'none', background: '#3D95CE', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(61,149,206,.35)' }}>
+            style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-accent, #3D95CE)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
             <span style={{ fontSize: 17 }}>💬</span> Feedback
           </button>
           {gUser && <UserMenu />}
@@ -99,6 +101,18 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
               <ModuleTile id="hr"        icon="📋"  label="Tax Forms"   desc="Your 1099s"                    onClick={() => navigate('hr')}        />
             </div>
           </>
+        ) : isScheduler ? (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: 10, paddingLeft: 4 }}>
+              Scheduling
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <ModuleTile id="schedule" icon="📅" label="Schedule"  desc="Appointments & calendar"   onClick={() => navigate('schedule')}  />
+              <ModuleTile id="clients"  icon="👥" label="Clients"   desc="Profiles & visit history"  onClick={() => navigate('clients')}   />
+              <ModuleTile id="services" icon="💅" label="Services"  desc="Menu & pricing"             onClick={() => navigate('services')}  />
+              <ModuleTile id="chat"     icon="💬" label="Messages"  desc="Client messages & replies"  onClick={() => navigate('chat')}      badge={totalChatUnread} />
+            </div>
+          </>
         ) : canManage ? (
           <>
             <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: 10, paddingLeft: 4 }}>
@@ -114,7 +128,7 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           <div style={{ textAlign: 'center', padding: '32px 20px' }}>
             <div style={{ fontSize: 13, color: '#aaa', marginBottom: 16 }}>Sign in to access management tools.</div>
             <button onClick={() => setShowAuth(true)}
-              style={{ fontSize: 17, fontWeight: 700, padding: '16px 48px', borderRadius: 14, border: 'none', background: '#3D95CE', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', width: '100%', maxWidth: 320 }}>
+              style={{ fontSize: 17, fontWeight: 700, padding: '16px 48px', borderRadius: 14, border: 'none', background: 'var(--tm-grad)', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', width: '100%', maxWidth: 320 }}>
               Sign in
             </button>
           </div>
@@ -124,15 +138,15 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           </div>
         )}
 
-        {/* Kiosk launchers — not shown to techs */}
-        {!isTech && (
+        {/* Kiosk launchers — not shown to techs or schedulers */}
+        {!isTech && !isScheduler && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: 10, paddingLeft: 4 }}>
               Kiosk
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button onClick={() => navigate('tipflow')}
-                style={{ width: '100%', background: 'linear-gradient(135deg, #2D7A5F 0%, #3D95CE 100%)', border: 'none', borderRadius: 14, padding: '18px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit', textAlign: 'left' }}>
+                style={{ width: '100%', background: 'var(--tm-grad)', border: 'none', borderRadius: 14, padding: '18px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit', textAlign: 'left' }}>
                 <div style={{ fontSize: 28, flexShrink: 0 }}>💡</div>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', marginBottom: 2 }}>Launch Tip Flow</div>
@@ -141,7 +155,7 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
                 <div style={{ marginLeft: 'auto', color: 'rgba(255,255,255,.6)', fontSize: 20 }}>›</div>
               </button>
               <button onClick={() => window.open('/?queue', '_blank')}
-                style={{ width: '100%', background: 'linear-gradient(135deg, #0e1c14 0%, #2D7A5F 100%)', border: 'none', borderRadius: 14, padding: '18px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit', textAlign: 'left' }}>
+                style={{ width: '100%', background: 'var(--tm-grad-dark)', border: 'none', borderRadius: 14, padding: '18px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontFamily: 'inherit', textAlign: 'left' }}>
                 <div style={{ fontSize: 28, flexShrink: 0 }}>🪑</div>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', marginBottom: 2 }}>Walk-in Queue Kiosk</div>
@@ -244,7 +258,7 @@ function ModuleTile({ icon, label, desc, onClick, badge }) {
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ background: hover ? '#fff' : '#fff', border: `1.5px solid ${hover ? '#3D95CE' : '#e8e8e8'}`, borderRadius: 14, padding: '16px 14px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', transition: 'border-color .15s, box-shadow .15s', boxShadow: hover ? '0 4px 16px rgba(61,149,206,.15)' : '0 1px 4px rgba(0,0,0,.05)' }}
+      style={{ background: '#fff', border: `1.5px solid ${hover ? 'var(--tm-accent, #3D95CE)' : 'var(--tm-border, #e8e8e8)'}`, borderRadius: 14, padding: '16px 14px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', transition: 'border-color .15s, box-shadow .15s', boxShadow: hover ? '0 4px 16px rgba(0,0,0,.1)' : '0 1px 4px rgba(0,0,0,.05)' }}
     >
       <div style={{ position: 'relative', display: 'inline-block', marginBottom: 8 }}>
         <div style={{ fontSize: 26 }}>{icon}</div>

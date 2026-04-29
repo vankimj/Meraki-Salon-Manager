@@ -3,15 +3,18 @@ const { onSchedule }       = require('firebase-functions/v2/scheduler');
 const { onCall, onRequest, HttpsError }= require('firebase-functions/v2/https');
 const { initializeApp }    = require('firebase-admin/app');
 const { getFirestore }     = require('firebase-admin/firestore');
-const { defineString }     = require('firebase-functions/params');
+const { defineString, defineSecret } = require('firebase-functions/params');
 const { Resend }           = require('resend');
+const Anthropic            = require('@anthropic-ai/sdk');
 
 initializeApp();
 
 const TENANT_ID   = 'meraki';
-const resendKey   = defineString('RESEND_API_KEY',      { default: '' });
-const resendFrom  = defineString('RESEND_FROM',         { default: 'Meraki Nail Studio <noreply@merakinailstudio.com>' });
-const mapsApiKey  = defineString('GOOGLE_MAPS_API_KEY', { default: '' });
+const resendKey     = defineString('RESEND_API_KEY',      { default: '' });
+const resendFrom    = defineString('RESEND_FROM',         { default: 'Meraki Nail Studio <noreply@merakinailstudio.com>' });
+const mapsApiKey    = defineString('GOOGLE_MAPS_API_KEY', { default: '' });
+const stripeKey     = defineSecret('STRIPE_SECRET_KEY');
+const anthropicKey  = defineSecret('ANTHROPIC_API_KEY');
 
 function fmtTime(str) {
   if (!str) return '';
@@ -204,12 +207,16 @@ exports.sendReceiptEmail = onDocumentCreated(
   }
 );
 
-function buildMarketingHtml(bodyHtml, promoCode, promoLabel) {
+function buildMarketingHtml(bodyHtml, promoCode, promoLabel, ctaText, ctaUrl) {
   const promoBlock = promoCode ? `
       <div style="margin:20px 0;background:#f0faf6;border:2px dashed #2D7A5F;border-radius:10px;padding:16px;text-align:center;">
         <div style="font-size:11px;color:#2D7A5F;font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;">Your Exclusive Promo Code</div>
         <div style="font-size:26px;font-weight:800;color:#1a1a1a;letter-spacing:.12em;font-family:monospace,sans-serif;">${promoCode}</div>
         ${promoLabel ? `<div style="font-size:12px;color:#888;margin-top:6px;">${promoLabel}</div>` : ''}
+      </div>` : '';
+  const ctaBlock = ctaUrl ? `
+      <div style="text-align:center;margin:24px 0 8px;">
+        <a href="${ctaUrl}" style="display:inline-block;background:#2D7A5F;color:#fff;font-size:14px;font-weight:700;padding:13px 32px;border-radius:10px;text-decoration:none;letter-spacing:.01em;">${ctaText || 'Book Your Appointment'} →</a>
       </div>` : '';
   return `<!DOCTYPE html>
 <html>
@@ -222,6 +229,7 @@ function buildMarketingHtml(bodyHtml, promoCode, promoLabel) {
     <div style="padding:24px;">
       <p style="font-size:14px;line-height:1.75;color:#333;margin:0;">${bodyHtml}</p>
       ${promoBlock}
+      ${ctaBlock}
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
       <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
@@ -269,7 +277,7 @@ exports.sendMarketingCampaign = onDocumentCreated(
           from:    resendFrom.value(),
           to:      email,
           subject,
-          html:    buildMarketingHtml(bodyHtml, data.promoCode || null, data.promoLabel || null),
+          html:    buildMarketingHtml(bodyHtml, data.promoCode || null, data.promoLabel || null, data.ctaText || null, data.ctaUrl || null),
         });
         if (error) throw new Error(error.message || JSON.stringify(error));
         sentCount++;
@@ -1067,6 +1075,94 @@ exports.refreshGoogleReviews = onCall(async (request) => {
   return { count: reviews.length, rating: result.rating, total: result.user_ratings_total };
 });
 
+// ── AI Chatbot ────────────────────────────────────────
+
+exports.chatWithSalon = onCall(
+  { secrets: [anthropicKey], cors: true },
+  async (request) => {
+    const apiKey = anthropicKey.value();
+    if (!apiKey) throw new HttpsError('unavailable', 'AI not configured');
+
+    const { messages = [] } = request.data;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      throw new HttpsError('invalid-argument', 'messages required');
+    }
+    if (messages.length > 30) throw new HttpsError('invalid-argument', 'Too many messages');
+
+    const db = getFirestore();
+
+    // Load live salon context from Firestore
+    const [wfSnap, svcSnap, settingsSnap] = await Promise.all([
+      db.doc(`tenants/${TENANT_ID}/data/webfront`).get(),
+      db.collection(`tenants/${TENANT_ID}/services`).get(),
+      db.doc(`tenants/${TENANT_ID}/data/settings`).get(),
+    ]);
+
+    const cfg      = wfSnap.exists      ? wfSnap.data()      : {};
+    const settings = settingsSnap.exists ? settingsSnap.data() : {};
+    const services = svcSnap.docs.map(d => d.data());
+
+    const hours = cfg.hours || {};
+    const hoursText = [
+      ['Monday',    hours.mon],
+      ['Tuesday',   hours.tue],
+      ['Wednesday', hours.wed],
+      ['Thursday',  hours.thu],
+      ['Friday',    hours.fri],
+      ['Saturday',  hours.sat],
+      ['Sunday',    hours.sun],
+    ].filter(([, v]) => v).map(([d, v]) => `  ${d}: ${v}`).join('\n');
+
+    // Group services by category
+    const svcByCategory = {};
+    services.forEach(s => {
+      const cat = s.category || 'Services';
+      if (!svcByCategory[cat]) svcByCategory[cat] = [];
+      svcByCategory[cat].push(s);
+    });
+    const svcText = Object.entries(svcByCategory).map(([cat, svcs]) => {
+      const lines = svcs.map(s => `    • ${s.name}${s.price ? ` — $${s.price}` : ''}${s.description ? ` (${s.description})` : ''}`).join('\n');
+      return `  ${cat}:\n${lines}`;
+    }).join('\n\n');
+
+    const bookingUrl = settings.bookingUrl || cfg.bookingUrl || 'https://meraki-salon-manager.web.app/?book';
+    const phone      = cfg.phone || '';
+    const address    = cfg.address || '5029 Olentangy River Rd, Columbus, OH 43214';
+    const instagram  = cfg.instagram ? `@${cfg.instagram}` : '@meraki_cbus';
+
+    const systemPrompt = `You are a friendly, helpful assistant for Meraki Nail Studio, a nail salon in Columbus, Ohio.
+
+Your role: answer questions about services, pricing, hours, booking, the team, and anything else a visitor might ask. Help them book an appointment or find what they need quickly.
+
+Keep responses warm, concise, and conversational — 1-3 short paragraphs max. Never make up services or prices that aren't listed below. If you don't know something specific, direct them to call or book online.
+
+━━━ SALON INFO ━━━
+Address: ${address}
+Phone: ${phone || 'See website for contact info'}
+Instagram: ${instagram}
+Book online: ${bookingUrl}
+
+━━━ HOURS ━━━
+${hoursText || 'See website for hours'}
+
+━━━ SERVICES & PRICING ━━━
+${svcText || 'See website for full service menu'}
+
+━━━ CANCELLATION POLICY ━━━
+${cfg.policy || 'Appointments canceled with less than 24 hours notice may incur a cancellation fee.'}`;
+
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      system:     systemPrompt,
+      messages:   messages.map(m => ({ role: m.role, content: m.content })),
+    });
+
+    return { reply: response.content[0]?.text || '' };
+  }
+);
+
 // ── Auto-campaigns ────────────────────────────────────
 
 function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl) {
@@ -1221,6 +1317,26 @@ exports.autoLapsedCampaign = onSchedule(
   }
 );
 
+exports.createPaymentIntent = onCall({ secrets: [stripeKey] }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+
+  const { amountCents, description } = request.data || {};
+  if (!amountCents || amountCents < 50) throw new HttpsError('invalid-argument', 'Amount must be at least $0.50');
+
+  const key = stripeKey.value();
+  if (!key) throw new HttpsError('failed-precondition', 'Stripe is not configured on this server');
+
+  const stripe = require('stripe')(key);
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount:   Math.round(amountCents),
+    currency: 'usd',
+    description: description || 'Meraki Nail Studio',
+    automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+  });
+
+  return { clientSecret: paymentIntent.client_secret, paymentIntentId: paymentIntent.id };
+});
+
 // Tracks when a client clicks the review link in their email, then redirects to Google.
 exports.trackReviewClick = onRequest({ cors: false }, async (req, res) => {
   const reqId = req.query.r;
@@ -1245,3 +1361,83 @@ exports.trackReviewClick = onRequest({ cors: false }, async (req, res) => {
 
   res.redirect(302, redirectTo);
 });
+
+// ── Tenant onboarding ─────────────────────────────────────────────────────────
+// Creates a new tenant record, provisions Firestore data, and sends a welcome email.
+// Callable without auth so the public signup page can use it.
+exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
+  const { salonName, ownerName, ownerEmail, plan } = request.data || {};
+  if (!salonName || !ownerEmail) throw new HttpsError('invalid-argument', 'salonName and ownerEmail are required');
+
+  // Derive slug from salon name
+  const base = salonName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'salon';
+  const db   = getFirestore();
+
+  // Find an available slug (up to 5 attempts)
+  let tenantId = base;
+  for (let i = 1; i <= 5; i++) {
+    const existing = await db.doc(`tenants/${tenantId}`).get();
+    if (!existing.exists) break;
+    tenantId = `${base}${i}`;
+    if (i === 5) throw new HttpsError('already-exists', 'A salon with a similar name already exists. Please contact support.');
+  }
+
+  const now  = new Date().toISOString();
+  const url  = `https://${tenantId}.tipflow.app`;
+  const planVal = ['starter', 'pro', 'enterprise'].includes(plan) ? plan : 'starter';
+
+  // Create registry doc + provision in parallel
+  await Promise.all([
+    db.doc(`tenants/${tenantId}`).set({ name: salonName, ownerName: ownerName || '', ownerEmail, plan: planVal, active: true, createdAt: now }),
+    db.doc(`tenants/${tenantId}/data/settings`).set({ timeoutMin: 5, createdAt: now }),
+    db.doc(`tenants/${tenantId}/data/slides`).set({ slides: [], def: 0, cur: 0 }),
+    db.doc(`tenants/${tenantId}/data/users`).set({ users: [{ email: ownerEmail, role: 'admin', uid: '', addedAt: now }] }),
+  ]);
+
+  // Send welcome email
+  const apiKey = resendKey.value();
+  if (apiKey) {
+    const resend = new Resend(apiKey);
+    await resend.emails.send({
+      from: 'TipFlow <hello@tipflow.app>',
+      to:   ownerEmail,
+      subject: `Welcome to TipFlow — ${salonName} is ready`,
+      html: buildWelcomeHtml(salonName, ownerEmail, tenantId, url),
+    }).catch(e => console.error('[Onboarding] welcome email failed:', e.message));
+  }
+
+  return { tenantId, url, salonName };
+});
+
+function buildWelcomeHtml(salonName, ownerEmail, tenantId, url) {
+  return `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;background:#f5f7fa;margin:0;padding:32px 16px">
+<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.08)">
+  <div style="background:#0f1923;padding:32px;text-align:center">
+    <div style="font-size:36px;color:#fff;font-weight:300;letter-spacing:2px">Meraki</div>
+    <div style="font-size:11px;color:#3D9E8A;letter-spacing:6px;margin-top:4px">TIPFLOW</div>
+  </div>
+  <div style="padding:32px">
+    <h2 style="color:#1a1a1a;margin:0 0 8px">Your salon is ready 🎉</h2>
+    <p style="color:#555;margin:0 0 24px"><strong>${salonName}</strong> has been set up on TipFlow. Here's everything you need to get started.</p>
+
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px 20px;margin-bottom:24px">
+      <div style="font-size:11px;color:#16a34a;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Your TipFlow URL</div>
+      <a href="${url}" style="font-size:18px;color:#2D7A5F;font-weight:700;text-decoration:none">${url}</a>
+    </div>
+
+    <h3 style="color:#1a1a1a;margin:0 0 12px;font-size:14px">Getting started checklist</h3>
+    <ol style="color:#555;font-size:13px;line-height:2;padding-left:20px;margin:0 0 24px">
+      <li>Visit your URL and sign in with Google using <strong>${ownerEmail}</strong></li>
+      <li>Add your employees (Employees module)</li>
+      <li>Set up your service menu (Services module)</li>
+      <li>Configure your public booking page (Admin → Settings)</li>
+      <li>Customise your public website (Admin → Webfront)</li>
+    </ol>
+
+    <a href="${url}" style="display:block;background:#2D7A5F;color:#fff;text-align:center;padding:14px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none">Open ${salonName} →</a>
+  </div>
+  <div style="padding:16px 32px;border-top:1px solid #f0f0f0;font-size:11px;color:#aaa;text-align:center">
+    TipFlow · Salon Management Platform · <a href="https://tipflow.app" style="color:#aaa">tipflow.app</a>
+  </div>
+</div></body></html>`;
+}

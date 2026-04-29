@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { fetchClients, fetchAppointmentsByRange, fetchCampaigns, createCampaign,
+import { fetchClients, fetchAppointmentsByRange, fetchCampaigns, createCampaign, deleteCampaign,
          fetchEmployees, fetchServices, fetchPromoCodes,
          fetchCampaignTemplates, saveCampaignTemplate, deleteCampaignTemplate,
          fetchReviewReceived } from '../../lib/firestore';
@@ -72,7 +72,7 @@ const SEGMENTS = [
 
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
 
-function buildPreviewHtml(bodyText, promoCode, promoLabel) {
+function buildPreviewHtml(bodyText, promoCode, promoLabel, ctaText, ctaUrl) {
   const bodyHtml = (bodyText || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/\{firstName\}/gi, 'there')
@@ -83,6 +83,10 @@ function buildPreviewHtml(bodyText, promoCode, promoLabel) {
       <div style="font-size:26px;font-weight:800;color:#1a1a1a;letter-spacing:.12em;font-family:monospace,sans-serif;">${promoCode}</div>
       ${promoLabel ? `<div style="font-size:12px;color:#888;margin-top:6px;">${promoLabel}</div>` : ''}
     </div>` : '';
+  const ctaBlock = ctaUrl ? `
+    <div style="text-align:center;margin:24px 0 8px;">
+      <a href="${ctaUrl}" style="display:inline-block;background:#2D7A5F;color:#fff;font-size:14px;font-weight:700;padding:13px 32px;border-radius:10px;text-decoration:none;letter-spacing:.01em;">${ctaText || 'Book Your Appointment'} →</a>
+    </div>` : '';
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
@@ -92,6 +96,7 @@ function buildPreviewHtml(bodyText, promoCode, promoLabel) {
     <div style="padding:24px;">
       <p style="font-size:14px;line-height:1.75;color:#333;margin:0;">${bodyHtml}</p>
       ${promoBlock}
+      ${ctaBlock}
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
       <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
@@ -102,9 +107,9 @@ function buildPreviewHtml(bodyText, promoCode, promoLabel) {
 
 // ── Main view ──────────────────────────────────────────
 export default function MarketingAdmin() {
-  const { showToast, isAdmin } = useApp();
+  const { showToast, isAdmin, settings } = useApp();
   const [campaigns, setCampaigns] = useState(null);
-  const [modal,     setModal]     = useState(false);
+  const [modal,     setModal]     = useState(false);  // false | true | campaign-object (clone)
 
   useEffect(() => { load(); }, []); // eslint-disable-line
 
@@ -123,20 +128,31 @@ export default function MarketingAdmin() {
     } catch (e) { showToast('Failed: ' + e.message, 3000); }
   }
 
+  async function handleDelete(id) {
+    if (!confirm('Delete this campaign? This cannot be undone.')) return;
+    try {
+      await deleteCampaign(id);
+      setCampaigns(cs => cs.filter(c => c.id !== id));
+      logActivity('marketing_campaign_deleted', id);
+      showToast('Campaign deleted');
+    } catch (e) { showToast('Delete failed: ' + e.message, 3000); }
+  }
+
   const totalSent    = (campaigns || []).reduce((s, c) => s + (c.sentCount || 0), 0);
-  const lastCampaign = campaigns?.length ? campaigns[0] : null;
+  const thisMonth    = (campaigns || []).filter(c => c.createdAt?.slice(0, 7) === new Date().toISOString().slice(0, 7)).length;
+  const autoActive   = [settings?.autoBirthday, settings?.autoLapsed].filter(Boolean).length;
 
   if (!campaigns) return <div style={{ textAlign: 'center', padding: 80, color: '#bbb', fontSize: 14 }}>Loading…</div>;
 
   return (
     <div style={{ maxWidth: 860, margin: '0 auto', paddingBottom: 32 }}>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 20 }}>
-        <StatCard label="Total campaigns" value={campaigns.length} accent="#2D7A5F" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
+        <StatCard label="Campaigns run"   value={campaigns.length}  accent="#2D7A5F" />
         <StatCard label="Emails sent"     value={fmtNum(totalSent)} accent="#3D95CE" />
-        <StatCard label="Last sent"       value={lastCampaign
-          ? new Date(lastCampaign.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-          : '—'} />
+        <StatCard label="This month"      value={thisMonth}         accent="#7c3aed" />
+        <StatCard label="Automations on"  value={`${autoActive} / 2`} accent={autoActive ? '#f59e0b' : '#ccc'}
+          sub={autoActive === 0 ? 'Enable in Admin → Settings' : autoActive === 1 ? '1 active' : 'Birthday + Lapsed'} />
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
@@ -153,19 +169,26 @@ export default function MarketingAdmin() {
         : (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 12, overflow: 'hidden' }}>
             {campaigns.map((c, i) => (
-              <CampaignRow key={c.id} campaign={c} last={i === campaigns.length - 1} />
+              <CampaignRow key={c.id} campaign={c} last={i === campaigns.length - 1}
+                onDelete={() => handleDelete(c.id)}
+                onClone={() => setModal(c)} />
             ))}
           </div>
         )
       }
 
-      {modal && <CampaignModal onSend={handleSend} onClose={() => setModal(false)} />}
+      {modal && (
+        <CampaignModal
+          prefill={typeof modal === 'object' ? modal : null}
+          onSend={handleSend}
+          onClose={() => setModal(false)} />
+      )}
     </div>
   );
 }
 
 // ── Campaign row ───────────────────────────────────────
-function CampaignRow({ campaign: c, last }) {
+function CampaignRow({ campaign: c, last, onDelete, onClone }) {
   const [expanded, setExpanded] = useState(false);
   const STATUS = {
     pending: { bg: '#fffbeb', fg: '#92400e', label: 'Queued'  },
@@ -187,6 +210,9 @@ function CampaignRow({ campaign: c, last }) {
             <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{c.name}</span>
             {c.promoCode && (
               <span style={{ fontSize: 10, background: '#f0faf6', color: '#2D7A5F', border: '1px solid #c6e8d5', borderRadius: 6, padding: '1px 7px', fontWeight: 700, fontFamily: 'monospace' }}>{c.promoCode}</span>
+            )}
+            {c.ctaUrl && (
+              <span style={{ fontSize: 10, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 6, padding: '1px 7px', fontWeight: 600 }}>CTA</span>
             )}
           </div>
           <div style={{ fontSize: 11, color: '#888' }}>
@@ -211,7 +237,17 @@ function CampaignRow({ campaign: c, last }) {
       {expanded && (
         <div style={{ padding: '0 16px 14px 64px', borderTop: '1px solid #f8f8f8' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: '#555', marginBottom: 6 }}>{c.subject}</div>
-          <div style={{ fontSize: 12, color: '#888', whiteSpace: 'pre-wrap', lineHeight: 1.6, maxHeight: 120, overflowY: 'auto', background: '#f8f9fa', borderRadius: 6, padding: '8px 10px' }}>{c.body}</div>
+          <div style={{ fontSize: 12, color: '#888', whiteSpace: 'pre-wrap', lineHeight: 1.6, maxHeight: 120, overflowY: 'auto', background: '#f8f9fa', borderRadius: 6, padding: '8px 10px', marginBottom: 10 }}>{c.body}</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={e => { e.stopPropagation(); onClone(); }}
+              style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fafafa', color: '#555', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500 }}>
+              ⧉ Duplicate
+            </button>
+            <button onClick={e => { e.stopPropagation(); onDelete(); }}
+              style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500 }}>
+              🗑 Delete
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -219,16 +255,19 @@ function CampaignRow({ campaign: c, last }) {
 }
 
 // ── Campaign modal ─────────────────────────────────────
-function CampaignModal({ onSend, onClose }) {
-  const { showToast } = useApp();
-  const [name,        setName]        = useState('');
-  const [segType,     setSegType]     = useState('all');
-  const [lapDays,     setLapDays]     = useState(60);
-  const [techSel,     setTechSel]     = useState('');
-  const [serviceSel,  setServiceSel]  = useState('');
+function CampaignModal({ onSend, onClose, prefill = null }) {
+  const { showToast, settings } = useApp();
+  const [name,        setName]        = useState(prefill ? `${prefill.name} (copy)` : '');
+  const [segType,     setSegType]     = useState(prefill?.segmentType || 'all');
+  const [lapDays,     setLapDays]     = useState(prefill?.segmentParams?.days || 60);
+  const [techSel,     setTechSel]     = useState(prefill?.segmentParams?.techName || '');
+  const [serviceSel,  setServiceSel]  = useState(prefill?.segmentParams?.serviceName || '');
   const [promoSel,    setPromoSel]    = useState('');
-  const [subject,     setSubject]     = useState('');
-  const [body,        setBody]        = useState('');
+  const [subject,     setSubject]     = useState(prefill?.subject || '');
+  const [body,        setBody]        = useState(prefill?.body || '');
+  const [addCta,      setAddCta]      = useState(!!(prefill?.ctaUrl));
+  const [ctaText,     setCtaText]     = useState(prefill?.ctaText || 'Book Your Appointment');
+  const [ctaUrl,      setCtaUrl]      = useState(prefill?.ctaUrl || settings?.bookingUrl || '');
   const [showPreview, setShowPreview] = useState(false);
   const [savingTpl,   setSavingTpl]   = useState(false);
   const [tplName,     setTplName]     = useState('');
@@ -392,6 +431,8 @@ function CampaignModal({ onSend, onClose }) {
       segmentType: segType, segmentParams,
       promoCode:  selectedPromo?.code  || null,
       promoLabel: promoLabel           || null,
+      ctaText:    addCta && ctaText.trim() ? ctaText.trim() : null,
+      ctaUrl:     addCta && ctaUrl.trim()  ? ctaUrl.trim()  : null,
       recipients: recipients.map(c => ({ clientId: c.id, name: c.name, email: c.email })),
       recipientCount: recipients.length,
       status: 'pending', sentCount: 0, failCount: 0,
@@ -622,6 +663,24 @@ function CampaignModal({ onSend, onClose }) {
             )}
           </F>
 
+          <F label="Book now button (optional)">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: addCta ? 10 : 0 }}>
+              <div onClick={() => setAddCta(v => !v)}
+                style={{ width: 36, height: 20, borderRadius: 10, background: addCta ? '#2D7A5F' : '#d1d5db', position: 'relative', transition: 'background .2s', flexShrink: 0, cursor: 'pointer' }}>
+                <div style={{ position: 'absolute', top: 2, left: addCta ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+              </div>
+              <span style={{ fontSize: 12, color: '#555' }}>Add a "Book Now" button to the email</span>
+            </label>
+            {addCta && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={ctaText} onChange={e => setCtaText(e.target.value)} placeholder="Button label"
+                  style={{ ...inp, flex: 1 }} />
+                <input value={ctaUrl} onChange={e => setCtaUrl(e.target.value)} placeholder="https://…"
+                  style={{ ...inp, flex: 2 }} />
+              </div>
+            )}
+          </F>
+
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => setShowPreview(true)} disabled={!subject.trim() && !body.trim()}
               style={{ flex: 1, padding: '11px 0', borderRadius: 10, border: '1px solid #d0d0d0', background: '#fafafa', color: '#555', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
@@ -641,6 +700,8 @@ function CampaignModal({ onSend, onClose }) {
           body={body}
           promoCode={selectedPromo?.code || null}
           promoLabel={promoLabel}
+          ctaText={addCta ? ctaText : null}
+          ctaUrl={addCta ? ctaUrl : null}
           onClose={() => setShowPreview(false)}
         />
       )}
@@ -649,8 +710,8 @@ function CampaignModal({ onSend, onClose }) {
 }
 
 // ── Email preview modal ────────────────────────────────
-function PreviewModal({ subject, body, promoCode, promoLabel, onClose }) {
-  const html = buildPreviewHtml(body, promoCode, promoLabel);
+function PreviewModal({ subject, body, promoCode, promoLabel, ctaText, ctaUrl, onClose }) {
+  const html = buildPreviewHtml(body, promoCode, promoLabel, ctaText, ctaUrl);
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 400 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -673,11 +734,12 @@ function PreviewModal({ subject, body, promoCode, promoLabel, onClose }) {
   );
 }
 
-function StatCard({ label, value, accent }) {
+function StatCard({ label, value, accent, sub }) {
   return (
     <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 12, padding: '14px 16px' }}>
       <div style={{ fontSize: 11, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: accent || '#1a1a1a' }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: '#bbb', marginTop: 3 }}>{sub}</div>}
     </div>
   );
 }

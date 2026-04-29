@@ -47,8 +47,8 @@ const METHODS = [
 ];
 
 export default function HRAdmin() {
-  const { isAdmin, isTech, myTechName, gUser, settings } = useApp();
-  const defaultTab = isTech ? '1099s' : 'payroll';
+  const { isAdmin, isTech, isScheduler, myTechName, gUser, settings } = useApp();
+  const defaultTab = isTech ? 'handbook' : 'payroll';
   const [tab,          setTab]          = useState(defaultTab);
   const [periodDays,   setPeriodDays]   = useState(14);
   const [employees,    setEmployees]    = useState([]);
@@ -74,7 +74,7 @@ export default function HRAdmin() {
     }
   }, []); // eslint-disable-line
 
-  useEffect(() => { loadAppts(); }, [periodDays]); // eslint-disable-line
+  useEffect(() => { if (!isTech) loadAppts(); else setLoading(false); }, [periodDays, isTech]); // eslint-disable-line
 
   async function loadAppts() {
     setLoading(true);
@@ -247,13 +247,24 @@ export default function HRAdmin() {
 
   const grandTotal = payrollRows.reduce((s, r) => s + r.total, 0);
 
+  if (isScheduler) {
+    return (
+      <div style={{ textAlign: 'center', padding: '64px 20px', color: '#aaa', fontSize: 14 }}>
+        <div style={{ fontSize: 32, marginBottom: 16 }}>🔒</div>
+        <div style={{ fontWeight: 600, color: '#555', marginBottom: 8 }}>Access Restricted</div>
+        <div>HR is available to admin staff only.</div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth: 960, margin: '0 auto', paddingBottom: 24 }}>
 
       {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid #e8e8e8', marginBottom: 20, flexShrink: 0, overflowX: 'auto' }}>
         {(isTech ? [
-          { id: '1099s', label: '1099s' },
+          { id: 'handbook', label: 'Handbook' },
+          { id: '1099s',    label: '1099s'    },
         ] : [
           { id: 'payroll',  label: 'Payroll' },
           { id: 'history',  label: 'History', badge: payrollRuns.length || null },
@@ -1112,7 +1123,7 @@ function NewReviewModal({ existing, employees, onSave, onClose }) {
 
 // ── Handbook tab ──────────────────────────────────────
 function HandbookTab({ employees }) {
-  const { showToast } = useApp();
+  const { showToast, isTech, gUser } = useApp();
   const [doc,     setDoc]     = useState({ title: 'Employee Handbook', version: '1.0', content: '' });
   const [sigs,    setSigs]    = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1125,6 +1136,38 @@ function HandbookTab({ employees }) {
       fetchHandbookSigs().then(setSigs),
     ]).catch(() => {}).finally(() => setLoading(false));
   }, []);
+
+  if (!loading && isTech) {
+    const mySig = gUser?.email ? sigs.find(s => s.email === gUser.email && s.version === doc.version) : null;
+    return (
+      <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', padding: '20px 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#1a1a1a' }}>{doc.title || 'Employee Handbook'}</div>
+            <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>Version {doc.version}{doc.publishedAt ? ` · Published ${fmtDateFull(doc.publishedAt)}` : ''}</div>
+          </div>
+          {mySig ? (
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', padding: '4px 12px', borderRadius: 20, background: '#EDFAF3', border: '1px solid #86efac', flexShrink: 0 }}>
+              ✓ Signed {fmtDateFull(mySig.signedAt)}
+            </span>
+          ) : (
+            <span style={{ fontSize: 12, color: '#f59e0b', padding: '4px 12px', borderRadius: 20, background: '#FEF9EC', border: '1px solid #fcd34d', flexShrink: 0 }}>
+              Pending signature
+            </span>
+          )}
+        </div>
+        {doc.content ? (
+          <div style={{ fontSize: 14, color: '#333', lineHeight: 1.75, whiteSpace: 'pre-wrap', borderTop: '1px solid #f0f0f0', paddingTop: 16 }}>
+            {doc.content}
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: '#bbb', fontSize: 13 }}>
+            No handbook content published yet.
+          </div>
+        )}
+      </div>
+    );
+  }
 
   async function handlePublish() {
     setSaving(true);

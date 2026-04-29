@@ -499,6 +499,10 @@ export async function createCampaign(data) {
   await addDoc(CAMPAIGNS_COL, { ...data, createdAt: new Date().toISOString() });
 }
 
+export async function deleteCampaign(id) {
+  return deleteDoc(doc(CAMPAIGNS_COL, id));
+}
+
 const CAMPAIGN_TEMPLATES_COL = tenantCol('campaignTemplates');
 
 export async function fetchCampaignTemplates() {
@@ -691,6 +695,52 @@ export async function fetchPayrollRunsForYear(year) {
     where('endDate', '<=', end),
   ));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ── Tenant registry (root-level, super-admin only) ────
+export async function fetchTenants() {
+  const snap = await getDocs(query(collection(db, 'tenants'), orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function createTenantRecord(id, data) {
+  await setDoc(doc(db, 'tenants', id), { ...data, createdAt: new Date().toISOString() });
+}
+
+export async function updateTenantRecord(id, data) {
+  await setDoc(doc(db, 'tenants', id), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+}
+
+// Seeds the minimum Firestore docs a new tenant needs to function.
+// Safe to call multiple times — skips if already provisioned.
+export async function provisionNewTenant(tenantId, ownerEmail, salonName) {
+  const settingsRef = doc(db, 'tenants', tenantId, 'data', 'settings');
+  const existing    = await getDoc(settingsRef);
+  if (existing.exists()) return false; // already provisioned
+
+  const now = new Date().toISOString();
+  await Promise.all([
+    setDoc(settingsRef, { timeoutMin: 5, createdAt: now }),
+    setDoc(doc(db, 'tenants', tenantId, 'data', 'slides'), { slides: [], def: 0, cur: 0 }),
+    setDoc(doc(db, 'tenants', tenantId, 'data', 'users'), {
+      users: ownerEmail
+        ? [{ email: ownerEmail, role: 'admin', uid: '', addedAt: now }]
+        : [],
+    }),
+  ]);
+  return true;
+}
+
+// Returns lightweight stats for the tenant management dashboard.
+export async function fetchTenantStats(tenantId) {
+  const [usersResult, apptResult] = await Promise.allSettled([
+    getDoc(doc(db, 'tenants', tenantId, 'data', 'users')),
+    getDocs(query(collection(db, 'tenants', tenantId, 'appointments'), limit(3))),
+  ]);
+  const provisioned = usersResult.status === 'fulfilled' && usersResult.value.exists();
+  const userCount   = provisioned ? (usersResult.value.data().users?.length ?? 0) : 0;
+  const apptCount   = apptResult.status === 'fulfilled' ? apptResult.value.size : 0;
+  return { provisioned, userCount, apptCount };
 }
 
 // ── Webfront config (publicly readable) ───────────────
