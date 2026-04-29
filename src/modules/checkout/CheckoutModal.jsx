@@ -5,6 +5,13 @@ import { saveAppointment, fetchClient, saveClient,
          fetchProducts, saveProduct, createReviewRequest } from '../../lib/firestore';
 import { logActivity } from '../../lib/logger';
 import { useApp } from '../../context/AppContext';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { callFn } from '../../lib/firebase';
+
+const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
+  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY)
+  : null;
 
 const PAYMENT_METHODS = [
   { id: 'cash',  label: 'Cash',  icon: '💵' },
@@ -22,7 +29,17 @@ const DISCOUNT_TYPES = [
 
 const QUICK_TIPS = [5, 10, 15, 20];
 
-export default function CheckoutModal({ appt, onComplete, onClose, techs = [] }) {
+export default function CheckoutModal(props) {
+  return (
+    <Elements stripe={stripePromise}>
+      <CheckoutInner {...props} />
+    </Elements>
+  );
+}
+
+function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
+  const stripe   = useStripe();
+  const elements = useElements();
   const [prices,       setPrices]       = useState((appt.services || []).map(s => String(s.price ?? '')));
   const [techNames,    setTechNames]    = useState((appt.services || []).map(() => appt.techName || ''));
   const [discountType, setDiscountType] = useState(null);
@@ -47,6 +64,7 @@ export default function CheckoutModal({ appt, onComplete, onClose, techs = [] })
   const [showPicker,   setShowPicker]   = useState(false);
   const [saving,       setSaving]       = useState(false);
   const [receipt,      setReceipt]      = useState(null);
+  const [cardError,    setCardError]    = useState('');
 
   useEffect(() => {
     if (appt.clientId) {
@@ -152,6 +170,32 @@ export default function CheckoutModal({ appt, onComplete, onClose, techs = [] })
 
   async function complete() {
     setSaving(true);
+    setCardError('');
+    let stripePaymentIntentId = null;
+
+    if (method === 'card' && charged > 0 && stripe && elements) {
+      try {
+        const res = await callFn('createPaymentIntent')({
+          amountCents: Math.round(total * 100),
+          description: `${appt.clientName || 'Walk-in'} · ${appt.techName || ''}`.trim(),
+        });
+        const { error: stripeErr, paymentIntent } = await stripe.confirmCardPayment(
+          res.data.clientSecret,
+          { payment_method: { card: elements.getElement(CardElement) } }
+        );
+        if (stripeErr) {
+          setCardError(stripeErr.message || 'Card declined.');
+          setSaving(false);
+          return;
+        }
+        stripePaymentIntentId = paymentIntent.id;
+      } catch (e) {
+        setCardError(e?.message || 'Card processing failed.');
+        setSaving(false);
+        return;
+      }
+    }
+
     try {
       const updatedServices = (appt.services || []).map((s, i) => ({
         ...s, price: Number(prices[i]) || 0, techName: techNames[i] || appt.techName || '',
@@ -192,6 +236,7 @@ export default function CheckoutModal({ appt, onComplete, onClose, techs = [] })
         techSplit,
         retailProducts,
         paidAt:         new Date().toISOString(),
+        ...(stripePaymentIntentId ? { stripePaymentIntentId } : {}),
       };
       const { id, createdAt, ...data } = appt;
       await saveAppointment(id, { ...data, services: updatedServices, status: 'done', payment });
@@ -503,15 +548,23 @@ export default function CheckoutModal({ appt, onComplete, onClose, techs = [] })
 
           {/* Payment method */}
           <Section title="Payment Method">
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: method === 'card' && stripePromise ? 10 : 0 }}>
               {PAYMENT_METHODS.map(m => (
-                <button key={m.id} onClick={() => setMethod(m.id)}
+                <button key={m.id} onClick={() => { setMethod(m.id); setCardError(''); }}
                   style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '10px 6px', borderRadius: 10, border: `1.5px solid ${method === m.id ? '#3D95CE' : '#e0e0e0'}`, background: method === m.id ? '#EBF4FB' : '#fafafa', cursor: 'pointer', fontFamily: 'inherit' }}>
                   <span style={{ fontSize: 20 }}>{m.icon}</span>
                   <span style={{ fontSize: 10, fontWeight: 600, color: method === m.id ? '#1a5f8a' : '#888' }}>{m.label}</span>
                 </button>
               ))}
             </div>
+            {method === 'card' && stripePromise && charged > 0 && (
+              <div>
+                <div style={{ border: '1px solid #d8d8d8', borderRadius: 10, padding: '11px 12px', background: '#fafafa' }}>
+                  <CardElement options={{ style: { base: { fontSize: '14px', fontFamily: '-apple-system, sans-serif', color: '#1a1a1a', '::placeholder': { color: '#aaa' } }, invalid: { color: '#ef4444' } } }} />
+                </div>
+                {cardError && <div style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>{cardError}</div>}
+              </div>
+            )}
           </Section>
 
           {/* Total summary */}

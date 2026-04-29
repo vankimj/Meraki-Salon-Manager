@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { QR_SIZE } from '../../utils/helpers';
 
-const VENMO_SVG = (
-  <svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width={148} height={44}>
-    <rect width="148" height="44" rx="8" fill="#3D95CE"/>
-    <text x="74" y="30" textAnchor="middle" fontFamily="-apple-system,system-ui,sans-serif" fontSize="24" fontWeight="700" fill="white">Venmo</text>
-  </svg>
-);
+function VenmoSvg() {
+  return (
+    <svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width={148} height={44}>
+      <rect width="148" height="44" rx="8" fill="var(--tm-primary, #2D7A5F)"/>
+      <text x="74" y="30" textAnchor="middle" fontFamily="-apple-system,system-ui,sans-serif" fontSize="24" fontWeight="700" fill="white">Venmo</text>
+    </svg>
+  );
+}
 const IG_SVG = (
   <svg viewBox="0 0 148 44" xmlns="http://www.w3.org/2000/svg" width={148} height={44}>
     <rect width="148" height="44" rx="8" fill="#E1306C"/>
@@ -37,7 +39,7 @@ const WEB_SVG = (
 
 function getItems(slide) {
   const r = [];
-  if (slide.vu) r.push({ id: 'v', url: `https://venmo.com/u/${slide.vu}`,    handle: `@${slide.vu}`, icon: VENMO_SVG });
+  if (slide.vu) r.push({ id: 'v', url: `https://venmo.com/u/${slide.vu}`,    handle: `@${slide.vu}`, icon: <VenmoSvg /> });
   if (slide.iu) r.push({ id: 'i', url: `https://instagram.com/${slide.iu}`,  handle: `@${slide.iu}`, icon: IG_SVG });
   if (slide.fu) r.push({ id: 'f', url: `https://facebook.com/${slide.fu}`,   handle: `@${slide.fu}`, icon: FB_SVG });
   if (slide.hu) r.push({ id: 'h', url: slide.hu, handle: slide.hu.replace(/^https?:\/\//, '').replace(/\/$/, ''), icon: WEB_SVG });

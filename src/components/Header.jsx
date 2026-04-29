@@ -45,7 +45,7 @@ export default function Header({ slides, cur, def, onHome }) {
             const isDefault = i === def;
             return (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                <div style={{ height: 6, borderRadius: 3, width: active ? 18 : 6, background: active ? '#333' : '#ccc', transition: 'width .25s, background .25s', outline: isDefault && !active ? '1.5px solid #f59e0b' : 'none', outlineOffset: 1 }} />
+                <div style={{ height: 6, borderRadius: 3, width: active ? 18 : 6, background: active ? 'var(--tm-primary, #333)' : '#ccc', transition: 'width .25s, background .25s', outline: isDefault && !active ? '1.5px solid #f59e0b' : 'none', outlineOffset: 1 }} />
                 <div style={{ width: 4, height: 4, borderRadius: '50%', background: isDefault ? '#f59e0b' : 'transparent' }} />
               </div>
             );
