@@ -95,6 +95,7 @@ export default function BookingScreen() {
   const [services, setServices] = useState([]);
   const [techs,    setTechs]    = useState([]);
   const [theme,    setTheme]    = useState(getTheme('meraki'));
+  const [webCfg,   setWebCfg]   = useState(null);
 
   // auth
   const [gUser,   setGUser]   = useState(undefined); // undefined=loading, null=signed out
@@ -179,6 +180,7 @@ export default function BookingScreen() {
         setCfg(c);
         setServices(svcs.filter(s => s.active !== false));
         setTechs(emps.filter(e => e.active !== false).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)));
+        setWebCfg(wf || null);
         const t = wf?.autoTheme
           ? (detectAutoTheme() || getTheme(wf.themeId || 'meraki'))
           : getTheme(wf?.themeId || 'meraki');
@@ -245,7 +247,7 @@ export default function BookingScreen() {
       </div>
     </FullCenter>
   );
-  if (confirmed) return <SuccessScreen appt={confirmed} service={service} />;
+  if (confirmed) return <SuccessScreen appt={confirmed} service={service} webCfg={webCfg} />;
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', background: '#f5f6f8', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' }}>
@@ -756,7 +758,12 @@ function Step5Confirm({ service, tech, techs, date, slot, appts, form, submittin
 }
 
 // ── Success ────────────────────────────────────────────
-function SuccessScreen({ appt, service }) {
+function SuccessScreen({ appt, service, webCfg }) {
+  const address = webCfg?.address || '5029 Olentangy River Rd\nColumbus, OH 43214';
+  const addressOneLine = address.replace(/\n/g, ', ');
+  const mapsUrl = webCfg?.mapsUrl || `https://maps.google.com/?q=${encodeURIComponent(addressOneLine)}`;
+  const phone = webCfg?.phone?.trim();
+  const telHref = phone ? `tel:${phone.replace(/[^\d+]/g, '')}` : null;
   return (
     <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', background: '#f5f6f8', display: 'flex', flexDirection: 'column' }}>
       <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', padding: '20px 20px 40px' }}>
@@ -783,14 +790,27 @@ function SuccessScreen({ appt, service }) {
           {[
             { icon: '💅', text: service?.name },
             appt.techName !== 'TBD' && { icon: '👩‍💼', text: appt.techName },
-            { icon: '📍', text: 'Meraki Nail Studio, Columbus OH' },
-            { icon: '📞', text: 'Questions? Give us a call!' },
-          ].filter(Boolean).map(({ icon, text }) => (
-            <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' }}>
-              <span style={{ fontSize: 18, width: 26, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
-              <span style={{ fontSize: 13, color: '#555' }}>{text}</span>
-            </div>
-          ))}
+            { icon: '📍', text: addressOneLine, href: mapsUrl, external: true },
+            phone
+              ? { icon: '📞', text: phone, href: telHref }
+              : { icon: '💬', text: 'Have a question? Chat with us', href: '/?web#chat' },
+          ].filter(Boolean).map(({ icon, text, href, external }) => {
+            const inner = (
+              <>
+                <span style={{ fontSize: 18, width: 26, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+                <span style={{ fontSize: 13, color: href ? 'var(--tm-accent, #3D95CE)' : '#555', textDecoration: href ? 'underline' : 'none' }}>{text}</span>
+              </>
+            );
+            const rowStyle = { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' };
+            return href ? (
+              <a key={text} href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                style={{ ...rowStyle, textDecoration: 'none' }}>
+                {inner}
+              </a>
+            ) : (
+              <div key={text} style={rowStyle}>{inner}</div>
+            );
+          })}
         </div>
 
         <a href="/?web" style={{ display: 'block', textAlign: 'center', fontSize: 15, fontWeight: 700, color: '#fff', textDecoration: 'none', background: 'var(--tm-accent, #3D95CE)', borderRadius: 14, padding: '15px', boxShadow: '0 2px 8px rgba(61,149,206,.35)' }}>
