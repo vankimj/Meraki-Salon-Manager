@@ -129,53 +129,124 @@ export default function ServicesAdmin() {
     setServices(s => s.map(x => x.id === svc.id ? { ...x, active: !x.active } : x));
   }
 
-  // Suggested option templates per service name. Keys are case-insensitive,
-  // hyphen-flexible service names; each template is an array of options
-  // expressed as deltas from the base (priceAdd / durationAdd).
-  // Names align with what merakinailstudio.glossgenius.com surfaces.
+  // Canonical Meraki option templates per service name. Keys are case-insensitive,
+  // hyphen-flexible. Each option has an absolute price + duration (overrides base).
+  // Sourced verbatim from merakinailstudio.glossgenius.com — keep this map as the
+  // single source of truth and re-run 'Apply Meraki options' after edits.
   const SUGGESTED = {
-    'gel x':                   [{ name: 'Gel-X only',                 priceAdd:  0, durationAdd:  0 },
-                                { name: 'Gel-X with removal',         priceAdd: 10, durationAdd: 20 },
-                                { name: 'Gel-X + Manicure',           priceAdd: 25, durationAdd: 30 }],
-    'structured gel manicure': [{ name: 'Structured gel only',        priceAdd:  0, durationAdd:  0 },
-                                { name: 'Structured gel + removal',   priceAdd: 10, durationAdd: 20 },
-                                { name: 'Structured gel + manicure',  priceAdd: 20, durationAdd: 30 }],
-    'gel manicure':            [{ name: 'Gel manicure only',          priceAdd:  0, durationAdd:  0 },
-                                { name: 'Gel manicure + removal',     priceAdd: 10, durationAdd: 20 }],
-    'dip':                     [{ name: 'Dip only',                   priceAdd:  0, durationAdd:  0 },
-                                { name: 'Dip + removal',              priceAdd: 10, durationAdd: 20 },
-                                { name: 'Dip + manicure',             priceAdd: 25, durationAdd: 30 }],
-    'gel polish change':       [{ name: 'Polish change only',         priceAdd:  0, durationAdd:  0 },
-                                { name: 'Polish change + removal',    priceAdd: 10, durationAdd: 20 }],
-    'spa pedicure':            [{ name: 'Regular polish',             priceAdd:  0, durationAdd:  0 },
-                                { name: 'With gel polish',            priceAdd: 10, durationAdd: 15 }],
-    'signature pedicure':      [{ name: 'Regular polish',             priceAdd:  0, durationAdd:  0 },
-                                { name: 'With gel polish',            priceAdd: 10, durationAdd: 15 }],
-    'deluxe pedicure':         [{ name: 'Regular polish',             priceAdd:  0, durationAdd:  0 },
-                                { name: 'With gel polish',            priceAdd: 10, durationAdd: 15 }],
+    'gel x': [
+      { name: 'Gel X Only',                       price: 70, duration: 60 },
+      { name: 'Gel X With Removal',               price: 80, duration: 75 },
+      { name: 'Gel X + Mani',                     price: 80, duration: 70 },
+      { name: 'Gel X + Removal + Mani',           price: 90, duration: 80 },
+    ],
+    'structured gel manicure': [
+      { name: 'Structure Gel Mani',               price: 50, duration: 60 },
+      { name: 'Structure Gel Mani + Removal',     price: 60, duration: 75 },  // price inferred — verify
+    ],
+    'gel manicure': [
+      { name: 'Gel Manicure',                     price: 40, duration: 35 },
+      { name: 'Gel Manicure With Removal',        price: 40, duration: 40 },
+    ],
+    'dip': [
+      { name: 'Dip only',                         price: 50, duration: 45 },
+      { name: 'Dip + Removal',                    price: 50, duration: 55 },
+      { name: 'Dip Mani',                         price: 60, duration: 50 },
+      { name: 'Dip Removal + Manicure',           price: 60, duration: 60 },
+      { name: 'Dip Extensions',                   price: 60, duration: 60 },
+      { name: 'Dip Extension + Removal',          price: 60, duration: 70 },
+      { name: 'Dip Extension + Manicure',         price: 70, duration: 70, priceFrom: true },
+      { name: 'Dip Extension + Removal + Mani',   price: 70, duration: 80 },
+      { name: 'Dip Removal',                      price: 15, duration: 10 },
+    ],
+    'signature manicure': [
+      { name: 'Regular Polish',                   price: 32, duration: 35 },
+      { name: 'With Gel Polish',                  price: 52, duration: 45 },  // price inferred — verify
+    ],
+    'deluxe manicure': [
+      { name: 'Regular Polish',                   price: 40, duration: 40 },
+      { name: 'With Gel Polish',                  price: 60, duration: 45 },
+    ],
+    'spa pedicure': [
+      { name: 'Regular Polish',                   price: 40, duration: 35 },
+      { name: 'With Gel Polish',                  price: 60, duration: 45 },
+    ],
+    'signature pedicure': [
+      { name: 'Regular Polish',                   price: 52, duration: 45 },
+      { name: 'Gel Polish',                       price: 72, duration: 60 },  // price inferred — verify
+    ],
+    'deluxe pedicure': [
+      { name: 'Regular Polish',                   price: 65, duration: 60 },
+      { name: 'With Gel Polish',                  price: 85, duration: 70 },
+    ],
+    'nail repair': [
+      { name: 'Gel Polish Repair',                price:  5, duration: 15 },
+      { name: 'Dip Nail Repair',                  price:  5, duration: 15 },
+      { name: 'Gel X Nail Repair',                price:  7, duration: 20 },
+      { name: 'Structured Gel Repair',            price:  7, duration: 20 },
+    ],
+    'nail art': [
+      { name: 'Nail Art (price varies)',          price:  5, duration: 25, priceFrom: true },
+      { name: 'French Tips',                      price: 15, duration: 25, priceFrom: true },
+      { name: 'Chrome',                           price: 15, duration: 10 },
+      { name: 'Cat Eye',                          price: 15, duration: 10 },
+      { name: 'Rhine Stones (price varies)',      price:  5, duration: 10, priceFrom: true },
+      { name: '3D Flowers / Bows (price varies)', price:  5, duration: 10, priceFrom: true },
+      { name: 'Glitter Ombré',                    price: 15, duration: 10 },
+      { name: 'Air Brush',                        price: 25, duration: 10, priceFrom: true },
+      { name: 'Ombre',                            price: 15, duration: 10 },
+    ],
+    'removal': [
+      { name: 'Acrylic',                          price: 20, duration: 20 },
+      { name: 'Gel X',                            price: 20, duration: 20 },
+      { name: 'Dip',                              price: 15, duration: 20 },
+      { name: 'Gel Removal',                      price: 10, duration: 20 },
+      { name: 'Structured Gel Removal',           price: 15, duration: 20 },
+      { name: 'Polygel / Hard gel Removal',       price: 20, duration: 25 },  // price inferred — verify
+    ],
   };
 
   function normalizeKey(s) {
     return (s || '').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  function optionsMatchTemplate(existing, tpl) {
+    if (!Array.isArray(existing) || existing.length !== tpl.length) return false;
+    return tpl.every((opt, i) => {
+      const cur = existing[i] || {};
+      return cur.name === opt.name
+        && (cur.price ?? null) === (opt.price ?? null)
+        && (cur.duration ?? null) === (opt.duration ?? null)
+        && !!cur.priceFrom === !!opt.priceFrom;
+    });
+  }
+
   async function applySuggestedOptions() {
-    const eligible = services.filter(s => SUGGESTED[normalizeKey(s.name)] && (!s.options || s.options.length === 0));
-    if (eligible.length === 0) {
-      showToast('No services need options — every match already has them.');
+    // Anything in SUGGESTED whose stored options don't match (missing or stale).
+    const targets = services.filter(s => {
+      const tpl = SUGGESTED[normalizeKey(s.name)];
+      if (!tpl) return false;
+      return !optionsMatchTemplate(s.options, tpl);
+    });
+    if (targets.length === 0) {
+      showToast('All matched services are already up to date.');
       return;
     }
-    const summary = eligible.map(s => `• ${s.name} — ${SUGGESTED[normalizeKey(s.name)].length} options`).join('\n');
-    if (!confirm(`Apply suggested options to ${eligible.length} service${eligible.length === 1 ? '' : 's'}?\n\n${summary}\n\nYou can edit each one in the service editor after.`)) return;
+    const summary = targets.map(s => {
+      const tpl = SUGGESTED[normalizeKey(s.name)];
+      const had = (s.options || []).length;
+      return `• ${s.name} — ${had ? `replacing ${had} options with ${tpl.length}` : `adding ${tpl.length} options`}`;
+    }).join('\n');
+    if (!confirm(`Apply Meraki canonical options to ${targets.length} service${targets.length === 1 ? '' : 's'}?\n\n${summary}\n\nExisting options on these services will be replaced.`)) return;
     try {
-      for (const svc of eligible) {
+      for (const svc of targets) {
         const tpl = SUGGESTED[normalizeKey(svc.name)];
         const opts = tpl.map((o, i) => ({ id: `opt_${svc.id}_${i}`, ...o }));
         await saveService(svc.id, { options: opts });
       }
       const fresh = await fetchServices();
       setServices(fresh);
-      showToast(`Applied options to ${eligible.length} service${eligible.length === 1 ? '' : 's'}`);
+      showToast(`Updated ${targets.length} service${targets.length === 1 ? '' : 's'}`);
     } catch (e) {
       showToast('Failed: ' + (e.message || 'unknown'), 4000);
     }
@@ -384,27 +455,31 @@ function ServiceOptionsEditor({ options, onChange }) {
   }
   function remove(idx) { onChange(options.filter((_, i) => i !== idx)); }
   function add() {
-    onChange([...options, { id: `opt_${Date.now()}_${options.length}`, name: '', priceAdd: 0, durationAdd: 0 }]);
+    onChange([...options, { id: `opt_${Date.now()}_${options.length}`, name: '', price: 0, duration: 0, priceFrom: false }]);
   }
 
   return (
     <div style={{ background: '#fafafa', border: '1px solid #ececec', borderRadius: 10, padding: 10 }}>
       {options.length === 0 && (
         <div style={{ fontSize: 11, color: '#aaa', padding: '6px 4px 10px', lineHeight: 1.5 }}>
-          No options yet. Use options to offer variants like Short/Medium/Long or add-ons (Nail Art, Removal). Each option can adjust price and duration.
+          No options yet. Use options to offer variants like Short/Medium/Long or add-ons (Nail Art, Removal). Each option has its own price and duration.
         </div>
       )}
       {options.map((opt, i) => (
         <div key={opt.id || i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
           <input value={opt.name || ''} onChange={e => patch(i, { name: e.target.value })}
-            placeholder="Option name (e.g. Short, Add-on Nail Art)"
+            placeholder="Option name (e.g. Gel-X with removal)"
             style={{ flex: 2, minWidth: 0, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 6, padding: '7px 9px', fontSize: 12, background: '#fff' }} />
-          <input type="number" value={opt.priceAdd ?? 0} onChange={e => patch(i, { priceAdd: Number(e.target.value) })}
-            title="Price adjustment ($)" placeholder="$"
+          <input type="number" value={opt.price ?? 0} onChange={e => patch(i, { price: Number(e.target.value) })}
+            title="Price ($)" placeholder="$"
             style={{ width: 64, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 6, padding: '7px 9px', fontSize: 12, background: '#fff' }} />
-          <input type="number" value={opt.durationAdd ?? 0} onChange={e => patch(i, { durationAdd: Number(e.target.value) })}
-            title="Duration adjustment (min)" placeholder="min"
+          <input type="number" value={opt.duration ?? 0} onChange={e => patch(i, { duration: Number(e.target.value) })}
+            title="Duration (min)" placeholder="min"
             style={{ width: 56, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 6, padding: '7px 9px', fontSize: 12, background: '#fff' }} />
+          <label title="Show price as starting-from (e.g. $15+)" style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: '#555', cursor: 'pointer', userSelect: 'none' }}>
+            <input type="checkbox" checked={!!opt.priceFrom} onChange={e => patch(i, { priceFrom: e.target.checked })} />
+            +
+          </label>
           <button onClick={() => remove(i)} title="Remove option"
             style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#ef4444', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit', flexShrink: 0 }}>×</button>
         </div>
@@ -415,7 +490,7 @@ function ServiceOptionsEditor({ options, onChange }) {
       </button>
       {options.length > 0 && (
         <div style={{ fontSize: 10, color: '#aaa', marginTop: 8, lineHeight: 1.5 }}>
-          Price/duration values are added to the base. Use 0 for "no change". Negative numbers are allowed (e.g. -10 for a discount).
+          Each option's price + duration overrides the base service. Check '+' to show the price as "from $X" for variable services like Nail Art.
         </div>
       )}
     </div>

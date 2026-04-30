@@ -520,7 +520,7 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect })
                     {opt.name || 'Option'}
                   </div>
                   <div style={{ fontSize: 11, opacity: isOptSel ? 0.95 : 0.65, fontWeight: 500 }}>
-                    ${price} · {duration} min
+                    ${price}{opt.priceFrom ? '+' : ''} · {duration} min
                   </div>
                 </button>
               );
