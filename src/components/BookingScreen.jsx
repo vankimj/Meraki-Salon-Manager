@@ -260,7 +260,7 @@ export default function BookingScreen() {
         <CrossDevicePrompt onDone={() => setEmailLinkDevice(false)} />
       )}
 
-      <div style={{ maxWidth: 720, margin: '0 auto', padding: '16px 16px 48px' }}>
+      <div style={{ maxWidth: 960, margin: '0 auto', padding: '16px 16px 48px' }}>
         {/* Returning customer welcome */}
         {gUser && client && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f0f9f5', border: '1px solid #c3e6d8', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
@@ -332,7 +332,7 @@ export default function BookingScreen() {
 function Header({ step, cfg, gUser, client, onSignIn, onSignOut }) {
   return (
     <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', position: 'sticky', top: 0, zIndex: 10, boxShadow: '0 2px 12px rgba(0,0,0,.18)' }}>
-      <div style={{ maxWidth: 720, margin: '0 auto', padding: '14px 16px 10px' }}>
+      <div style={{ maxWidth: 960, margin: '0 auto', padding: '14px 16px 10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           {/* Logo */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -402,7 +402,7 @@ function Step1Service({ services, selected, onSelect }) {
               <span style={{ fontSize: 13, fontWeight: 700, color: '#333', letterSpacing: '.02em' }}>{category}</span>
               <div style={{ flex: 1, height: 1, background: '#e8e8e8' }} />
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 10 }}>
               {svcs.map(s => (
                 <ServiceCard key={s.id} svc={s} color={color} selected={selected?.id === s.id} onSelect={() => onSelect(s)} />
               ))}
@@ -548,15 +548,17 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
   return (
     <div>
       <StepTitle>Pick a date &amp; time</StepTitle>
-      <BookingCalendar value={date} onChange={onDateChange} />
-
-      {date && (
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#555', marginBottom: 12 }}>{fmtDate(date)}</div>
-          {appts === null ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}><Spinner /></div>
-          ) : hasAny ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 8 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'flex-start' }}>
+        <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+          <BookingCalendar value={date} onChange={onDateChange} />
+        </div>
+        {date && (
+          <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#555', marginBottom: 12 }}>{fmtDate(date)}</div>
+            {appts === null ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}><Spinner /></div>
+            ) : hasAny ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 8 }}>
               {allSlots.map(m => {
                 const avail = isAvailable(m);
                 const isSel = slot === m;
@@ -583,6 +585,7 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
           )}
         </div>
       )}
+      </div>
       <div style={{ marginTop: 20 }}><BackBtn onClick={onBack} /></div>
     </div>
   );
@@ -816,7 +819,7 @@ function BookingCalendar({ value, onChange }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(yr, mon, d));
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 16, padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,.05)', maxWidth: 460, margin: '0 auto' }}>
+    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 16, padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,.05)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <button onClick={prevMonth}
           style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#f0f0f0', color: '#555', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>
