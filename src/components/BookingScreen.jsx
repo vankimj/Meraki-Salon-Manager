@@ -4,7 +4,7 @@ import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut as fbS
 import { auth } from '../lib/firebase';
 import {
   fetchServices, fetchEmployees, fetchBookingConfig, fetchWebfrontConfig,
-  fetchAppointments, createAppointment, fetchClientByEmail,
+  fetchAppointments, createAppointment, fetchClientByEmail, createClient,
 } from '../lib/firestore';
 import { getTheme, detectAutoTheme } from '../lib/themes';
 import { groupByCategory, formatPrice, formatDuration } from '../utils/serviceHelpers';
@@ -212,27 +212,51 @@ export default function BookingScreen() {
     let assignedTech = tech;
     if (tech === null && appts) assignedTech = firstFreeTech(eligibleTechs, slot, dur, appts);
     const h = Math.floor(slot / 60), m = slot % 60;
-    const appt = {
-      date,
-      startTime:   `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
-      duration:    dur,
-      techId:      assignedTech?.id   || null,
-      techName:    assignedTech?.name || 'TBD',
-      clientId:    client?.id || '',
-      clientName:  form.name.trim(),
-      clientPhone: form.phone.trim(),
-      clientEmail: form.email.trim() || null,
-      services:    [{ id: service.id, name: service.name, price: service.basePrice || 0, duration: dur }],
-      status:      'scheduled',
-      notes:       form.notes.trim() || null,
-      source:      'online_booking',
-      createdAt:   new Date().toISOString(),
-      updatedAt:   new Date().toISOString(),
-    };
+
     setSubmitting(true);
-    try { await createAppointment(appt); setConfirmed(appt); }
-    catch { alert('Booking failed. Please try again or call us.'); }
-    finally { setSubmitting(false); }
+    try {
+      // Auto-create a client record for signed-in users whose email isn't on file yet,
+      // so they appear in the Clients list and link properly on the appointment.
+      let clientId = client?.id || '';
+      if (!clientId && gUser?.email && form.name.trim() && form.phone.trim()) {
+        try {
+          clientId = await createClient({
+            name:    form.name.trim(),
+            phone:   form.phone.trim(),
+            email:   form.email.trim() || gUser.email,
+            picture: gUser.photoURL || '',
+            source:  'online_booking',
+          });
+        } catch (e) {
+          console.error('[Booking] auto-create client failed:', e);
+          // Non-fatal — we still book the appointment, just without a clientId link.
+        }
+      }
+
+      const appt = {
+        date,
+        startTime:   `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
+        duration:    dur,
+        techId:      assignedTech?.id   || null,
+        techName:    assignedTech?.name || 'TBD',
+        clientId,
+        clientName:  form.name.trim(),
+        clientPhone: form.phone.trim(),
+        clientEmail: form.email.trim() || gUser?.email || null,
+        services:    [{ id: service.id, name: service.name, price: service.basePrice || 0, duration: dur }],
+        status:      'scheduled',
+        notes:       form.notes.trim() || null,
+        source:      'online_booking',
+        createdAt:   new Date().toISOString(),
+        updatedAt:   new Date().toISOString(),
+      };
+      await createAppointment(appt);
+      setConfirmed(appt);
+    } catch {
+      alert('Booking failed. Please try again or call us.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const eligibleTechs = techsForService(techs, service);
