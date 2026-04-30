@@ -29,13 +29,29 @@ function greeting() {
 const PIN_LOCKED_VIEWS = new Set(['hr', 'reports']);
 
 export default function HomeScreen({ onNavigate, onAdmin }) {
-  const { gUser, isAdmin, isReadOnly, isTech, isScheduler, settings, totalChatUnread, activeTheme: t, showToast } = useApp();
+  const { gUser, isAdmin, isReadOnly, isTech, isScheduler, settings, totalChatUnread, activeTheme: t, showToast, realIsAdmin, viewAs, setViewAs, users } = useApp();
   const [showAuth,     setShowAuth]     = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [pinTarget,    setPinTarget]    = useState(null);
   const unlockedRef = useRef(new Set());
   const canManage = isAdmin || isReadOnly;
   const isPro = !settings?.plan || settings.plan === 'pro';
+  const techUsers = users.filter(u => u.role === 'tech' && u.techName);
+
+  function previewLabel(va) {
+    if (!va) return '';
+    if (va.role === 'tech') return va.techName;
+    if (va.role === 'scheduler') return 'Scheduler';
+    return 'Read-only';
+  }
+
+  function parsePreview(val) {
+    if (!val) return null;
+    if (val === 'scheduler') return { role: 'scheduler' };
+    if (val === 'readonly') return { role: 'readonly' };
+    if (val.startsWith('tech:')) return { role: 'tech', techName: val.slice(5) };
+    return null;
+  }
 
   function navigate(viewId) {
     const mod = MODULES.find(m => m.id === viewId);
@@ -74,6 +90,23 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
               <span style={{ fontSize: 17 }}>⚙</span> Admin
             </button>
           )}
+          {realIsAdmin && viewAs && (
+            <button onClick={() => setViewAs(null)} title="Exit preview"
+              style={{ height: 40, borderRadius: 20, border: 'none', background: '#f59e0b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
+              ← Exit {previewLabel(viewAs)}
+            </button>
+          )}
+          {realIsAdmin && !viewAs && (
+            <select value="" onChange={e => { const v = parsePreview(e.target.value); if (v) setViewAs(v); }}
+              style={{ height: 40, borderRadius: 20, border: '1px solid #e0e0e0', background: '#fafafa', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#888', fontFamily: 'inherit', padding: '0 12px', outline: 'none' }}>
+              <option value="">👤 Preview as…</option>
+              {techUsers.map(u => (
+                <option key={u.email} value={`tech:${u.techName}`}>👩‍💼 {u.techName}</option>
+              ))}
+              <option value="scheduler">📅 Scheduler</option>
+              <option value="readonly">👁 Read-only</option>
+            </select>
+          )}
           <button onClick={() => setShowFeedback(true)} title="Report a bug or idea"
             style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-accent, #3D95CE)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
             <span style={{ fontSize: 17 }}>💬</span> Feedback
@@ -81,6 +114,14 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           {gUser && <UserMenu />}
         </div>
       </div>
+
+      {/* Preview-as banner */}
+      {realIsAdmin && viewAs && (
+        <div style={{ background: '#fef3c7', borderBottom: '1px solid #fcd34d', padding: '6px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, fontSize: 12, color: '#92400e', width: '100%', boxSizing: 'border-box' }}>
+          <span>👤 Previewing as: <strong>{previewLabel(viewAs)}</strong> — changes are real; only the UI is restricted</span>
+          <button onClick={() => setViewAs(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, color: '#92400e', fontFamily: 'inherit', fontSize: 12, padding: '0 4px' }}>✕ Exit</button>
+        </div>
+      )}
 
       {/* Greeting */}
       {gUser && (

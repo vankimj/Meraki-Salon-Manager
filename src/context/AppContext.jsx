@@ -35,7 +35,7 @@ export function AppProvider({ children }) {
   const [handbookDoc,     setHandbookDoc]     = useState(null);
   const [portalClientId,    setPortalClientId]    = useState(null);
   const [totalChatUnread,   setTotalChatUnread]   = useState(0);
-  const [viewAs,            setViewAs]            = useState(null); // null | 'tech'
+  const [viewAs,            setViewAs]            = useState(null); // null | { role: 'tech', techName: string } | { role: 'scheduler' } | { role: 'readonly' }
 
   const logoutTimer    = useRef(null);
   const inactivityTimer= useRef(null);
@@ -363,10 +363,10 @@ export function AppProvider({ children }) {
   const _rec        = gUser ? users.find(u => u.email === gUser.email) : null;
   const realIsAdmin = _rec?.role === 'admin';
   const isAdmin     = viewAs ? false : realIsAdmin;
-  const isReadOnly  = viewAs ? false : ['admin', 'readonly'].includes(_rec?.role);
-  const isTech      = viewAs === 'tech'      ? true : _rec?.role === 'tech';
-  const isScheduler = viewAs === 'scheduler' ? true : _rec?.role === 'scheduler';
-  const myTechName  = viewAs ? null : (_rec?.techName || null);
+  const isReadOnly  = viewAs ? viewAs.role === 'readonly' : ['admin', 'readonly'].includes(_rec?.role);
+  const isTech      = viewAs?.role === 'tech'      ? true : _rec?.role === 'tech';
+  const isScheduler = viewAs?.role === 'scheduler' ? true : _rec?.role === 'scheduler';
+  const myTechName  = viewAs?.role === 'tech' ? (viewAs.techName || null) : (viewAs ? null : (_rec?.techName || null));
   const isPortalUser = !!portalClientId;
 
   return (
