@@ -3,9 +3,10 @@ import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut as fbS
          sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import {
-  fetchServices, fetchEmployees, fetchBookingConfig,
+  fetchServices, fetchEmployees, fetchBookingConfig, fetchWebfrontConfig,
   fetchAppointments, createAppointment, fetchClientByEmail,
 } from '../lib/firestore';
+import { getTheme, detectAutoTheme } from '../lib/themes';
 import { groupByCategory, formatPrice, formatDuration } from '../utils/serviceHelpers';
 
 // ── constants ──────────────────────────────────────────
@@ -14,7 +15,7 @@ const BOOKING_END   = 20 * 60;
 const SLOT_STEP     = 30;
 
 const CATEGORY_COLORS = {
-  'Manicures': '#2D7A5F', 'Pedicures': '#3D95CE', 'Gel Nails': '#8B5CF6',
+  'Manicures': 'var(--tm-primary, #2D7A5F)', 'Pedicures': 'var(--tm-accent, #3D95CE)', 'Gel Nails': '#8B5CF6',
   'Acrylics':  '#F59E0B', 'Nail Art':  '#EC4899', 'Waxing':    '#14B8A6',
   'Eyebrows':  '#6366F1',
 };
@@ -47,6 +48,19 @@ function fmtDate(str) {
 function todayDate() { const d = new Date(); d.setHours(0,0,0,0); return d; }
 function dateStr(d) { return d.toISOString().slice(0, 10); }
 
+function firstName(s) {
+  return (s || '').trim().split(/\s+/)[0].toLowerCase();
+}
+
+function applyThemeVars(theme) {
+  const r = document.documentElement;
+  r.style.setProperty('--tm-primary',   theme.primary);
+  r.style.setProperty('--tm-accent',    theme.accent);
+  r.style.setProperty('--tm-grad',      `linear-gradient(135deg,${theme.gradStart},${theme.gradEnd})`);
+  r.style.setProperty('--tm-grad-dark', `linear-gradient(135deg,${theme.dark},${theme.gradStart})`);
+  r.style.setProperty('--tm-dark',      theme.dark);
+}
+
 function isTechFreeAt(tech, slotMins, durationMins, appts) {
   const relevant = appts.filter(a => a.techId === tech.id || a.techName === tech.name);
   const end = slotMins + durationMins;
@@ -71,6 +85,7 @@ export default function BookingScreen() {
   const [cfg,      setCfg]      = useState(null);
   const [services, setServices] = useState([]);
   const [techs,    setTechs]    = useState([]);
+  const [theme,    setTheme]    = useState(getTheme('meraki'));
 
   // auth
   const [gUser,   setGUser]   = useState(undefined); // undefined=loading, null=signed out
@@ -126,14 +141,21 @@ export default function BookingScreen() {
       setGUser(user || null);
       if (user?.email) {
         fetchClientByEmail(user.email).then(c => {
-          setClient(c);
-          if (c) setForm(f => ({
+          // Defensive: only treat as a returning client if the names plausibly match.
+          // Guards against shared/typo'd email entries pointing at someone else's record.
+          const matches = c && (!user.displayName || firstName(c.name) === firstName(user.displayName));
+          setClient(matches ? c : null);
+          if (matches) setForm(f => ({
             ...f,
             name:  f.name  || c.name  || user.displayName || '',
             phone: f.phone || c.phone || '',
             email: user.email,
           }));
-          else setForm(f => ({ ...f, email: f.email || user.email }));
+          else setForm(f => ({
+            ...f,
+            name:  f.name  || user.displayName || '',
+            email: f.email || user.email,
+          }));
         }).catch(() => {});
       } else {
         setClient(null);
@@ -143,11 +165,16 @@ export default function BookingScreen() {
   }, []);
 
   useEffect(() => {
-    Promise.all([fetchBookingConfig(), fetchServices(), fetchEmployees()])
-      .then(([c, svcs, emps]) => {
+    Promise.all([fetchBookingConfig(), fetchServices(), fetchEmployees(), fetchWebfrontConfig()])
+      .then(([c, svcs, emps, wf]) => {
         setCfg(c);
         setServices(svcs.filter(s => s.active !== false));
         setTechs(emps.filter(e => e.active !== false).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)));
+        const t = wf?.autoTheme
+          ? (detectAutoTheme() || getTheme(wf.themeId || 'meraki'))
+          : getTheme(wf?.themeId || 'meraki');
+        setTheme(t);
+        applyThemeVars(t);
       })
       .catch(() => setCfg({ enabled: false }))
       .finally(() => setLoading(false));
@@ -222,18 +249,18 @@ export default function BookingScreen() {
         <CrossDevicePrompt onDone={() => setEmailLinkDevice(false)} />
       )}
 
-      <div style={{ maxWidth: 560, margin: '0 auto', padding: '16px 16px 48px' }}>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '16px 16px 48px' }}>
         {/* Returning customer welcome */}
         {gUser && client && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f0f9f5', border: '1px solid #c3e6d8', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
             {gUser.photoURL
               ? <img src={gUser.photoURL} alt="" style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-              : <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#2D7A5F', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, flexShrink: 0 }}>
+              : <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--tm-primary, #2D7A5F)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, flexShrink: 0 }}>
                   {client.name?.[0] || '?'}
                 </div>
             }
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a6040' }}>Welcome back, {client.name?.split(' ')[0]}!</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a6040' }}>Welcome back, {gUser.displayName?.split(' ')[0] || client.name?.split(' ')[0]}!</div>
               <div style={{ fontSize: 11, color: '#4a9070' }}>Your info will be pre-filled at checkout</div>
             </div>
           </div>
@@ -291,8 +318,8 @@ export default function BookingScreen() {
 // ── Header ─────────────────────────────────────────────
 function Header({ step, cfg, gUser, client, onSignIn, onSignOut }) {
   return (
-    <div style={{ background: 'linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF)', position: 'sticky', top: 0, zIndex: 10, boxShadow: '0 2px 12px rgba(0,0,0,.18)' }}>
-      <div style={{ maxWidth: 560, margin: '0 auto', padding: '14px 16px 10px' }}>
+    <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', position: 'sticky', top: 0, zIndex: 10, boxShadow: '0 2px 12px rgba(0,0,0,.18)' }}>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '14px 16px 10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           {/* Logo */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -425,20 +452,20 @@ function Step2Stylist({ techs, selected, onSelect, onBack }) {
         display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',
         borderRadius: 14, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', width: '100%',
         marginBottom: 12,
-        border: `1.5px solid ${selected === null ? '#2D7A5F' : '#e8e8e8'}`,
+        border: `1.5px solid ${selected === null ? 'var(--tm-primary, #2D7A5F)' : '#e8e8e8'}`,
         background: selected === null ? '#f0f9f5' : '#fff',
-        boxShadow: selected === null ? '0 0 0 2px #2D7A5F30' : '0 1px 4px rgba(0,0,0,.05)',
+        boxShadow: selected === null ? '0 0 0 2px var(--tm-primary, #2D7A5F)30' : '0 1px 4px rgba(0,0,0,.05)',
       }}>
         <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, flexShrink: 0 }}>💅</div>
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a1a', marginBottom: 2 }}>No preference</div>
           <div style={{ fontSize: 12, color: '#888' }}>We'll assign an available stylist for you</div>
         </div>
-        {selected === null && <div style={{ marginLeft: 'auto', color: '#2D7A5F', fontSize: 20, paddingRight: 4 }}>✓</div>}
+        {selected === null && <div style={{ marginLeft: 'auto', color: 'var(--tm-primary, #2D7A5F)', fontSize: 20, paddingRight: 4 }}>✓</div>}
       </button>
 
       {/* Tech grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
         {techs.map(t => (
           <TechCard key={t.id} tech={t} selected={selected?.id === t.id} onSelect={() => onSelect(t)} />
         ))}
@@ -453,13 +480,13 @@ function TechCard({ tech, selected, onSelect }) {
     <button onClick={onSelect} style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '16px 12px',
       borderRadius: 14, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center',
-      border: `1.5px solid ${selected ? '#2D7A5F' : '#e8e8e8'}`,
+      border: `1.5px solid ${selected ? 'var(--tm-primary, #2D7A5F)' : '#e8e8e8'}`,
       background: selected ? '#f0f9f5' : '#fff',
-      boxShadow: selected ? '0 0 0 2px #2D7A5F30' : '0 1px 4px rgba(0,0,0,.05)',
+      boxShadow: selected ? '0 0 0 2px var(--tm-primary, #2D7A5F)30' : '0 1px 4px rgba(0,0,0,.05)',
       position: 'relative',
     }}>
       {selected && (
-        <div style={{ position: 'absolute', top: 8, right: 8, width: 20, height: 20, borderRadius: '50%', background: '#2D7A5F', color: '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
+        <div style={{ position: 'absolute', top: 8, right: 8, width: 20, height: 20, borderRadius: '50%', background: 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
       )}
       <TechAvatar tech={tech} size={64} />
       <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginTop: 10, lineHeight: 1.3 }}>{tech.name}</div>
@@ -493,7 +520,7 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
           {appts === null ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}><Spinner /></div>
           ) : hasAny ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 8 }}>
               {allSlots.map(m => {
                 const avail = isAvailable(m);
                 const isSel = slot === m;
@@ -501,8 +528,8 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
                   <button key={m} onClick={() => avail && onSlotSelect(m)} disabled={!avail}
                     style={{
                       padding: '12px 4px', borderRadius: 10, fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
-                      border: `1.5px solid ${isSel ? '#2D7A5F' : avail ? '#c3e6d8' : '#ececec'}`,
-                      background: isSel ? '#2D7A5F' : avail ? '#f0f9f5' : '#fafafa',
+                      border: `1.5px solid ${isSel ? 'var(--tm-primary, #2D7A5F)' : avail ? '#c3e6d8' : '#ececec'}`,
+                      background: isSel ? 'var(--tm-primary, #2D7A5F)' : avail ? '#f0f9f5' : '#fafafa',
                       color: isSel ? '#fff' : avail ? '#1a6040' : '#ccc',
                       cursor: avail ? 'pointer' : 'default',
                     }}>
@@ -540,7 +567,7 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
         <div style={{ background: '#fff', border: '1.5px solid #c3e6d8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
           <div style={{ padding: '14px 16px', background: '#f0f9f5', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#1a6040' }}>Using your saved info</div>
-            <button onClick={() => setEditing(true)} style={{ fontSize: 12, color: '#3D95CE', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Edit</button>
+            <button onClick={() => setEditing(true)} style={{ fontSize: 12, color: 'var(--tm-accent, #3D95CE)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Edit</button>
           </div>
           {[
             { icon: '👤', value: form.name  || client.name  },
@@ -608,7 +635,7 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
                 <button
                   onClick={() => hasEmail && onSendEmailLink(form.email)}
                   disabled={!hasEmail || emailLinkState === 'sending'}
-                  style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, border: 'none', background: hasEmail && emailLinkState !== 'sending' ? '#2D7A5F' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: hasEmail && emailLinkState !== 'sending' ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                  style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, border: 'none', background: hasEmail && emailLinkState !== 'sending' ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: hasEmail && emailLinkState !== 'sending' ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                   {emailLinkState === 'sending' ? 'Sending…' : 'Send link ✉️'}
                 </button>
               </div>
@@ -627,7 +654,7 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
       )}
 
       <button onClick={onNext} disabled={!valid}
-        style={{ width: '100%', padding: '15px', borderRadius: 12, border: 'none', background: valid ? '#2D7A5F' : '#d0d0d0', color: '#fff', fontSize: 16, fontWeight: 700, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit', marginBottom: 10 }}>
+        style={{ width: '100%', padding: '15px', borderRadius: 12, border: 'none', background: valid ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 16, fontWeight: 700, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit', marginBottom: 10 }}>
         Review Booking →
       </button>
       <BackBtn onClick={onBack} />
@@ -647,7 +674,7 @@ function Step5Confirm({ service, tech, techs, date, slot, appts, form, submittin
       {/* Appointment card */}
       <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 16, overflow: 'hidden', marginBottom: 16, boxShadow: '0 2px 12px rgba(0,0,0,.06)' }}>
         {/* Service banner */}
-        <div style={{ background: `linear-gradient(135deg,${CATEGORY_COLORS[service?.category] || '#2D7A5F'},#3D95CE)`, padding: '16px 20px' }}>
+        <div style={{ background: `linear-gradient(135deg,${CATEGORY_COLORS[service?.category] || 'var(--tm-primary, #2D7A5F)'},var(--tm-accent, #3D95CE))`, padding: '16px 20px' }}>
           <div style={{ fontSize: 13, color: 'rgba(255,255,255,.75)', marginBottom: 2 }}>Service</div>
           <div style={{ fontSize: 18, fontWeight: 800, color: '#fff' }}>{service?.name}</div>
           <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
@@ -678,7 +705,7 @@ function Step5Confirm({ service, tech, techs, date, slot, appts, form, submittin
       </div>
 
       <button onClick={onConfirm} disabled={submitting}
-        style={{ width: '100%', padding: '16px', borderRadius: 14, border: 'none', background: submitting ? '#aaa' : '#2D7A5F', color: '#fff', fontSize: 16, fontWeight: 800, cursor: submitting ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 10, letterSpacing: '.01em' }}>
+        style={{ width: '100%', padding: '16px', borderRadius: 14, border: 'none', background: submitting ? '#aaa' : 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 16, fontWeight: 800, cursor: submitting ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 10, letterSpacing: '.01em' }}>
         {submitting ? 'Booking…' : '✓ Confirm Appointment'}
       </button>
       <BackBtn onClick={onBack} />
@@ -693,14 +720,14 @@ function Step5Confirm({ service, tech, techs, date, slot, appts, form, submittin
 function SuccessScreen({ appt, service }) {
   return (
     <div style={{ minHeight: '100dvh', background: '#f5f6f8', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ background: 'linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF)', padding: '20px 20px 40px' }}>
-        <div style={{ maxWidth: 480, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', padding: '20px 20px 40px' }}>
+        <div style={{ maxWidth: 600, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>Meraki Nail Studio</div>
         </div>
       </div>
-      <div style={{ maxWidth: 480, margin: '-24px auto 0', padding: '0 16px 48px', width: '100%', boxSizing: 'border-box' }}>
+      <div style={{ maxWidth: 600, margin: '-24px auto 0', padding: '0 16px 48px', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ background: '#fff', borderRadius: 20, padding: '32px 24px', boxShadow: '0 8px 32px rgba(0,0,0,.1)', textAlign: 'center', marginBottom: 16 }}>
-          <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#f0f9f5', border: '3px solid #2D7A5F', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: 30, color: '#2D7A5F' }}>
+          <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#f0f9f5', border: '3px solid var(--tm-primary, #2D7A5F)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: 30, color: 'var(--tm-primary, #2D7A5F)' }}>
             ✓
           </div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a1a', marginBottom: 6 }}>You're booked!</div>
@@ -727,7 +754,7 @@ function SuccessScreen({ appt, service }) {
           ))}
         </div>
 
-        <a href="/" style={{ display: 'block', textAlign: 'center', fontSize: 15, fontWeight: 700, color: '#fff', textDecoration: 'none', background: '#3D95CE', borderRadius: 14, padding: '15px', boxShadow: '0 2px 8px rgba(61,149,206,.35)' }}>
+        <a href="/" style={{ display: 'block', textAlign: 'center', fontSize: 15, fontWeight: 700, color: '#fff', textDecoration: 'none', background: 'var(--tm-accent, #3D95CE)', borderRadius: 14, padding: '15px', boxShadow: '0 2px 8px rgba(61,149,206,.35)' }}>
           ← Back to Meraki Salon Manager
         </a>
       </div>
@@ -783,8 +810,8 @@ function BookingCalendar({ value, onChange }) {
             <button key={i} onClick={() => !disabled && onChange(ds)} disabled={disabled}
               style={{
                 height: 40, borderRadius: 10,
-                border: `1.5px solid ${isSel ? '#2D7A5F' : isToday ? '#c3e6d8' : 'transparent'}`,
-                background: isSel ? '#2D7A5F' : isToday ? '#f0f9f5' : 'transparent',
+                border: `1.5px solid ${isSel ? 'var(--tm-primary, #2D7A5F)' : isToday ? '#c3e6d8' : 'transparent'}`,
+                background: isSel ? 'var(--tm-primary, #2D7A5F)' : isToday ? '#f0f9f5' : 'transparent',
                 color: isSel ? '#fff' : disabled ? '#d8d8d8' : '#1a1a1a',
                 fontSize: 13, fontWeight: isSel || isToday ? 700 : 400,
                 cursor: disabled ? 'default' : 'pointer', fontFamily: 'inherit',
@@ -834,7 +861,7 @@ function CrossDevicePrompt({ onDone }) {
           style={{ width: '100%', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 10, padding: '11px 14px', fontSize: 16, outline: 'none', background: '#fafafa', boxSizing: 'border-box', marginBottom: 10 }}
         />
         <button onClick={complete} disabled={working || !email.trim()}
-          style={{ width: '100%', padding: '12px', borderRadius: 10, border: 'none', background: working || !email.trim() ? '#d0d0d0' : '#2D7A5F', color: '#fff', fontSize: 15, fontWeight: 700, cursor: working || !email.trim() ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+          style={{ width: '100%', padding: '12px', borderRadius: 10, border: 'none', background: working || !email.trim() ? '#d0d0d0' : 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 15, fontWeight: 700, cursor: working || !email.trim() ? 'default' : 'pointer', fontFamily: 'inherit' }}>
           {working ? 'Signing in…' : 'Sign in'}
         </button>
         {error && <div style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>{error}</div>}
@@ -852,7 +879,7 @@ function TechAvatar({ tech, size = 56 }) {
   }
   const ini = (tech.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
   return (
-    <div style={{ width: size, height: size, borderRadius: '50%', background: 'linear-gradient(135deg,#2D7A5F,#3D95CE)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: size * 0.28, fontWeight: 700, flexShrink: 0 }}>
+    <div style={{ width: size, height: size, borderRadius: '50%', background: 'linear-gradient(135deg,var(--tm-primary, #2D7A5F),var(--tm-accent, #3D95CE))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: size * 0.28, fontWeight: 700, flexShrink: 0 }}>
       {ini}
     </div>
   );
@@ -884,7 +911,7 @@ function StepTitle({ children }) {
 }
 function BackBtn({ onClick }) {
   return (
-    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', color: '#3D95CE', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600, padding: '6px 0' }}>
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', color: 'var(--tm-accent, #3D95CE)', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600, padding: '6px 0' }}>
       ← Back
     </button>
   );
@@ -893,5 +920,5 @@ function FullCenter({ children }) {
   return <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f6f8' }}>{children}</div>;
 }
 function Spinner() {
-  return <div style={{ width: 32, height: 32, border: '3px solid #e0e0e0', borderTop: '3px solid #2D7A5F', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />;
+  return <div style={{ width: 32, height: 32, border: '3px solid #e0e0e0', borderTop: '3px solid var(--tm-primary, #2D7A5F)', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />;
 }
