@@ -448,7 +448,9 @@ function Step1Service({ services, selected, onSelect }) {
 }
 
 function ServiceRow({ svc, color, selected, divider, onSelect }) {
-  const [hover, setHover] = useState(false);
+  const [hover,  setHover]  = useState(false);
+  const [imgErr, setImgErr] = useState(false);
+  const hasImg = svc.image && !imgErr;
   return (
     <button onClick={onSelect}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
@@ -462,6 +464,13 @@ function ServiceRow({ svc, color, selected, divider, onSelect }) {
         padding: '18px 20px',
         transition: 'background .15s',
       }}>
+      {/* Thumbnail */}
+      <div style={{ width: 72, height: 72, flexShrink: 0, borderRadius: 12, overflow: 'hidden', background: hasImg ? '#f0f0f0' : `${color}14`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {hasImg
+          ? <img src={svc.image} alt={svc.name} onError={() => setImgErr(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          : <span style={{ fontSize: 30 }}>{CATEGORY_ICONS[svc.category] || '💅'}</span>
+        }
+      </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: svc.description ? 6 : 0 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a', letterSpacing: '-.1px' }}>{svc.name}</span>
