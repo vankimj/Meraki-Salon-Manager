@@ -149,8 +149,9 @@ function AppShell() {
       {showAdmin && <Admin onClose={() => setShowAdmin(false)} />}
 
       {/* Version badge — fixed bottom-right, always visible */}
-      <div style={{ position: 'fixed', bottom: 'calc(6px + env(safe-area-inset-bottom, 0px))', right: 10, zIndex: 5, pointerEvents: 'none' }}>
-        <span style={{ fontSize: 9, color: '#bbb', letterSpacing: '.04em', background: 'rgba(255,255,255,.7)', padding: '2px 6px', borderRadius: 8, backdropFilter: 'blur(4px)' }}>
+      <div style={{ position: 'fixed', bottom: 'calc(6px + env(safe-area-inset-bottom, 0px))', right: 10, zIndex: 5 }}>
+        <span title="Click to copy" onClick={() => { navigator.clipboard?.writeText(BUILD_LABEL); }}
+          style={{ fontSize: 10, color: '#777', fontWeight: 500, letterSpacing: '.03em', background: 'rgba(255,255,255,.85)', padding: '3px 8px', borderRadius: 8, backdropFilter: 'blur(4px)', border: '1px solid rgba(0,0,0,.06)', cursor: 'pointer', userSelect: 'all' }}>
           {BUILD_LABEL}
         </span>
       </div>
