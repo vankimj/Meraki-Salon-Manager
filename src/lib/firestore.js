@@ -164,6 +164,27 @@ export async function fetchAppointments(date) {
     .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
 }
 
+// Find today's appointment for a given client (by id or by phone digits).
+// Returns the soonest upcoming one, or the in-progress one if started.
+export async function findTodaysAppointmentForClient({ clientId, phone, date }) {
+  const today = date || new Date().toISOString().slice(0, 10);
+  const phoneDigits = phone ? (phone.match(/\d/g) || []).join('') : '';
+  const snap = await getDocs(query(APPTS_COL, where('date', '==', today)));
+  const todays = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const matches = todays.filter(a => {
+    if (clientId && a.clientId === clientId) return true;
+    if (phoneDigits) {
+      const aPhone = (a.clientPhone || '').match(/\d/g);
+      if (aPhone && aPhone.join('') === phoneDigits) return true;
+    }
+    return false;
+  });
+  if (matches.length === 0) return null;
+  // Prefer scheduled/in-progress, sorted by startTime
+  matches.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  return matches.find(a => a.status !== 'done' && a.status !== 'cancelled') || matches[0];
+}
+
 // Real-time subscription for a single date (Schedule day view).
 export function subscribeToAppointments(date, cb) {
   const q = query(APPTS_COL, where('date', '==', date));
@@ -561,6 +582,21 @@ export async function fetchReviewRequests(n = 200) {
 }
 
 // ── Client portal ──────────────────────────────────────
+export async function fetchClientByPhone(phone) {
+  if (!phone) return null;
+  // Normalize: digits only — handles users typing (614) 555-0100 vs 6145550100.
+  const norm = (phone.match(/\d/g) || []).join('');
+  if (!norm) return null;
+  const snap = await getDocs(CLIENTS_COL);
+  const candidates = snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(c => {
+      const cn = (c.phone || '').match(/\d/g);
+      return cn && cn.join('') === norm;
+    });
+  return candidates[0] || null;
+}
+
 export async function fetchClientByEmail(email) {
   const normalized = email.trim().toLowerCase();
   // Try exact match first, then lowercase match

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchServices, fetchEmployees, addToWaitlist, subscribeQueue, fetchWebfrontConfig } from '../lib/firestore';
+import { fetchServices, fetchEmployees, addToWaitlist, subscribeQueue, fetchWebfrontConfig, fetchClientByPhone, findTodaysAppointmentForClient } from '../lib/firestore';
 import { getTheme, detectAutoTheme } from '../lib/themes';
 import { IconChair, IconCalendar, IconCheck, IconArrowLeft, IconClock, IconChevronRight } from './Icons';
 
@@ -10,6 +10,15 @@ function todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+function formatTimeStr(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = hhmm.split(':').map(Number);
+  if (Number.isNaN(h)) return hhmm;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hh   = h > 12 ? h - 12 : h === 0 ? 12 : h;
+  return `${hh}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
 function CountDown({ secs, onDone }) {
   const [left, setLeft] = useState(secs);
   useEffect(() => {
@@ -17,6 +26,34 @@ function CountDown({ secs, onDone }) {
     return () => clearInterval(t);
   }, []); // eslint-disable-line
   return <span style={{ fontSize: 12, color: 'rgba(255,255,255,.4)', letterSpacing: '.04em' }}>Returning to start in {left}s</span>;
+}
+
+// Module-scope Shell so it keeps a stable component identity between renders;
+// otherwise inputs inside lose focus on every keystroke.
+function Shell({ children, narrow, theme }) {
+  const bgStyle = {
+    position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden',
+    background: `radial-gradient(ellipse at top, ${theme.dark}f5 0%, ${theme.dark} 55%, #050a0a 100%)`,
+    fontFamily: "'Helvetica Neue','Inter',-apple-system,sans-serif",
+    color: '#fff',
+  };
+  return (
+    <div style={bgStyle}>
+      <div aria-hidden style={{
+        position: 'absolute', top: -160, left: '50%', transform: 'translateX(-50%)',
+        width: 720, height: 480, borderRadius: '50%',
+        background: `radial-gradient(ellipse, ${theme.primary}26 0%, ${theme.accent}18 35%, transparent 65%)`,
+        pointerEvents: 'none',
+      }} />
+      <div style={{ position: 'relative', textAlign: 'center', paddingTop: 36, paddingBottom: 12, zIndex: 1 }}>
+        <div style={{ fontFamily: "'Great Vibes', cursive", fontSize: 38, lineHeight: 1, color: '#fff', letterSpacing: '-.01em' }}>Meraki</div>
+        <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: 'rgba(255,255,255,.42)', letterSpacing: '.32em', textTransform: 'uppercase', marginTop: 2 }}>Nail Studio</div>
+      </div>
+      <div style={{ position: 'relative', zIndex: 1, maxWidth: narrow ? 540 : 720, margin: '0 auto', padding: '20px 28px 56px' }}>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export default function QueueKiosk() {
@@ -36,8 +73,9 @@ export default function QueueKiosk() {
   const [position, setPosition] = useState(null);
 
   // Arrival form
-  const [arrName,  setArrName]  = useState('');
-  const [arrPhone, setArrPhone] = useState('');
+  const [arrName,    setArrName]    = useState('');
+  const [arrPhone,   setArrPhone]   = useState('');
+  const [arrMatched, setArrMatched] = useState(null);  // { client, appt } or null
 
   const nameRef = useRef(null);
   const arrRef  = useRef(null);
@@ -69,7 +107,7 @@ export default function QueueKiosk() {
   function reset() {
     setStep('welcome');
     setName(''); setPhone(''); setEmail(''); setSvcSel(''); setTechSel('Any');
-    setArrName(''); setArrPhone(''); setPosition(null); setWorking(false);
+    setArrName(''); setArrPhone(''); setArrMatched(null); setPosition(null); setWorking(false);
   }
 
   async function submitWalkIn() {
@@ -94,52 +132,37 @@ export default function QueueKiosk() {
     if (!arrName.trim() || !arrPhone.trim()) return;
     setWorking(true);
     try {
+      // Look up the client + their appointment by phone before creating the
+      // waitlist entry, so staff see the matched record on the dashboard.
+      const [client, appt] = await Promise.all([
+        fetchClientByPhone(arrPhone.trim()).catch(() => null),
+        findTodaysAppointmentForClient({ phone: arrPhone.trim() }).catch(() => null),
+      ]);
+      setArrMatched({ client, appt });
+
       await addToWaitlist({
-        clientName: arrName.trim(),
+        clientName:  client?.name || arrName.trim(),
         clientPhone: arrPhone.trim(),
-        isWalkIn: false,
-        hasAppointment: true,
-        serviceName: '',
-        techName: 'Any',
+        clientEmail: client?.email || '',
+        clientId:    client?.id || '',
+        apptId:      appt?.id || '',
+        serviceName: appt?.services?.[0]?.name || '',
+        techName:    appt?.techName || 'Any',
+        isWalkIn:    false,
+        hasAppointment: !!appt,
       });
       setStep('done-arrival');
     } catch { setWorking(false); }
   }
 
-  // Background uses the theme's dark + a subtle gradient glow.
-  const bgStyle = {
-    position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-    background: `radial-gradient(ellipse at top, ${theme.dark}f5 0%, ${theme.dark} 55%, #050a0a 100%)`,
-    fontFamily: "'Helvetica Neue','Inter',-apple-system,sans-serif",
-    color: '#fff',
-  };
-
-  const Shell = ({ children, narrow }) => (
-    <div style={bgStyle}>
-      {/* Ambient gradient glow */}
-      <div aria-hidden style={{
-        position: 'absolute', top: -160, left: '50%', transform: 'translateX(-50%)',
-        width: 720, height: 480, borderRadius: '50%',
-        background: `radial-gradient(ellipse, ${theme.primary}26 0%, ${theme.accent}18 35%, transparent 65%)`,
-        pointerEvents: 'none',
-      }} />
-
-      {/* Brand header */}
-      <div style={{ position: 'relative', textAlign: 'center', paddingTop: 36, paddingBottom: 12, zIndex: 1 }}>
-        <div style={{ fontFamily: "'Great Vibes', cursive", fontSize: 38, lineHeight: 1, color: '#fff', letterSpacing: '-.01em' }}>Meraki</div>
-        <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: 'rgba(255,255,255,.42)', letterSpacing: '.32em', textTransform: 'uppercase', marginTop: 2 }}>Nail Studio</div>
-      </div>
-
-      <div style={{ position: 'relative', zIndex: 1, maxWidth: narrow ? 540 : 720, margin: '0 auto', padding: '20px 28px 56px' }}>
-        {children}
-      </div>
-    </div>
-  );
+  // Shell is rendered via the module-level <Shell> component below — defining it
+  // inside this function would create a brand-new component identity on every
+  // render, remounting all inputs and stealing focus on every keystroke.
 
   // ── Welcome ──────────────────────────────────────────────
   if (step === 'welcome') {
     return (
-      <Shell>
+      <Shell theme={theme}>
         <div style={{ textAlign: 'center', marginTop: 24, marginBottom: 36 }}>
           <h1 style={{ fontSize: 38, fontWeight: 800, color: '#fff', margin: 0, letterSpacing: '-.6px' }}>How can we help?</h1>
           <p style={{ fontSize: 16, color: 'rgba(255,255,255,.55)', marginTop: 10 }}>Pick one to get started.</p>
@@ -175,7 +198,7 @@ export default function QueueKiosk() {
   if (step === 'walkin') {
     const canSubmit = name.trim() && svcSel && !working;
     return (
-      <Shell narrow>
+      <Shell theme={theme} narrow>
         <SectionHeader title="Join the Walk-in Queue" subtitle="Tell us a bit about yourself." />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -218,7 +241,7 @@ export default function QueueKiosk() {
   if (step === 'arrival') {
     const canSubmit = arrName.trim() && arrPhone.trim() && !working;
     return (
-      <Shell narrow>
+      <Shell theme={theme} narrow>
         <SectionHeader title="Let us know you're here" subtitle="A couple quick details so we can find your appointment." />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -241,7 +264,7 @@ export default function QueueKiosk() {
   // ── Done: walk-in ───────────────────────────────────────
   if (step === 'done-walkin') {
     return (
-      <Shell narrow>
+      <Shell theme={theme} narrow>
         <SuccessHero
           tint={theme.primary}
           big={position > 1 ? `You're #${position} in line` : "You're next!"}
@@ -256,12 +279,21 @@ export default function QueueKiosk() {
 
   // ── Done: arrival ───────────────────────────────────────
   if (step === 'done-arrival') {
+    const firstName = (arrMatched?.client?.name || arrName).split(' ')[0];
+    const appt = arrMatched?.appt;
+    const apptDetail = appt
+      ? `${appt.startTime ? formatTimeStr(appt.startTime) : ''}${appt.techName && appt.techName !== 'TBD' ? ` with ${appt.techName}` : ''}${appt.services?.[0]?.name ? ` · ${appt.services[0].name}` : ''}`.trim()
+      : null;
     return (
-      <Shell narrow>
+      <Shell theme={theme} narrow>
         <SuccessHero
           tint={theme.accent}
-          title="You're checked in!"
-          tagline="Have a seat — your tech will be with you shortly."
+          title={firstName ? `Welcome, ${firstName}!` : "You're checked in!"}
+          big={appt ? 'We found your appointment' : null}
+          detail={apptDetail}
+          tagline={appt
+            ? "Have a seat — your tech will be with you shortly."
+            : "We couldn't find an appointment under that number, but we've let the front desk know you're here."}
         />
         <DoneFooter onReset={reset} />
       </Shell>
