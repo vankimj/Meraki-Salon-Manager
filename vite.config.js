@@ -32,6 +32,11 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Take over open tabs immediately on new SW activation, so deploys
+        // don't strand users on a stale bundle until they close every tab.
+        skipWaiting:  true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         // Cache the app shell and static assets
         globPatterns: ['**/*.{js,css,html,ico,svg,png,woff2}'],
         // Network-first for Firestore / auth (handled by Firebase SDK itself)
