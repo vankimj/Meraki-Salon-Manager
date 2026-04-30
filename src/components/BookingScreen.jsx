@@ -61,6 +61,15 @@ function applyThemeVars(theme) {
   r.style.setProperty('--tm-dark',      theme.dark);
 }
 
+function techCanDo(tech, serviceId) {
+  // Empty/missing serviceIds means "can do all" (backward compatible default)
+  if (!tech.serviceIds || tech.serviceIds.length === 0) return true;
+  return tech.serviceIds.includes(serviceId);
+}
+function techsForService(techs, service) {
+  if (!service) return techs;
+  return techs.filter(t => techCanDo(t, service.id));
+}
 function isTechFreeAt(tech, slotMins, durationMins, appts) {
   const relevant = appts.filter(a => a.techId === tech.id || a.techName === tech.name);
   const end = slotMins + durationMins;
@@ -199,7 +208,7 @@ export default function BookingScreen() {
   async function handleBook() {
     const dur = service.duration || 60;
     let assignedTech = tech;
-    if (tech === null && appts) assignedTech = firstFreeTech(techs, slot, dur, appts);
+    if (tech === null && appts) assignedTech = firstFreeTech(eligibleTechs, slot, dur, appts);
     const h = Math.floor(slot / 60), m = slot % 60;
     const appt = {
       date,
@@ -223,6 +232,8 @@ export default function BookingScreen() {
     catch { alert('Booking failed. Please try again or call us.'); }
     finally { setSubmitting(false); }
   }
+
+  const eligibleTechs = techsForService(techs, service);
 
   if (loading || gUser === undefined) return <FullCenter><Spinner /></FullCenter>;
   if (!cfg?.enabled) return (
@@ -270,12 +281,14 @@ export default function BookingScreen() {
           <Step1Service
             services={services}
             selected={service}
-            onSelect={s => { setService(s); setSlot(null); setAppts(null); setStep(2); }}
+            onSelect={s => { setService(s); setTech(undefined); setSlot(null); setAppts(null); setStep(2); }}
           />
         )}
         {step === 2 && (
           <Step2Stylist
-            techs={techs}
+            techs={eligibleTechs}
+            allTechs={techs}
+            service={service}
             selected={tech}
             onSelect={t => { setTech(t); setStep(3); }}
             onBack={() => setStep(1)}
@@ -283,7 +296,7 @@ export default function BookingScreen() {
         )}
         {step === 3 && (
           <Step3DateTime
-            service={service} tech={tech} techs={techs}
+            service={service} tech={tech} techs={eligibleTechs}
             date={date} slot={slot} appts={appts}
             onDateChange={d => { setDate(d); setSlot(null); }}
             onSlotSelect={s => { setSlot(s); setStep(4); }}
@@ -303,7 +316,7 @@ export default function BookingScreen() {
         )}
         {step === 5 && (
           <Step5Confirm
-            service={service} tech={tech} techs={techs}
+            service={service} tech={tech} techs={eligibleTechs}
             date={date} slot={slot} appts={appts}
             form={form} submitting={submitting}
             onConfirm={handleBook}
@@ -443,10 +456,33 @@ function ServiceCard({ svc, color, selected, onSelect }) {
 }
 
 // ── Step 2: Stylist ────────────────────────────────────
-function Step2Stylist({ techs, selected, onSelect, onBack }) {
+function Step2Stylist({ techs, allTechs, service, selected, onSelect, onBack }) {
+  const filteredOut = (allTechs?.length || 0) - techs.length;
+
+  if (techs.length === 0) {
+    return (
+      <div>
+        <StepTitle>Choose your stylist</StepTitle>
+        <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 14, padding: '20px 18px', textAlign: 'center' }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>😔</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#7c2d12', marginBottom: 4 }}>No stylists available for this service</div>
+          <div style={{ fontSize: 12, color: '#9a3412', lineHeight: 1.5 }}>
+            None of our team currently performs <strong>{service?.name}</strong>. Please pick another service or call us.
+          </div>
+        </div>
+        <div style={{ marginTop: 16 }}><BackBtn onClick={onBack} /></div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <StepTitle>Choose your stylist</StepTitle>
+      {filteredOut > 0 && (
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 12, padding: '8px 12px', background: '#fafafa', borderRadius: 8, border: '1px solid #ececec' }}>
+          Showing only stylists who perform <strong style={{ color: '#333' }}>{service?.name}</strong>.
+        </div>
+      )}
       {/* No preference */}
       <button onClick={() => onSelect(null)} style={{
         display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',

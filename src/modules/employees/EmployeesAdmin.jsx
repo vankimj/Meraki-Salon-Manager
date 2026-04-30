@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchEmployees, createEmployee, saveEmployee, deleteEmployee, employeesExist } from '../../lib/firestore';
+import { fetchEmployees, createEmployee, saveEmployee, deleteEmployee, employeesExist, fetchServices } from '../../lib/firestore';
 import { resizeImg } from '../../utils/helpers';
 import { SEED_EMPLOYEES } from '../../data/seedEmployees';
 import { useApp } from '../../context/AppContext';
@@ -18,12 +18,14 @@ function blankEmployee() {
     rateType: 'commission', commissionPct: '', hourlyRate: '',
     paymentPref: 'cash', paymentNotes: '',
     workDays: {},
+    serviceIds: [],
   };
 }
 
 export default function EmployeesAdmin() {
   const { isAdmin, showToast } = useApp();
   const [employees, setEmployees] = useState([]);
+  const [services,  setServices]  = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [editing,   setEditing]   = useState(null);
   const [seeding,   setSeeding]   = useState(false);
@@ -32,7 +34,11 @@ export default function EmployeesAdmin() {
 
   async function load() {
     setLoading(true);
-    try { setEmployees(await fetchEmployees()); }
+    try {
+      const [emps, svcs] = await Promise.all([fetchEmployees(), fetchServices()]);
+      setEmployees(emps);
+      setServices(svcs.filter(s => s.active !== false));
+    }
     catch (e) { console.error('[Employees] load failed:', e); }
     finally { setLoading(false); }
   }
@@ -113,6 +119,7 @@ export default function EmployeesAdmin() {
       {editing && (
         <EmployeeModal
           emp={editing}
+          services={services}
           isAdmin={isAdmin}
           onChange={patch => setEditing(e => ({ ...e, ...patch }))}
           onSave={() => handleSave(editing)}
@@ -152,13 +159,15 @@ function EmployeeRow({ emp, last, onEdit, onDelete, onToggleActive }) {
   );
 }
 
-function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
+function EmployeeModal({ emp, services, isAdmin, onChange, onSave, onClose }) {
   const { showToast } = useApp();
   const [tab,    setTab]    = useState('profile');
   const [saving, setSaving] = useState(false);
   const fileRef = useRef(null);
   const isNew   = !emp.id;
-  const TABS    = isAdmin ? ['profile', 'contact', 'social', 'schedule', 'compensation'] : ['profile', 'contact', 'social', 'schedule'];
+  const TABS    = isAdmin
+    ? ['profile', 'contact', 'social', 'schedule', 'services', 'compensation']
+    : ['profile', 'contact', 'social', 'schedule', 'services'];
 
   function patchWorkDay(day, patch) {
     const current = emp.workDays?.[day] ?? DEFAULT_WORK_DAY;
@@ -294,6 +303,15 @@ function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
             </>
           )}
 
+          {/* ── Services this tech can perform ── */}
+          {tab === 'services' && (
+            <ServicesPicker
+              services={services}
+              selectedIds={emp.serviceIds || []}
+              onChange={ids => onChange({ serviceIds: ids })}
+            />
+          )}
+
           {/* ── Compensation (admin-only) ── */}
           {tab === 'compensation' && (
             <>
@@ -379,6 +397,57 @@ function EmployeeModal({ emp, isAdmin, onChange, onSave, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function ServicesPicker({ services, selectedIds, onChange }) {
+  const isAll = !selectedIds || selectedIds.length === 0;
+  const grouped = {};
+  services.forEach(s => {
+    const cat = s.category || 'Other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(s);
+  });
+
+  function toggle(id) {
+    const set = new Set(selectedIds);
+    if (set.has(id)) set.delete(id); else set.add(id);
+    onChange(Array.from(set));
+  }
+  function selectAll() { onChange(services.map(s => s.id)); }
+  function clearAll()  { onChange([]); }
+
+  return (
+    <>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.5 }}>
+        Pick which services this tech can perform. {isAll && <strong style={{ color: '#16a34a' }}>Empty = can do every service.</strong>}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        <button onClick={selectAll} style={{ ...btnBase, fontSize: 11, padding: '5px 10px' }}>Select all</button>
+        <button onClick={clearAll}  style={{ ...btnBase, fontSize: 11, padding: '5px 10px' }}>Clear all</button>
+        <div style={{ marginLeft: 'auto', fontSize: 11, color: '#aaa', alignSelf: 'center' }}>
+          {isAll ? 'all' : `${selectedIds.length} of ${services.length}`}
+        </div>
+      </div>
+      {services.length === 0 ? (
+        <div style={{ fontSize: 12, color: '#aaa', padding: 16, textAlign: 'center' }}>No services configured yet.</div>
+      ) : Object.entries(grouped).map(([cat, items]) => (
+        <div key={cat} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 6, letterSpacing: '.04em', textTransform: 'uppercase' }}>{cat}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
+            {items.map(s => {
+              const checked = selectedIds.includes(s.id);
+              return (
+                <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px', borderRadius: 8, border: `1px solid ${checked ? '#3D95CE' : '#e0e0e0'}`, background: checked ? '#EBF4FB' : '#fafafa', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggle(s.id)} style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: checked ? '#1a5f8a' : '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 
