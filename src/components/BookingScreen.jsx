@@ -301,7 +301,13 @@ export default function BookingScreen() {
             service={service} tech={tech} techs={eligibleTechs}
             date={date} slot={slot} appts={appts}
             onDateChange={d => { setDate(d); setSlot(null); }}
-            onSlotSelect={s => { setSlot(s); setStep(4); }}
+            onSlotSelect={s => {
+              setSlot(s);
+              // Skip the info step entirely when we already have name + phone
+              // (signed-in returning customer with a complete client record).
+              const haveAll = form.name.trim() && form.phone.trim();
+              setStep(haveAll ? 5 : 4);
+            }}
             onBack={() => setStep(2)}
           />
         )}
@@ -321,8 +327,9 @@ export default function BookingScreen() {
             service={service} tech={tech} techs={eligibleTechs}
             date={date} slot={slot} appts={appts}
             form={form} submitting={submitting}
+            onEditInfo={() => setStep(4)}
             onConfirm={handleBook}
-            onBack={() => setStep(4)}
+            onBack={() => setStep(form.name.trim() && form.phone.trim() ? 3 : 4)}
           />
         )}
       </div>
@@ -704,7 +711,7 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
 }
 
 // ── Step 5: Confirm ────────────────────────────────────
-function Step5Confirm({ service, tech, techs, date, slot, appts, form, submitting, onConfirm, onBack }) {
+function Step5Confirm({ service, tech, techs, date, slot, appts, form, submitting, onConfirm, onBack, onEditInfo }) {
   const dur = service?.duration || 60;
   const assignedTech = tech !== null ? tech : (appts ? firstFreeTech(techs, slot, dur, appts) : null);
   const total = service?.basePrice;
@@ -743,6 +750,13 @@ function Step5Confirm({ service, tech, techs, date, slot, appts, form, submittin
             <span style={{ fontSize: 13, color: '#1a1a1a', fontWeight: 500 }}>{value}</span>
           </div>
         ))}
+        {onEditInfo && (
+          <div style={{ padding: '10px 20px', borderTop: '1px solid #f0f0f0', textAlign: 'right' }}>
+            <button onClick={onEditInfo} style={{ background: 'none', border: 'none', color: 'var(--tm-accent, #3D95CE)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>
+              ✎ Edit my info
+            </button>
+          </div>
+        )}
       </div>
 
       <button onClick={onConfirm} disabled={submitting}
