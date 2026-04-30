@@ -3,20 +3,22 @@ import { useState, useRef } from 'react';
 import AuthModal from './AuthModal';
 import FeedbackModal from './FeedbackModal';
 import UserMenu from './UserMenu';
+import NotificationsBell from './NotificationsBell';
 import { logActivity } from '../lib/logger';
+import { MODULE_ICONS, IconLightbulb, IconChair, IconChevronRight, IconArrowUpRight, IconSettings, IconMessage } from './Icons';
 
 const MODULES = [
-  { id: 'schedule',  icon: '📅', label: 'Schedule',  desc: 'Appointments & calendar',  adminOnly: false },
-  { id: 'clients',   icon: '👥', label: 'Clients',   desc: 'Profiles & visit history', adminOnly: false },
-  { id: 'services',  icon: '💅', label: 'Services',  desc: 'Menu & pricing',           adminOnly: false },
-  { id: 'employees', icon: '👩‍💼', label: 'Employees', desc: 'Team & profiles',          adminOnly: true  },
-  { id: 'reports',   icon: '📊', label: 'Reports',   desc: 'Revenue & analytics',      adminOnly: false },
-  { id: 'hr',        icon: '💼', label: 'HR',        desc: 'Payroll & compensation',   adminOnly: true  },
-  { id: 'giftcards', icon: '🎁', label: 'Gift Cards', desc: 'Gift cards & promo codes',  adminOnly: true  },
-  { id: 'meetings',  icon: '🗓️', label: 'Meetings',  desc: 'Internal team meetings',    adminOnly: true  },
-  { id: 'products',  icon: '🛍', label: 'Products',  desc: 'Retail inventory & stock',   adminOnly: true  },
-  { id: 'marketing', icon: '📣', label: 'Marketing', desc: 'Email campaigns & outreach',  adminOnly: true, proOnly: true },
-  { id: 'chat',      icon: '💬', label: 'Messages',  desc: 'Client messages & replies',   adminOnly: false },
+  { id: 'schedule',  label: 'Schedule',  desc: 'Appointments & calendar',  adminOnly: false },
+  { id: 'clients',   label: 'Clients',   desc: 'Profiles & visit history', adminOnly: false },
+  { id: 'services',  label: 'Services',  desc: 'Menu & pricing',           adminOnly: false },
+  { id: 'employees', label: 'Employees', desc: 'Team & profiles',          adminOnly: true  },
+  { id: 'reports',   label: 'Reports',   desc: 'Revenue & analytics',      adminOnly: false },
+  { id: 'hr',        label: 'HR',        desc: 'Payroll & compensation',   adminOnly: true  },
+  { id: 'giftcards', label: 'Gift Cards', desc: 'Gift cards & promo codes', adminOnly: true  },
+  { id: 'meetings',  label: 'Meetings',  desc: 'Internal team meetings',   adminOnly: true  },
+  { id: 'products',  label: 'Products',  desc: 'Retail inventory & stock', adminOnly: true  },
+  { id: 'marketing', label: 'Marketing', desc: 'Email campaigns & outreach', adminOnly: true, proOnly: true },
+  { id: 'chat',      label: 'Messages',  desc: 'Client messages & replies', adminOnly: false },
 ];
 
 function greeting() {
@@ -87,7 +89,7 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           {isAdmin && (
             <button onClick={onAdmin} title="Admin Settings"
               style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-primary, #2D7A5F)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}>
-              <span style={{ fontSize: 17 }}>⚙</span> Admin
+              <IconSettings size={16} /> Admin
             </button>
           )}
           {realIsAdmin && viewAs && (
@@ -109,8 +111,9 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           )}
           <button onClick={() => setShowFeedback(true)} title="Report a bug or idea"
             style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-accent, #3D95CE)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
-            <span style={{ fontSize: 17 }}>💬</span> Feedback
+            <IconMessage size={16} /> Feedback
           </button>
+          {gUser && <NotificationsBell />}
           {gUser && <UserMenu />}
         </div>
       </div>
@@ -161,21 +164,21 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           <>
             <SectionLabel>My Tools</SectionLabel>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
-              <ModuleTile id="schedule"  icon="📅"  label="My Schedule" desc="Your appointments & checkout"  onClick={() => navigate('schedule')}  />
-              <ModuleTile id="clients"   icon="👥"  label="Clients"     desc="Profiles & visit history"      onClick={() => navigate('clients')}   />
-              <ModuleTile id="services"  icon="💅"  label="Services"    desc="Menu & pricing"                onClick={() => navigate('services')}  />
-              <ModuleTile id="employees" icon="👩‍💼" label="Team"        desc="Staff profiles"               onClick={() => navigate('employees')} />
-              <ModuleTile id="hr"        icon="📋"  label="Tax Forms"   desc="Your 1099s"                    onClick={() => navigate('hr')}        />
+              <ModuleTile id="schedule"  label="My Schedule" desc="Your appointments & checkout"  onClick={() => navigate('schedule')}  />
+              <ModuleTile id="clients"   label="Clients"     desc="Profiles & visit history"      onClick={() => navigate('clients')}   />
+              <ModuleTile id="services"  label="Services"    desc="Menu & pricing"                onClick={() => navigate('services')}  />
+              <ModuleTile id="employees" label="Team"        desc="Staff profiles"                onClick={() => navigate('employees')} />
+              <ModuleTile id="hr"        label="Tax Forms"   desc="Your 1099s"                    onClick={() => navigate('hr')}        />
             </div>
           </>
         ) : isScheduler ? (
           <>
             <SectionLabel>Scheduling</SectionLabel>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
-              <ModuleTile id="schedule" icon="📅" label="Schedule"  desc="Appointments & calendar"   onClick={() => navigate('schedule')}  />
-              <ModuleTile id="clients"  icon="👥" label="Clients"   desc="Profiles & visit history"  onClick={() => navigate('clients')}   />
-              <ModuleTile id="services" icon="💅" label="Services"  desc="Menu & pricing"             onClick={() => navigate('services')}  />
-              <ModuleTile id="chat"     icon="💬" label="Messages"  desc="Client messages & replies"  onClick={() => navigate('chat')}      badge={totalChatUnread} />
+              <ModuleTile id="schedule" label="Schedule"  desc="Appointments & calendar"   onClick={() => navigate('schedule')}  />
+              <ModuleTile id="clients"  label="Clients"   desc="Profiles & visit history"  onClick={() => navigate('clients')}   />
+              <ModuleTile id="services" label="Services"  desc="Menu & pricing"             onClick={() => navigate('services')}  />
+              <ModuleTile id="chat"     label="Messages"  desc="Client messages & replies"  onClick={() => navigate('chat')}      badge={totalChatUnread} />
             </div>
           </>
         ) : canManage ? (
@@ -199,19 +202,19 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
             <SectionLabel>Kiosk</SectionLabel>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
               <KioskCard
-                emoji="💡"
+                Icon={IconLightbulb}
                 label="Launch Tip Flow"
                 desc="Full-screen kiosk for front desk iPad"
                 background="var(--tm-grad)"
-                arrow="›"
+                ArrowIcon={IconChevronRight}
                 onClick={() => navigate('tipflow')}
               />
               <KioskCard
-                emoji="🪑"
+                Icon={IconChair}
                 label="Walk-in Queue Kiosk"
                 desc="Self check-in for walk-ins & arrivals"
                 background="var(--tm-grad-dark)"
-                arrow="↗"
+                ArrowIcon={IconArrowUpRight}
                 onClick={() => window.open('/?queue', '_blank')}
               />
             </div>
@@ -310,7 +313,7 @@ function SectionLabel({ children }) {
   );
 }
 
-function KioskCard({ emoji, label, desc, background, arrow, onClick }) {
+function KioskCard({ Icon, label, desc, background, ArrowIcon, onClick }) {
   const [hover, setHover] = useState(false);
   return (
     <button onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
@@ -322,20 +325,23 @@ function KioskCard({ emoji, label, desc, background, arrow, onClick }) {
         transform: hover ? 'translateY(-2px)' : 'translateY(0)',
         transition: 'transform .18s ease, box-shadow .18s ease',
       }}>
-      <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, flexShrink: 0, backdropFilter: 'blur(4px)' }}>
-        {emoji}
+      <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backdropFilter: 'blur(4px)', color: '#fff' }}>
+        <Icon size={24} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', marginBottom: 2, letterSpacing: '-.1px' }}>{label}</div>
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,.78)', lineHeight: 1.4 }}>{desc}</div>
       </div>
-      <div style={{ marginLeft: 'auto', color: 'rgba(255,255,255,.7)', fontSize: 22, transform: hover ? 'translateX(3px)' : 'translateX(0)', transition: 'transform .18s ease', flexShrink: 0 }}>{arrow}</div>
+      <div style={{ marginLeft: 'auto', color: 'rgba(255,255,255,.85)', display: 'flex', alignItems: 'center', transform: hover ? 'translateX(3px)' : 'translateX(0)', transition: 'transform .18s ease', flexShrink: 0 }}>
+        <ArrowIcon size={20} />
+      </div>
     </button>
   );
 }
 
-function ModuleTile({ icon, label, desc, onClick, badge, locked }) {
+function ModuleTile({ id, label, desc, onClick, badge, locked }) {
   const [hover, setHover] = useState(false);
+  const Icon = MODULE_ICONS[id];
   return (
     <button
       onClick={onClick}
@@ -354,8 +360,8 @@ function ModuleTile({ icon, label, desc, onClick, badge, locked }) {
       {locked && (
         <div style={{ position: 'absolute', top: 10, right: 10, background: 'linear-gradient(135deg,#7c3aed,#a855f7)', color: '#fff', fontSize: 9, fontWeight: 800, padding: '3px 8px', borderRadius: 20, letterSpacing: '.06em', boxShadow: '0 2px 6px rgba(124,58,237,.3)' }}>PRO</div>
       )}
-      <div style={{ position: 'relative', width: 44, height: 44, borderRadius: 12, background: locked ? '#f0f0f0' : 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, boxShadow: locked ? 'none' : '0 4px 10px rgba(45,122,95,.18)' }}>
-        <span style={{ fontSize: 22, filter: locked ? 'grayscale(.4)' : 'none' }}>{icon}</span>
+      <div style={{ position: 'relative', width: 44, height: 44, borderRadius: 12, background: locked ? '#f0f0f0' : 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, boxShadow: locked ? 'none' : '0 4px 10px rgba(45,122,95,.18)', color: locked ? '#aaa' : '#fff' }}>
+        {Icon ? <Icon size={22} /> : <span style={{ fontSize: 22 }}>◆</span>}
         {badge > 0 && (
           <div style={{ position: 'absolute', top: -4, right: -4, background: '#ef4444', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, padding: '1px 6px', minWidth: 18, textAlign: 'center', lineHeight: '14px', border: '2px solid #fff', boxShadow: '0 2px 4px rgba(0,0,0,.15)' }}>
             {badge > 9 ? '9+' : badge}

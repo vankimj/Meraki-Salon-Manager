@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef, useCallback, us
 import { getTheme, detectAutoTheme } from '../lib/themes';
 import { onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { auth, ALLOWED_EMAILS } from '../lib/firebase';
-import { loadAll, saveSlides, saveUsers, saveSettings, submitAccessRequest, fetchAccessRequests, deleteAccessRequest, fetchHandbook, fetchMyHandbookSig, signHandbookDoc, fetchClientByEmail, subscribeToChats } from '../lib/firestore';
+import { loadAll, saveSlides, saveUsers, saveSettings, submitAccessRequest, fetchAccessRequests, deleteAccessRequest, fetchHandbook, fetchMyHandbookSig, signHandbookDoc, fetchClientByEmail, subscribeToChats, subscribeToRecentNotifications, markNotificationRead } from '../lib/firestore';
 import { migrateFromLegacy } from '../lib/migration';
 import { logActivity, setLoggerUser } from '../lib/logger';
 import { phSVG } from '../utils/helpers';
@@ -35,6 +35,7 @@ export function AppProvider({ children }) {
   const [handbookDoc,     setHandbookDoc]     = useState(null);
   const [portalClientId,    setPortalClientId]    = useState(null);
   const [totalChatUnread,   setTotalChatUnread]   = useState(0);
+  const [recentNotifs,      setRecentNotifs]      = useState([]);
   const [viewAs,            setViewAs]            = useState(null); // null | { role: 'tech', techName: string } | { role: 'scheduler' } | { role: 'readonly' }
 
   const logoutTimer    = useRef(null);
@@ -320,6 +321,20 @@ export function AppProvider({ children }) {
     return unsub;
   }, [gUser, portalClientId]); // eslint-disable-line
 
+  // ── Top-bar notifications subscription ─────────────────
+  useEffect(() => {
+    if (!gUser || portalClientId) return;
+    const unsub = subscribeToRecentNotifications(20, list => setRecentNotifs(list));
+    return unsub;
+  }, [gUser, portalClientId]); // eslint-disable-line
+
+  const markNotifRead = useCallback(async (id) => {
+    if (!gUser?.email || !id) return;
+    try { await markNotificationRead(id, gUser.email); } catch (_) {}
+  }, [gUser]);
+
+  const unreadNotifCount = recentNotifs.filter(n => !(n.readBy || []).includes(gUser?.email)).length;
+
   // ── Sign in / out ──────────────────────────────────────
   const signIn = useCallback(async () => {
     try {
@@ -382,6 +397,7 @@ export function AppProvider({ children }) {
       signIn, signOut, switchAccount, sendMagicLink, completeMagicLink, magicLinkPending,
       handbookPending, handbookDoc, signHandbook,
       totalChatUnread,
+      recentNotifs, unreadNotifCount, markNotifRead,
       activeTheme,
     }}>
       {children}

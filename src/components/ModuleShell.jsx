@@ -2,20 +2,8 @@ import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import FeedbackModal from './FeedbackModal';
 import UserMenu from './UserMenu';
-
-const MODULE_ICONS = {
-  schedule:  '📅',
-  clients:   '👥',
-  services:  '💅',
-  employees: '👩‍💼',
-  reports:   '📊',
-  hr:        '💼',
-  giftcards: '🎁',
-  meetings:  '🗓️',
-  products:  '🛍',
-  marketing: '📣',
-  chat:      '💬',
-};
+import NotificationsBell from './NotificationsBell';
+import { MODULE_ICONS, IconHome, IconSettings, IconMessage } from './Icons';
 
 export default function ModuleShell({ view, title, onHome, onAdmin, children }) {
   const { isAdmin, realIsAdmin, viewAs, setViewAs, syncState, activeTheme: t, users } = useApp();
@@ -37,7 +25,7 @@ export default function ModuleShell({ view, title, onHome, onAdmin, children }) 
   }
   const [showFeedback, setShowFeedback] = useState(false);
   const syncColor = { syncing: '#f59e0b', ok: '#22c55e', err: '#ef4444', idle: '#ddd' }[syncState] || '#ddd';
-  const icon = MODULE_ICONS[view] || '◆';
+  const ModuleIcon = MODULE_ICONS[view];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: '100dvh', background: 'var(--tm-bg, #f8f9fa)' }}>
@@ -57,15 +45,15 @@ export default function ModuleShell({ view, title, onHome, onAdmin, children }) 
         {/* Home button */}
         <button onClick={onHome}
           style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--tm-accent, #3D95CE)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500, padding: '8px 6px', borderRadius: 6, flexShrink: 0, minWidth: 44, minHeight: 44, justifyContent: 'center' }}>
-          <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <IconHome size={15} />
           Home
         </button>
 
         <span style={{ color: '#e0e0e0', fontSize: 16, flexShrink: 0 }}>›</span>
 
         {/* Module title */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
-          <span style={{ fontSize: 16 }}>{icon}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, color: '#555' }}>
+          {ModuleIcon ? <ModuleIcon size={18} /> : <span style={{ fontSize: 16 }}>◆</span>}
           <span style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
         </div>
 
@@ -81,7 +69,7 @@ export default function ModuleShell({ view, title, onHome, onAdmin, children }) 
           {isAdmin && (
             <button onClick={onAdmin} title="Admin Settings"
               style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-primary, #2D7A5F)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}>
-              <span style={{ fontSize: 17 }}>⚙</span> Admin
+              <IconSettings size={16} /> Admin
             </button>
           )}
           {realIsAdmin && !viewAs && (
@@ -97,8 +85,9 @@ export default function ModuleShell({ view, title, onHome, onAdmin, children }) 
           )}
           <button onClick={() => setShowFeedback(true)} title="Report a bug or idea"
             style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-accent, #3D95CE)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
-            <span style={{ fontSize: 17 }}>💬</span> Feedback
+            <IconMessage size={16} /> Feedback
           </button>
+          <NotificationsBell />
           <UserMenu />
         </div>
       </div>

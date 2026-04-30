@@ -455,6 +455,16 @@ export async function sendHandbookReminderNotif(techName, handbookTitle, version
   });
 }
 
+// Real-time subscription to the most recent notifications (for the top-bar bell)
+export function subscribeToRecentNotifications(n, cb) {
+  const q = query(NOTIFS_COL, orderBy('createdAt', 'desc'), limit(n));
+  return onSnapshot(q, snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+}
+
+export async function markNotificationRead(id, email) {
+  await setDoc(doc(NOTIFS_COL, id), { readBy: arrayUnion(email), updatedAt: new Date().toISOString() }, { merge: true });
+}
+
 export async function fetchNotificationCenter(n = 150) {
   const [notifSnap, receiptSnap, reviewSnap] = await Promise.all([
     getDocs(query(NOTIFS_COL,           orderBy('createdAt', 'desc'), limit(n))),
