@@ -103,12 +103,12 @@ export default function BookingScreen() {
 
   // wizard
   const [step,    setStep]    = useState(1);
-  const [service, setService] = useState(null);
-  const [option,  setOption]  = useState(null);  // selected option/variant on the service, if any
-  const [tech,    setTech]    = useState(undefined); // undefined=not chosen, null=no-pref, obj=specific
-  const [date,    setDate]    = useState('');
-  const [slot,    setSlot]    = useState(null);
-  const [appts,   setAppts]   = useState(null);
+  // Multi-service cart. Each item: { id, service, option, tech, date, slot }
+  // tech: undefined=not picked, null=no preference, {…}=specific tech
+  const [cart, setCart] = useState([]);
+  // Per-date appointment cache so each cart item's date picker can check
+  // availability without refetching every render.
+  const [apptsByDate, setApptsByDate] = useState({});
   const [form,    setForm]    = useState({ name: '', phone: '', email: '', notes: '' });
   const [submitting,      setSubmitting]      = useState(false);
   const [confirmed,       setConfirmed]       = useState(null);
@@ -192,11 +192,28 @@ export default function BookingScreen() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!date) return;
-    setAppts(null); setSlot(null);
-    fetchAppointments(date).then(setAppts).catch(() => setAppts([]));
-  }, [date]);
+  // Cart helpers ─────────────────────────────────────────
+  function addToCart(svc, opt) {
+    const id = `cart_${Date.now()}_${Math.floor(Math.random() * 9999)}`;
+    setCart(c => [...c, { id, service: svc, option: opt || null, tech: undefined, date: '', slot: null }]);
+  }
+  function removeFromCart(itemId) {
+    setCart(c => c.filter(i => i.id !== itemId));
+  }
+  function updateCartItem(itemId, patch) {
+    setCart(c => c.map(i => i.id === itemId ? { ...i, ...patch } : i));
+  }
+
+  // Lazy-fetch + cache appointments per date for any cart item that needs them.
+  async function ensureApptsForDate(d) {
+    if (!d || apptsByDate[d]) return;
+    try {
+      const list = await fetchAppointments(d);
+      setApptsByDate(prev => ({ ...prev, [d]: list }));
+    } catch {
+      setApptsByDate(prev => ({ ...prev, [d]: [] }));
+    }
+  }
 
   async function handleGoogleSignIn() {
     try { await signInWithPopup(auth, new GoogleAuthProvider()); }
@@ -209,17 +226,10 @@ export default function BookingScreen() {
   }
 
   async function handleBook() {
-    const resolved = resolveServicePricing(service, option);
-    const dur   = resolved.duration || 60;
-    const price = resolved.price    || 0;
-    let assignedTech = tech;
-    if (tech === null && appts) assignedTech = firstFreeTech(eligibleTechs, slot, dur, appts);
-    const h = Math.floor(slot / 60), m = slot % 60;
-
+    if (cart.length === 0) return;
     setSubmitting(true);
     try {
-      // Auto-create a client record for signed-in users whose email isn't on file yet,
-      // so they appear in the Clients list and link properly on the appointment.
+      // Auto-create a client record once per booking session.
       let clientId = client?.id || '';
       if (!clientId && gUser?.email && form.name.trim() && form.phone.trim()) {
         try {
@@ -230,39 +240,49 @@ export default function BookingScreen() {
             picture: gUser.photoURL || '',
             source:  'online_booking',
           });
-        } catch (e) {
-          console.error('[Booking] auto-create client failed:', e);
-          // Non-fatal — we still book the appointment, just without a clientId link.
-        }
+        } catch (e) { console.error('[Booking] auto-create client failed:', e); }
       }
 
-      const appt = {
-        date,
-        startTime:   `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
-        duration:    dur,
-        techId:      assignedTech?.id   || null,
-        techName:    assignedTech?.name || 'TBD',
-        clientId,
-        clientName:  form.name.trim(),
-        clientPhone: form.phone.trim(),
-        clientEmail: form.email.trim() || gUser?.email || null,
-        services:    [{ id: service.id, name: option?.name ? `${service.name} — ${option.name}` : service.name, price, duration: dur, optionId: option?.id || null, optionName: option?.name || null }],
-        status:      'scheduled',
-        notes:       form.notes.trim() || null,
-        source:      'online_booking',
-        createdAt:   new Date().toISOString(),
-        updatedAt:   new Date().toISOString(),
-      };
-      await createAppointment(appt);
-      setConfirmed(appt);
-    } catch {
+      const created = [];
+      for (const item of cart) {
+        const { service: svc, option: opt, tech: itemTech, date: itemDate, slot: itemSlot } = item;
+        const resolved = resolveServicePricing(svc, opt);
+        const dur   = resolved.duration || 60;
+        const price = resolved.price    || 0;
+        const dayAppts = apptsByDate[itemDate] || [];
+        const eligible = techsForService(techs, svc);
+        let assignedTech = itemTech;
+        if (itemTech === null) assignedTech = firstFreeTech(eligible, itemSlot, dur, dayAppts);
+        const h = Math.floor(itemSlot / 60), m = itemSlot % 60;
+
+        const appt = {
+          date:        itemDate,
+          startTime:   `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
+          duration:    dur,
+          techId:      assignedTech?.id   || null,
+          techName:    assignedTech?.name || 'TBD',
+          clientId,
+          clientName:  form.name.trim(),
+          clientPhone: form.phone.trim(),
+          clientEmail: form.email.trim() || gUser?.email || null,
+          services:    [{ id: svc.id, name: opt?.name ? `${svc.name} — ${opt.name}` : svc.name, price, duration: dur, optionId: opt?.id || null, optionName: opt?.name || null }],
+          status:      'scheduled',
+          notes:       form.notes.trim() || null,
+          source:      'online_booking',
+          createdAt:   new Date().toISOString(),
+          updatedAt:   new Date().toISOString(),
+        };
+        await createAppointment(appt);
+        created.push({ ...appt, _service: svc, _option: opt, _tech: assignedTech });
+      }
+      setConfirmed(created);
+    } catch (e) {
+      console.error('[Booking] failed:', e);
       alert('Booking failed. Please try again or call us.');
     } finally {
       setSubmitting(false);
     }
   }
-
-  const eligibleTechs = techsForService(techs, service);
 
   if (loading || gUser === undefined) return <FullCenter><Spinner /></FullCenter>;
   if (!cfg?.enabled) return (
@@ -274,7 +294,7 @@ export default function BookingScreen() {
       </div>
     </FullCenter>
   );
-  if (confirmed) return <SuccessScreen appt={confirmed} service={service} techs={techs} webCfg={webCfg} />;
+  if (confirmed) return <SuccessScreen appts={confirmed} techs={techs} webCfg={webCfg} />;
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', background: '#f5f6f8', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' }}>
@@ -307,46 +327,29 @@ export default function BookingScreen() {
         )}
 
         {step === 1 && (
-          <Step1Service
+          <Step1Cart
             services={services}
-            selected={service}
-            selectedOption={option}
-            onSelect={(s, opt) => {
-              // Update selection only — don't advance. Pick a different service
-              // and we reset the downstream state in case the user changes their
-              // mind before tapping Book.
-              if (s?.id !== service?.id) { setTech(undefined); setSlot(null); setAppts(null); }
-              setService(s);
-              setOption(opt || null);
-            }}
-            onProceed={(s, opt) => {
-              setService(s);
-              setOption(opt || null);
-              setTech(undefined); setSlot(null); setAppts(null);
-              setStep(2);
-            }}
+            cart={cart}
+            onAdd={addToCart}
+            onRemove={removeFromCart}
+            onProceed={() => setStep(2)}
           />
         )}
         {step === 2 && (
-          <Step2Stylist
-            techs={eligibleTechs}
-            allTechs={techs}
-            service={service}
-            selected={tech}
-            onSelect={t => { setTech(t); setStep(3); }}
+          <Step2AssignTechs
+            cart={cart} allTechs={techs}
+            updateCartItem={updateCartItem}
+            onProceed={() => setStep(3)}
             onBack={() => setStep(1)}
           />
         )}
         {step === 3 && (
-          <Step3DateTime
-            service={service} option={option} tech={tech} techs={eligibleTechs}
-            date={date} slot={slot} appts={appts}
-            onDateChange={d => { setDate(d); setSlot(null); }}
-            onSlotSelect={s => {
-              setSlot(s);
-              // Skip Step 4 only when we already have everything we need.
-              // A signed-in but unrecognized email (e.g. magic-link user not in
-              // client list) still has empty name/phone, so they need the form.
+          <Step3ScheduleEach
+            cart={cart} allTechs={techs}
+            apptsByDate={apptsByDate}
+            ensureApptsForDate={ensureApptsForDate}
+            updateCartItem={updateCartItem}
+            onProceed={() => {
               const haveAll = form.name.trim() && form.phone.trim();
               setStep(haveAll ? 5 : 4);
             }}
@@ -366,8 +369,8 @@ export default function BookingScreen() {
         )}
         {step === 5 && (
           <Step5Confirm
-            service={service} option={option} tech={tech} techs={eligibleTechs}
-            date={date} slot={slot} appts={appts}
+            cart={cart} allTechs={techs}
+            apptsByDate={apptsByDate}
             form={form} submitting={submitting}
             onEditInfo={() => setStep(4)}
             onConfirm={handleBook}
@@ -424,7 +427,7 @@ function Header({ step, cfg, gUser, client, onSignIn, onSignOut }) {
           ))}
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, paddingBottom: 2 }}>
-          {['Service','Stylist','Date','Info','Confirm'].map((label, i) => (
+          {['Cart','Stylists','Schedule','Info','Confirm'].map((label, i) => (
             <div key={i} style={{ flex: 1, textAlign: 'center', fontSize: 9, fontWeight: i + 1 <= step ? 700 : 400, color: i + 1 <= step ? '#fff' : 'rgba(255,255,255,.4)', letterSpacing: '.03em', textTransform: 'uppercase' }}>
               {label}
             </div>
@@ -435,12 +438,22 @@ function Header({ step, cfg, gUser, client, onSignIn, onSignOut }) {
   );
 }
 
-// ── Step 1: Service ────────────────────────────────────
-function Step1Service({ services, selected, selectedOption, onSelect, onProceed }) {
+// ── Step 1: Cart (browse + add) ────────────────────────
+function Step1Cart({ services, cart, onAdd, onRemove, onProceed }) {
   const groups = groupByCategory(services);
+  // Per-row selected option (local UI state) — picking a variant chip just
+  // remembers it so 'Add to cart' adds the right one.
+  const [pendingOptions, setPendingOptions] = useState({}); // svc.id → option
+  const cartTotal = cart.reduce((sum, item) => {
+    const { price } = resolveServicePricing(item.service, item.option);
+    return sum + (price || 0);
+  }, 0);
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <StepTitle>Choose a service</StepTitle>
+    <div style={{ maxWidth: 720, margin: '0 auto', paddingBottom: cart.length ? 110 : 16 }}>
+      <StepTitle>Choose your services</StepTitle>
+      <div style={{ fontSize: 13, color: '#888', marginTop: -10, marginBottom: 18, lineHeight: 1.5 }}>
+        Add as many services as you'd like — you'll pick a stylist and time for each one in the next step.
+      </div>
       {groups.map(({ category, services: svcs }) => {
         const color = CATEGORY_COLORS[category] || '#1a1a1a';
         return (
@@ -452,28 +465,59 @@ function Step1Service({ services, selected, selectedOption, onSelect, onProceed 
             <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #ececec', overflow: 'hidden' }}>
               {svcs.map((s, i) => (
                 <ServiceRow key={s.id} svc={s} color={color}
-                  selected={selected?.id === s.id}
-                  selectedOption={selected?.id === s.id ? selectedOption : null}
+                  selectedOption={pendingOptions[s.id] || null}
                   divider={i < svcs.length - 1}
-                  onSelect={(opt) => onSelect(s, opt)}
-                  onProceed={(opt) => onProceed(s, opt)} />
+                  onSelectOption={(opt) => setPendingOptions(p => ({ ...p, [s.id]: opt }))}
+                  onAdd={(opt) => {
+                    onAdd(s, opt || pendingOptions[s.id] || (s.options?.[0] ?? null));
+                    setPendingOptions(p => ({ ...p, [s.id]: null }));
+                  }} />
               ))}
             </div>
           </div>
         );
       })}
+
+      {/* Sticky cart strip */}
+      {cart.length > 0 && (
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'rgba(255,255,255,.97)', backdropFilter: 'blur(8px)', borderTop: '1px solid #e0e0e0', padding: '14px 20px', zIndex: 20 }}>
+          <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>
+                {cart.length} {cart.length === 1 ? 'service' : 'services'} · ${cartTotal}
+              </div>
+              <div style={{ fontSize: 11, color: '#888', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {cart.map(item => item.option?.name || item.service.name).join(' · ')}
+              </div>
+            </div>
+            <button onClick={onProceed}
+              style={{ background: 'var(--tm-primary, #2D7A5F)', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: 999, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 12px rgba(0,0,0,.15)' }}>
+              Continue →
+            </button>
+          </div>
+          {/* Mini cart list (compact) */}
+          <div style={{ maxWidth: 720, margin: '8px auto 0', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {cart.map(item => (
+              <span key={item.id} style={{ fontSize: 11, background: '#f0f0f0', color: '#444', padding: '4px 10px', borderRadius: 999, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {item.option?.name || item.service.name}
+                <button onClick={() => onRemove(item.id)} title="Remove"
+                  style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1, fontFamily: 'inherit' }}>×</button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect, onProceed }) {
+function ServiceRow({ svc, color, selectedOption, divider, onSelectOption, onAdd }) {
   const [hover,  setHover]  = useState(false);
   const [imgErr, setImgErr] = useState(false);
   const hasImg = svc.image && !imgErr;
   const opts   = svc.options || [];
   const hasOptions = opts.length > 0;
 
-  // For services with options, the right-side 'from $X' uses the cheapest option.
   const minOptPrice = hasOptions
     ? opts.reduce((m, o) => {
         const { price } = resolveServicePricing(svc, o);
@@ -481,12 +525,10 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect, o
       }, null)
     : null;
 
-  function handleBookClick(e) {
+  function handleAddClick(e) {
     e.stopPropagation();
-    // Book CTA always proceeds. For options-services without an explicit pick,
-    // default to whatever's currently selected on this row, or the first variant.
     const opt = hasOptions ? (selectedOption || opts[0]) : null;
-    onProceed(opt);
+    onAdd(opt);
   }
 
   return (
@@ -495,7 +537,7 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect, o
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 16,
         textAlign: 'left', fontFamily: 'inherit', width: '100%',
-        background: selected ? `${color}10` : hover ? '#fafafa' : '#fff',
+        background: hover ? '#fafafa' : '#fff',
         borderBottom: divider ? '1px solid #f1f1f1' : 'none',
         padding: '18px 20px',
         transition: 'background .15s',
@@ -508,26 +550,20 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect, o
         }
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: svc.description ? 6 : 0 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a', letterSpacing: '-.1px' }}>{svc.name}</span>
-          {selected && !hasOptions && (
-            <span style={{ width: 18, height: 18, borderRadius: '50%', background: color, color: '#fff', fontSize: 11, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>✓</span>
-          )}
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a', letterSpacing: '-.1px', marginBottom: svc.description ? 6 : 0 }}>{svc.name}</div>
         {svc.description && (
           <div style={{ fontSize: 13, color: '#666', lineHeight: 1.55, whiteSpace: 'pre-line' }}>
             {svc.description}
           </div>
         )}
 
-        {/* Options grid — each variant is its own selectable card */}
         {hasOptions && (
           <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
             {opts.map(opt => {
-              const isOptSel = selected && selectedOption?.id === opt.id;
+              const isOptSel = selectedOption?.id === opt.id;
               const { price, duration } = resolveServicePricing(svc, opt);
               return (
-                <button key={opt.id} onClick={e => { e.stopPropagation(); onSelect(opt); }}
+                <button key={opt.id} onClick={e => { e.stopPropagation(); onSelectOption(opt); }}
                   style={{
                     background: isOptSel ? color : '#fff',
                     border: `1.5px solid ${isOptSel ? color : '#e0e0e0'}`,
@@ -556,81 +592,103 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect, o
         )}
       </div>
 
-      {/* Right-side price + Book pill — shown for every service for a consistent layout. */}
       <div style={{ flexShrink: 0, textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, paddingTop: 2 }}>
         <span style={{ fontSize: 16, fontWeight: 800, color: '#1a1a1a', letterSpacing: '-.2px', whiteSpace: 'nowrap' }}>
           {hasOptions ? `from $${minOptPrice}` : formatPrice(svc.basePrice, svc.priceFrom)}
         </span>
-        <button onClick={handleBookClick}
+        <button onClick={handleAddClick}
           style={{
             fontSize: 12, fontWeight: 700,
             color: '#fff', border: 'none',
-            background: selected ? '#1a1a1a' : 'var(--tm-primary, #2D7A5F)',
-            padding: '7px 18px', borderRadius: 999,
+            background: 'var(--tm-primary, #2D7A5F)',
+            padding: '7px 16px', borderRadius: 999,
             letterSpacing: '.04em', whiteSpace: 'nowrap',
             boxShadow: '0 2px 6px rgba(0,0,0,.10)',
             cursor: 'pointer', fontFamily: 'inherit',
             transition: 'background .15s',
           }}>
-          {selected ? '✓ Selected' : 'Book'}
+          + Add
         </button>
       </div>
     </div>
   );
 }
 
-// ── Step 2: Stylist ────────────────────────────────────
-function Step2Stylist({ techs, allTechs, service, selected, onSelect, onBack }) {
-  const filteredOut = (allTechs?.length || 0) - techs.length;
-
-  if (techs.length === 0) {
-    return (
-      <div>
-        <StepTitle>Choose your stylist</StepTitle>
-        <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 14, padding: '20px 18px', textAlign: 'center' }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>😔</div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#7c2d12', marginBottom: 4 }}>No stylists available for this service</div>
-          <div style={{ fontSize: 12, color: '#9a3412', lineHeight: 1.5 }}>
-            None of our team currently performs <strong>{service?.name}</strong>. Please pick another service or call us.
-          </div>
-        </div>
-        <div style={{ marginTop: 16 }}><BackBtn onClick={onBack} /></div>
-      </div>
-    );
-  }
+// ── Step 2: Assign a stylist to each cart item ─────────
+function Step2AssignTechs({ cart, allTechs, updateCartItem, onProceed, onBack }) {
+  const allTechsAssigned = cart.every(item => item.tech !== undefined);
 
   return (
-    <div>
-      <StepTitle>Choose your stylist</StepTitle>
-      {filteredOut > 0 && (
-        <div style={{ fontSize: 12, color: '#888', marginBottom: 12, padding: '8px 12px', background: '#fafafa', borderRadius: 8, border: '1px solid #ececec' }}>
-          Showing only stylists who perform <strong style={{ color: '#333' }}>{service?.name}</strong>.
-        </div>
-      )}
-      {/* No preference */}
-      <button onClick={() => onSelect(null)} style={{
-        display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',
-        borderRadius: 14, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', width: '100%',
-        marginBottom: 12,
-        border: `1.5px solid ${selected === null ? 'var(--tm-primary, #2D7A5F)' : '#e8e8e8'}`,
-        background: selected === null ? '#f0f9f5' : '#fff',
-        boxShadow: selected === null ? '0 0 0 2px var(--tm-primary, #2D7A5F)30' : '0 1px 4px rgba(0,0,0,.05)',
-      }}>
-        <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, flexShrink: 0 }}>💅</div>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a1a', marginBottom: 2 }}>No preference</div>
-          <div style={{ fontSize: 12, color: '#888' }}>We'll assign an available stylist for you</div>
-        </div>
-        {selected === null && <div style={{ marginLeft: 'auto', color: 'var(--tm-primary, #2D7A5F)', fontSize: 20, paddingRight: 4 }}>✓</div>}
-      </button>
-
-      {/* Tech grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 8 }}>
-        {techs.map(t => (
-          <TechCard key={t.id} tech={t} selected={selected?.id === t.id} onSelect={() => onSelect(t)} />
-        ))}
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <StepTitle>Choose a stylist for each service</StepTitle>
+      <div style={{ fontSize: 13, color: '#888', marginTop: -10, marginBottom: 18, lineHeight: 1.5 }}>
+        Each service can have its own stylist (or pick "no preference" and we'll assign someone).
       </div>
-      <div style={{ marginTop: 16 }}><BackBtn onClick={onBack} /></div>
+      {cart.map((item, idx) => {
+        const eligible = techsForService(allTechs, item.service);
+        const filteredOut = allTechs.length - eligible.length;
+        const itemLabel = item.option?.name ? `${item.service.name} — ${item.option.name}` : item.service.name;
+        return (
+          <div key={item.id} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, padding: 16, marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, paddingBottom: 10, borderBottom: '1px solid #f1f1f1' }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase' }}>Service {idx + 1}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a', marginTop: 2 }}>{itemLabel}</div>
+              </div>
+              {item.tech !== undefined && (
+                <div style={{ fontSize: 12, color: 'var(--tm-primary, #2D7A5F)', fontWeight: 700 }}>
+                  ✓ {item.tech === null ? 'No preference' : item.tech.name}
+                </div>
+              )}
+            </div>
+
+            {eligible.length === 0 ? (
+              <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, textAlign: 'center' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#7c2d12' }}>No stylists perform this service</div>
+                <div style={{ fontSize: 11, color: '#9a3412', marginTop: 3 }}>Remove it from your cart to continue.</div>
+              </div>
+            ) : (
+              <>
+                {filteredOut > 0 && (
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 10 }}>
+                    Showing only stylists who perform this service.
+                  </div>
+                )}
+                <button onClick={() => updateCartItem(item.id, { tech: null })} style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                  borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', width: '100%',
+                  marginBottom: 10,
+                  border: `1.5px solid ${item.tech === null ? 'var(--tm-primary, #2D7A5F)' : '#e8e8e8'}`,
+                  background: item.tech === null ? '#f0f9f5' : '#fff',
+                }}>
+                  <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>💅</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>No preference</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>We'll pick an available stylist</div>
+                  </div>
+                </button>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 8 }}>
+                  {eligible.map(t => (
+                    <TechCard key={t.id} tech={t}
+                      selected={item.tech?.id === t.id}
+                      onSelect={() => updateCartItem(item.id, { tech: t })} />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        <button onClick={onBack} style={{ flex: 1, padding: '14px', borderRadius: 12, border: '1px solid #d8d8d8', background: '#fff', color: '#555', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+          ← Back
+        </button>
+        <button onClick={onProceed} disabled={!allTechsAssigned}
+          style={{ flex: 2, padding: '14px', borderRadius: 12, border: 'none', background: allTechsAssigned ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 15, fontWeight: 700, cursor: allTechsAssigned ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+          Continue →
+        </button>
+      </div>
     </div>
   );
 }
@@ -655,62 +713,110 @@ function TechCard({ tech, selected, onSelect }) {
   );
 }
 
-// ── Step 3: Date + Time ────────────────────────────────
-function Step3DateTime({ service, option, tech, techs, date, slot, appts, onDateChange, onSlotSelect, onBack }) {
-  const dur = (option ? resolveServicePricing(service, option).duration : service?.duration) || 60;
-  const allSlots = getSlots(dur);
-
-  function isAvailable(slotMins) {
-    if (!appts) return false;
-    return tech === null
-      ? techs.some(t => isTechFreeAt(t, slotMins, dur, appts))
-      : isTechFreeAt(tech, slotMins, dur, appts);
-  }
-
-  const hasAny = appts && allSlots.some(s => isAvailable(s));
+// ── Step 3: Schedule each cart item ────────────────────
+function Step3ScheduleEach({ cart, allTechs, apptsByDate, ensureApptsForDate, updateCartItem, onProceed, onBack }) {
+  const allScheduled = cart.every(item => item.date && item.slot != null);
 
   return (
-    <div>
-      <StepTitle>Pick a date &amp; time</StepTitle>
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <StepTitle>Pick a date &amp; time for each service</StepTitle>
+      <div style={{ fontSize: 13, color: '#888', marginTop: -10, marginBottom: 18, lineHeight: 1.5 }}>
+        Schedule each service individually — same day or different days, your call.
+      </div>
+      {cart.map((item, idx) => (
+        <CartItemSchedule
+          key={item.id}
+          item={item} idx={idx}
+          allTechs={allTechs}
+          apptsByDate={apptsByDate}
+          ensureApptsForDate={ensureApptsForDate}
+          updateCartItem={updateCartItem}
+        />
+      ))}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        <button onClick={onBack} style={{ flex: 1, padding: '14px', borderRadius: 12, border: '1px solid #d8d8d8', background: '#fff', color: '#555', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+          ← Back
+        </button>
+        <button onClick={onProceed} disabled={!allScheduled}
+          style={{ flex: 2, padding: '14px', borderRadius: 12, border: 'none', background: allScheduled ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 15, fontWeight: 700, cursor: allScheduled ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+          Continue →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CartItemSchedule({ item, idx, allTechs, apptsByDate, ensureApptsForDate, updateCartItem }) {
+  const dur = resolveServicePricing(item.service, item.option).duration || 60;
+  const allSlots = getSlots(dur);
+  const eligible = techsForService(allTechs, item.service);
+  const dayAppts = item.date ? apptsByDate[item.date] : null;
+
+  useEffect(() => { if (item.date) ensureApptsForDate(item.date); }, [item.date]); // eslint-disable-line
+
+  function isAvailable(slotMins) {
+    if (!dayAppts) return false;
+    if (item.tech) return isTechFreeAt(item.tech, slotMins, dur, dayAppts);
+    // No preference — at least one eligible tech must be free.
+    return eligible.some(t => isTechFreeAt(t, slotMins, dur, dayAppts));
+  }
+  const hasAny = dayAppts && allSlots.some(s => isAvailable(s));
+  const itemLabel = item.option?.name ? `${item.service.name} — ${item.option.name}` : item.service.name;
+  const techLabel = item.tech ? item.tech.name : 'No preference';
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, padding: 16, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid #f1f1f1' }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase' }}>Service {idx + 1} · {dur} min</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a', marginTop: 2 }}>{itemLabel}</div>
+          <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>Stylist: {techLabel}</div>
+        </div>
+        {item.date && item.slot != null && (
+          <div style={{ fontSize: 12, color: 'var(--tm-primary, #2D7A5F)', fontWeight: 700, textAlign: 'right' }}>
+            ✓ {fmtDate(item.date)}<br/>{minsToStr(item.slot)}
+          </div>
+        )}
+      </div>
+
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
         <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-          <BookingCalendar value={date} onChange={onDateChange} />
+          <BookingCalendar value={item.date} onChange={d => updateCartItem(item.id, { date: d, slot: null })} />
         </div>
-        {date && (
+        {item.date && (
           <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#555', marginBottom: 12 }}>{fmtDate(date)}</div>
-            {appts === null ? (
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#555', marginBottom: 12 }}>{fmtDate(item.date)}</div>
+            {dayAppts == null ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}><Spinner /></div>
             ) : hasAny ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(75px, 1fr))', gap: 6 }}>
-              {allSlots.map(m => {
-                const avail = isAvailable(m);
-                const isSel = slot === m;
-                return (
-                  <button key={m} onClick={() => avail && onSlotSelect(m)} disabled={!avail}
-                    style={{
-                      padding: '12px 4px', borderRadius: 10, fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
-                      border: `1.5px solid ${isSel ? 'var(--tm-primary, #2D7A5F)' : avail ? '#c3e6d8' : '#ececec'}`,
-                      background: isSel ? 'var(--tm-primary, #2D7A5F)' : avail ? '#f0f9f5' : '#fafafa',
-                      color: isSel ? '#fff' : avail ? '#1a6040' : '#ccc',
-                      cursor: avail ? 'pointer' : 'default',
-                    }}>
-                    {minsToStr(m)}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '32px 16px', background: '#fff', borderRadius: 14, border: '1px solid #e8e8e8' }}>
-              <div style={{ fontSize: 28, marginBottom: 8 }}>😔</div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#555' }}>No availability on this date</div>
-              <div style={{ fontSize: 12, color: '#aaa', marginTop: 4 }}>Try a different day</div>
-            </div>
-          )}
-        </div>
-      )}
+                {allSlots.map(m => {
+                  const avail = isAvailable(m);
+                  const isSel = item.slot === m;
+                  return (
+                    <button key={m} onClick={() => avail && updateCartItem(item.id, { slot: m })} disabled={!avail}
+                      style={{
+                        padding: '12px 4px', borderRadius: 10, fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+                        border: `1.5px solid ${isSel ? 'var(--tm-primary, #2D7A5F)' : avail ? '#c3e6d8' : '#ececec'}`,
+                        background: isSel ? 'var(--tm-primary, #2D7A5F)' : avail ? '#f0f9f5' : '#fafafa',
+                        color: isSel ? '#fff' : avail ? '#1a6040' : '#ccc',
+                        cursor: avail ? 'pointer' : 'default',
+                      }}>
+                      {minsToStr(m)}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '24px 16px', background: '#fafafa', borderRadius: 12, border: '1px solid #ececec' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#555' }}>No availability on this date</div>
+                <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>Try a different day</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      <div style={{ marginTop: 20 }}><BackBtn onClick={onBack} /></div>
     </div>
   );
 }
@@ -812,48 +918,68 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
   );
 }
 
-// ── Step 5: Confirm ────────────────────────────────────
-function Step5Confirm({ service, option, tech, techs, date, slot, appts, form, submitting, onConfirm, onBack, onEditInfo }) {
-  const resolved = resolveServicePricing(service, option);
-  const dur = resolved.duration || 60;
-  const assignedTech = tech !== null ? tech : (appts ? firstFreeTech(techs, slot, dur, appts) : null);
+// ── Step 5: Confirm (multi-item) ────────────────────────
+function Step5Confirm({ cart, allTechs, apptsByDate, form, submitting, onConfirm, onBack, onEditInfo }) {
+  const totalPrice = cart.reduce((sum, item) => sum + (resolveServicePricing(item.service, item.option).price || 0), 0);
+  const totalDur   = cart.reduce((sum, item) => sum + (resolveServicePricing(item.service, item.option).duration || 0), 0);
+
   return (
-    <div>
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <StepTitle>Confirm booking</StepTitle>
 
-      {/* Appointment card */}
-      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 16, overflow: 'hidden', marginBottom: 16, boxShadow: '0 2px 12px rgba(0,0,0,.06)' }}>
-        {/* Service banner */}
-        <div style={{ background: `linear-gradient(135deg,${CATEGORY_COLORS[service?.category] || 'var(--tm-primary, #2D7A5F)'},var(--tm-accent, #3D95CE))`, padding: '16px 20px' }}>
-          <div style={{ fontSize: 13, color: 'rgba(255,255,255,.75)', marginBottom: 2 }}>Service</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: '#fff' }}>{service?.name}{option?.name ? ` — ${option.name}` : ''}</div>
-          <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
-            <span style={{ fontSize: 13, color: 'rgba(255,255,255,.85)', background: 'rgba(255,255,255,.15)', borderRadius: 8, padding: '2px 10px' }}>
-              ${resolved.price}
-            </span>
-            <span style={{ fontSize: 13, color: 'rgba(255,255,255,.85)', background: 'rgba(255,255,255,.15)', borderRadius: 8, padding: '2px 10px' }}>
-              ⏱ {dur} min
-            </span>
+      {/* Per-item summary cards */}
+      {cart.map((item, idx) => {
+        const resolved = resolveServicePricing(item.service, item.option);
+        const dur = resolved.duration || 60;
+        const eligible = techsForService(allTechs, item.service);
+        const dayAppts = apptsByDate[item.date] || [];
+        const assignedTech = item.tech !== null ? item.tech : firstFreeTech(eligible, item.slot, dur, dayAppts);
+        const itemLabel = item.option?.name ? `${item.service.name} — ${item.option.name}` : item.service.name;
+        return (
+          <div key={item.id} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, overflow: 'hidden', marginBottom: 12, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+            <div style={{ background: `linear-gradient(135deg,${CATEGORY_COLORS[item.service?.category] || 'var(--tm-primary, #2D7A5F)'},var(--tm-accent, #3D95CE))`, padding: '14px 18px' }}>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,.7)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Service {idx + 1}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#fff', marginTop: 2 }}>{itemLabel}</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'rgba(255,255,255,.9)', background: 'rgba(255,255,255,.15)', borderRadius: 6, padding: '2px 8px' }}>${resolved.price}</span>
+                <span style={{ fontSize: 12, color: 'rgba(255,255,255,.9)', background: 'rgba(255,255,255,.15)', borderRadius: 6, padding: '2px 8px' }}>⏱ {dur} min</span>
+              </div>
+            </div>
+            {[
+              { icon: '👩‍💼', label: 'Stylist', value: assignedTech?.name || 'Any available' },
+              { icon: '📅',  label: 'Date',    value: fmtDate(item.date) },
+              { icon: '🕐',  label: 'Time',    value: minsToStr(item.slot) },
+            ].map(({ icon, label, value }) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', padding: '10px 18px', borderTop: '1px solid #f0f0f0', gap: 10 }}>
+                <span style={{ fontSize: 14, width: 20, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+                <span style={{ fontSize: 11, color: '#aaa', width: 56, flexShrink: 0 }}>{label}</span>
+                <span style={{ fontSize: 13, color: '#1a1a1a', fontWeight: 500 }}>{value}</span>
+              </div>
+            ))}
           </div>
+        );
+      })}
+
+      {/* Total + customer info */}
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>{cart.length} {cart.length === 1 ? 'service' : 'services'} · {totalDur} min total</span>
+          <span style={{ fontSize: 17, fontWeight: 800, color: '#1a1a1a' }}>${totalPrice}</span>
         </div>
-        {/* Details */}
         {[
-          { icon: '👩‍💼', label: 'Stylist',  value: assignedTech?.name || 'Any available' },
-          { icon: '📅',  label: 'Date',    value: fmtDate(date) },
-          { icon: '🕐',  label: 'Time',    value: minsToStr(slot) },
-          { icon: '👤',  label: 'Name',    value: form.name },
-          { icon: '📞',  label: 'Phone',   value: form.phone },
+          { icon: '👤',  label: 'Name',  value: form.name },
+          { icon: '📞',  label: 'Phone', value: form.phone },
           form.email && { icon: '✉️', label: 'Email', value: form.email },
           form.notes && { icon: '📝', label: 'Notes', value: form.notes },
         ].filter(Boolean).map(({ icon, label, value }) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', borderTop: '1px solid #f0f0f0', gap: 12 }}>
-            <span style={{ fontSize: 16, width: 22, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
-            <span style={{ fontSize: 12, color: '#aaa', width: 56, flexShrink: 0 }}>{label}</span>
+          <div key={label} style={{ display: 'flex', alignItems: 'center', padding: '10px 18px', borderTop: '1px solid #f0f0f0', gap: 10 }}>
+            <span style={{ fontSize: 14, width: 20, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+            <span style={{ fontSize: 11, color: '#aaa', width: 56, flexShrink: 0 }}>{label}</span>
             <span style={{ fontSize: 13, color: '#1a1a1a', fontWeight: 500 }}>{value}</span>
           </div>
         ))}
         {onEditInfo && (
-          <div style={{ padding: '10px 20px', borderTop: '1px solid #f0f0f0', textAlign: 'right' }}>
+          <div style={{ padding: '8px 18px', borderTop: '1px solid #f0f0f0', textAlign: 'right' }}>
             <button onClick={onEditInfo} style={{ background: 'none', border: 'none', color: 'var(--tm-accent, #3D95CE)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>
               ✎ Edit my info
             </button>
@@ -863,7 +989,7 @@ function Step5Confirm({ service, option, tech, techs, date, slot, appts, form, s
 
       <button onClick={onConfirm} disabled={submitting}
         style={{ width: '100%', padding: '16px', borderRadius: 14, border: 'none', background: submitting ? '#aaa' : 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 16, fontWeight: 800, cursor: submitting ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 10, letterSpacing: '.01em' }}>
-        {submitting ? 'Booking…' : '✓ Confirm Appointment'}
+        {submitting ? 'Booking…' : `✓ Confirm ${cart.length} ${cart.length === 1 ? 'Appointment' : 'Appointments'}`}
       </button>
       <BackBtn onClick={onBack} />
       <div style={{ fontSize: 11, color: '#bbb', textAlign: 'center', marginTop: 12, lineHeight: 1.6 }}>
@@ -874,15 +1000,14 @@ function Step5Confirm({ service, option, tech, techs, date, slot, appts, form, s
 }
 
 // ── Success ────────────────────────────────────────────
-function SuccessScreen({ appt, service, techs, webCfg }) {
+function SuccessScreen({ appts, techs, webCfg }) {
+  const list = Array.isArray(appts) ? appts : [appts];
   const address = webCfg?.address || '5029 Olentangy River Rd\nColumbus, OH 43214';
   const addressOneLine = address.replace(/\n/g, ', ');
   const mapsUrl = webCfg?.mapsUrl || `https://maps.google.com/?q=${encodeURIComponent(addressOneLine)}`;
   const phone = webCfg?.phone?.trim();
   const telHref = phone ? `tel:${phone.replace(/[^\d+]/g, '')}` : null;
-  const assignedTech = techs?.find(t => t.id === appt.techId) || null;
-  const serviceCategory = service?.category;
-  const serviceColor = CATEGORY_COLORS[serviceCategory] || 'var(--tm-primary, #2D7A5F)';
+  const sendEmail = list.find(a => a.clientEmail)?.clientEmail;
   return (
     <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', background: '#f5f6f8', display: 'flex', flexDirection: 'column' }}>
       <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', padding: '20px 20px 40px' }}>
@@ -891,47 +1016,61 @@ function SuccessScreen({ appt, service, techs, webCfg }) {
         </div>
       </div>
       <div style={{ maxWidth: 600, margin: '-24px auto 0', padding: '0 16px 48px', width: '100%', boxSizing: 'border-box' }}>
-        <div style={{ background: '#fff', borderRadius: 20, padding: '32px 24px', boxShadow: '0 8px 32px rgba(0,0,0,.1)', textAlign: 'center', marginBottom: 16 }}>
+        <div style={{ background: '#fff', borderRadius: 20, padding: '28px 24px', boxShadow: '0 8px 32px rgba(0,0,0,.1)', textAlign: 'center', marginBottom: 16 }}>
           <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#f0f9f5', border: '3px solid var(--tm-primary, #2D7A5F)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: 30, color: 'var(--tm-primary, #2D7A5F)' }}>
             ✓
           </div>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a1a', marginBottom: 6 }}>You're booked!</div>
           <div style={{ fontSize: 14, color: '#888', lineHeight: 1.7 }}>
-            See you on <strong style={{ color: '#333' }}>{fmtDate(appt.date)}</strong><br />
-            at <strong style={{ color: '#333' }}>{minsToStr(strToMins(appt.startTime))}</strong>
-            {appt.clientEmail && (
-              <><br /><span style={{ fontSize: 12, color: '#bbb' }}>Confirmation sent to {appt.clientEmail}</span></>
+            {list.length === 1
+              ? <>See you on <strong style={{ color: '#333' }}>{fmtDate(list[0].date)}</strong> at <strong style={{ color: '#333' }}>{minsToStr(strToMins(list[0].startTime))}</strong></>
+              : <>{list.length} appointments confirmed.</>}
+            {sendEmail && (
+              <><br /><span style={{ fontSize: 12, color: '#bbb' }}>Confirmation sent to {sendEmail}</span></>
             )}
           </div>
         </div>
 
-        <div style={{ background: '#fff', borderRadius: 16, padding: '16px 20px', boxShadow: '0 2px 8px rgba(0,0,0,.06)', marginBottom: 16 }}>
-          {/* Service row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' }}>
-            <ServiceThumb svc={service} color={serviceColor} />
-            <span style={{ fontSize: 13, color: '#555' }}>{service?.name}</span>
-          </div>
-          {/* Tech row */}
-          {appt.techName !== 'TBD' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' }}>
-              {assignedTech ? <TechAvatar tech={assignedTech} size={36} /> : <span style={{ fontSize: 18, width: 26, textAlign: 'center', flexShrink: 0 }}>👩‍💼</span>}
-              <span style={{ fontSize: 13, color: '#555' }}>{appt.techName}</span>
+        {list.map((a, idx) => {
+          const svc  = a._service;
+          const opt  = a._option;
+          const tech = a._tech || techs?.find(t => t.id === a.techId) || null;
+          const color = CATEGORY_COLORS[svc?.category] || 'var(--tm-primary, #2D7A5F)';
+          const label = opt?.name ? `${svc?.name} — ${opt.name}` : svc?.name;
+          return (
+            <div key={idx} style={{ background: '#fff', borderRadius: 14, padding: '14px 18px', boxShadow: '0 2px 8px rgba(0,0,0,.06)', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                <ServiceThumb svc={svc} color={color} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a1a' }}>{label}</div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{fmtDate(a.date)} · {minsToStr(strToMins(a.startTime))}</div>
+                </div>
+              </div>
+              {a.techName !== 'TBD' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #f5f5f5' }}>
+                  {tech ? <TechAvatar tech={tech} size={28} /> : <span style={{ fontSize: 16, width: 22, textAlign: 'center' }}>👩‍💼</span>}
+                  <span style={{ fontSize: 12, color: '#666' }}>with {a.techName}</span>
+                </div>
+              )}
             </div>
-          )}
-          {/* Address + contact rows */}
+          );
+        })}
+
+        {/* Salon contact card */}
+        <div style={{ background: '#fff', borderRadius: 16, padding: '8px 20px', boxShadow: '0 2px 8px rgba(0,0,0,.06)', marginBottom: 16 }}>
           {[
             { icon: '📍', text: addressOneLine, href: mapsUrl, external: true },
             phone
               ? { icon: '📞', text: phone, href: telHref }
               : { icon: '💬', text: 'Have a question? Chat with us', href: '/?web#chat' },
-          ].map(({ icon, text, href, external }) => {
+          ].map(({ icon, text, href, external }, i, arr) => {
             const inner = (
               <>
                 <span style={{ fontSize: 18, width: 26, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
                 <span style={{ fontSize: 13, color: href ? 'var(--tm-accent, #3D95CE)' : '#555', textDecoration: href ? 'underline' : 'none' }}>{text}</span>
               </>
             );
-            const rowStyle = { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' };
+            const rowStyle = { display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: i < arr.length - 1 ? '1px solid #f5f5f5' : 'none' };
             return href ? (
               <a key={text} href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                 style={{ ...rowStyle, textDecoration: 'none' }}>
