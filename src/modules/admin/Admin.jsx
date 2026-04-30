@@ -599,20 +599,32 @@ function AppearanceSection({ themeId, setThemeId, autoTheme, setAutoTheme, savin
 
 function AddMissingTechUsersBtn({ employees, users, addTechUsersForEmployees, showToast }) {
   const [working, setWorking] = useState(false);
-  const userEmails = new Set(users.map(u => (u.email || '').toLowerCase()));
-  const candidates = employees.filter(e => e.email && e.email.trim() && !userEmails.has(e.email.trim().toLowerCase()));
-  const noEmail   = employees.filter(e => !e.email || !e.email.trim());
+  const userEmails    = new Set(users.map(u => (u.email    || '').toLowerCase()).filter(Boolean));
+  const userTechNames = new Set(users.map(u => (u.techName || '').toLowerCase()).filter(Boolean));
+  // A tech is "missing" if no user exists matching their email OR their techName.
+  const candidates = employees.filter(e => {
+    const em = (e.email || '').trim().toLowerCase();
+    const nm = (e.name  || '').trim().toLowerCase();
+    if (em && userEmails.has(em))    return false;
+    if (nm && userTechNames.has(nm)) return false;
+    return true;
+  });
 
   if (candidates.length === 0) return null;
 
+  const withEmail    = candidates.filter(e => e.email && e.email.trim());
+  const withoutEmail = candidates.filter(e => !e.email || !e.email.trim());
+
   async function run() {
-    const summary = candidates.map(e => `• ${e.name} <${e.email}>`).join('\n');
-    const skipMsg = noEmail.length ? `\n\nSkipping ${noEmail.length} tech${noEmail.length === 1 ? '' : 's'} with no email on file:\n${noEmail.map(e => `• ${e.name}`).join('\n')}` : '';
-    if (!confirm(`Add ${candidates.length} tech user${candidates.length === 1 ? '' : 's'}?\n\n${summary}${skipMsg}`)) return;
+    const lines = [];
+    if (withEmail.length)   lines.push(`With email (${withEmail.length}):\n${withEmail.map(e => `• ${e.name} <${e.email}>`).join('\n')}`);
+    if (withoutEmail.length) lines.push(`Need email later (${withoutEmail.length}):\n${withoutEmail.map(e => `• ${e.name}`).join('\n')}\n\nThese will get a placeholder email like name@pending.meraki.local — edit each user's email in this list once you have it.`);
+    if (!confirm(`Add ${candidates.length} tech user${candidates.length === 1 ? '' : 's'}?\n\n${lines.join('\n\n')}`)) return;
     setWorking(true);
     try {
       const res = await addTechUsersForEmployees(candidates);
-      showToast(`Added ${res.added} tech user${res.added === 1 ? '' : 's'}`);
+      const tail = res.placeholders ? ` (${res.placeholders} need real emails)` : '';
+      showToast(`Added ${res.added} tech user${res.added === 1 ? '' : 's'}${tail}`);
     } catch (e) {
       showToast('Failed: ' + (e.message || 'unknown'), 4000);
     } finally {
@@ -649,6 +661,11 @@ function UserRow({ user, children }) {
         <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>
           {user.name || user.email}
           {' '}<RoleBadge role={user.role} />
+          {user.emailPending && (
+            <span title="Placeholder email — edit this user once you have their real address" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', padding: '1px 6px', borderRadius: 8, letterSpacing: '.04em' }}>
+              EMAIL NEEDED
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 11, color: '#888' }}>{user.email}</div>
         <div style={{ fontSize: 10, color: '#bbb', marginTop: 2 }}>{user.grantedAt ? 'Granted: ' + formatTime(user.grantedAt) : 'Requested: ' + formatTime(user.requestedAt)}</div>

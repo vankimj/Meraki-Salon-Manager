@@ -228,25 +228,46 @@ export function AppProvider({ children }) {
   }, [users, showToast]);
 
   // ── Bulk: create tech user records for missing employees ──
-  // Given a list of employees, creates a 'tech' user for each one whose
-  // email isn't already in the users array. Skips employees with no email
-  // (we can't grant access without a way for them to sign in).
+  // Given a list of employees, creates a 'tech' user for each one that doesn't
+  // already have a user record. Matching is done first by email (when set),
+  // then by techName so we don't duplicate techs that already have access.
+  // Employees without an email get a placeholder address the admin can replace
+  // later — better than dropping them silently, since the rest of their profile
+  // (name, photo, instagram, phone) is still useful for the user record.
   const addTechUsersForEmployees = useCallback(async (employeeList) => {
-    const existingEmails = new Set(users.map(u => (u.email || '').toLowerCase()));
-    const candidates = (employeeList || []).filter(e =>
-      e.email && e.email.trim() && !existingEmails.has(e.email.trim().toLowerCase())
-    );
-    if (candidates.length === 0) return { added: 0, skipped: 0 };
+    const existingEmails    = new Set(users.map(u => (u.email || '').toLowerCase()).filter(Boolean));
+    const existingTechNames = new Set(users.map(u => (u.techName || '').toLowerCase()).filter(Boolean));
 
-    const skipped = (employeeList || []).filter(e => !e.email || !e.email.trim()).length;
-    const newUsers = candidates.map(e => ({
-      email:     e.email.trim(),
-      name:      e.name || e.email,
-      picture:   e.photo || '',
-      role:      'tech',
-      techName:  e.name || null,
-      grantedAt: new Date().toISOString(),
-    }));
+    function slugify(name) {
+      return (name || 'tech').toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '');
+    }
+
+    const candidates = (employeeList || []).filter(e => {
+      const email = (e.email || '').trim().toLowerCase();
+      const tn    = (e.name  || '').trim().toLowerCase();
+      if (email && existingEmails.has(email)) return false;
+      if (tn && existingTechNames.has(tn))    return false;
+      return true;
+    });
+    if (candidates.length === 0) return { added: 0, placeholders: 0 };
+
+    let placeholders = 0;
+    const newUsers = candidates.map(e => {
+      const realEmail = (e.email || '').trim();
+      const email = realEmail || `${slugify(e.name)}@pending.meraki.local`;
+      if (!realEmail) placeholders++;
+      return {
+        email,
+        name:        e.name || email,
+        picture:     e.photo || '',
+        role:        'tech',
+        techName:    e.name || null,
+        phone:       e.phone || '',
+        instagram:   e.instagram || '',
+        emailPending: !realEmail || undefined,  // marker the admin can spot in the row
+        grantedAt:   new Date().toISOString(),
+      };
+    });
     const updated = [...users, ...newUsers];
     setUsers(updated);
     setSyncDot('syncing');
@@ -254,7 +275,7 @@ export function AppProvider({ children }) {
       await saveUsers(updated);
       setSyncDot('ok');
       logActivity('tech_users_bulk_added', `${newUsers.length} techs: ${newUsers.map(u => u.techName || u.email).join(', ')}`);
-      return { added: newUsers.length, skipped };
+      return { added: newUsers.length, placeholders };
     } catch (e) {
       setSyncDot('err');
       throw e;
