@@ -269,7 +269,6 @@ export default function ServicesAdmin() {
           <span style={{ fontSize: 12, color: '#aaa' }}>{services.length} total · {activeCount} active</span>
           {undoStack.length > 0 && <Btn onClick={handleUndo}>↩ Undo</Btn>}
           {redoStack.length > 0 && <Btn onClick={handleRedo}>↪ Redo</Btn>}
-          {!isTech && <Btn color="#7c3aed" onClick={applySuggestedOptions}>↺ Apply suggested options</Btn>}
           {!isTech && <Btn color="#3D95CE" onClick={() => { setEditing(blankService()); setErrors({}); }}>+ Add Service</Btn>}
         </div>
       </div>
