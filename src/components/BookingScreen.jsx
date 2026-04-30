@@ -311,7 +311,20 @@ export default function BookingScreen() {
             services={services}
             selected={service}
             selectedOption={option}
-            onSelect={(s, opt) => { setService(s); setOption(opt || null); setTech(undefined); setSlot(null); setAppts(null); setStep(2); }}
+            onSelect={(s, opt) => {
+              // Update selection only — don't advance. Pick a different service
+              // and we reset the downstream state in case the user changes their
+              // mind before tapping Book.
+              if (s?.id !== service?.id) { setTech(undefined); setSlot(null); setAppts(null); }
+              setService(s);
+              setOption(opt || null);
+            }}
+            onProceed={(s, opt) => {
+              setService(s);
+              setOption(opt || null);
+              setTech(undefined); setSlot(null); setAppts(null);
+              setStep(2);
+            }}
           />
         )}
         {step === 2 && (
@@ -423,7 +436,7 @@ function Header({ step, cfg, gUser, client, onSignIn, onSignOut }) {
 }
 
 // ── Step 1: Service ────────────────────────────────────
-function Step1Service({ services, selected, selectedOption, onSelect }) {
+function Step1Service({ services, selected, selectedOption, onSelect, onProceed }) {
   const groups = groupByCategory(services);
   return (
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
@@ -442,7 +455,8 @@ function Step1Service({ services, selected, selectedOption, onSelect }) {
                   selected={selected?.id === s.id}
                   selectedOption={selected?.id === s.id ? selectedOption : null}
                   divider={i < svcs.length - 1}
-                  onSelect={(opt) => onSelect(s, opt)} />
+                  onSelect={(opt) => onSelect(s, opt)}
+                  onProceed={(opt) => onProceed(s, opt)} />
               ))}
             </div>
           </div>
@@ -452,7 +466,7 @@ function Step1Service({ services, selected, selectedOption, onSelect }) {
   );
 }
 
-function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect }) {
+function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect, onProceed }) {
   const [hover,  setHover]  = useState(false);
   const [imgErr, setImgErr] = useState(false);
   const hasImg = svc.image && !imgErr;
@@ -469,25 +483,20 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect })
 
   function handleBookClick(e) {
     e.stopPropagation();
-    if (hasOptions) {
-      // Book CTA on a service with options: keep the current option if one is
-      // already picked, otherwise default to the first variant.
-      onSelect(selectedOption || opts[0]);
-    } else {
-      onSelect(null);
-    }
+    // Book CTA always proceeds. For options-services without an explicit pick,
+    // default to whatever's currently selected on this row, or the first variant.
+    const opt = hasOptions ? (selectedOption || opts[0]) : null;
+    onProceed(opt);
   }
 
   return (
     <div
-      onClick={hasOptions ? undefined : handleBookClick}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 16,
         textAlign: 'left', fontFamily: 'inherit', width: '100%',
         background: selected ? `${color}10` : hover ? '#fafafa' : '#fff',
         borderBottom: divider ? '1px solid #f1f1f1' : 'none',
-        cursor: hasOptions ? 'default' : 'pointer',
         padding: '18px 20px',
         transition: 'background .15s',
       }}>
