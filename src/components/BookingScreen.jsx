@@ -459,16 +459,28 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect })
   const opts   = svc.options || [];
   const hasOptions = opts.length > 0;
 
-  function handleRowClick(e) {
-    // If the service has options, the parent row tap shouldn't auto-book —
-    // the user needs to pick a variant pill below.
-    if (hasOptions) return;
-    onSelect(null);
+  // For services with options, the right-side 'from $X' uses the cheapest option.
+  const minOptPrice = hasOptions
+    ? opts.reduce((m, o) => {
+        const { price } = resolveServicePricing(svc, o);
+        return m == null || price < m ? price : m;
+      }, null)
+    : null;
+
+  function handleBookClick(e) {
+    e.stopPropagation();
+    if (hasOptions) {
+      // Book CTA on a service with options: keep the current option if one is
+      // already picked, otherwise default to the first variant.
+      onSelect(selectedOption || opts[0]);
+    } else {
+      onSelect(null);
+    }
   }
 
   return (
     <div
-      onClick={handleRowClick}
+      onClick={hasOptions ? undefined : handleBookClick}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 16,
@@ -535,26 +547,25 @@ function ServiceRow({ svc, color, selected, selectedOption, divider, onSelect })
         )}
       </div>
 
-      {/* Right-side price + Book pill — only for services without options.
-          Services with options use their inline option-pills as the selector. */}
-      {!hasOptions && (
-        <div style={{ flexShrink: 0, textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, paddingTop: 2 }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: '#1a1a1a', letterSpacing: '-.2px', whiteSpace: 'nowrap' }}>
-            {formatPrice(svc.basePrice, svc.priceFrom)}
-          </span>
-          <span style={{
+      {/* Right-side price + Book pill — shown for every service for a consistent layout. */}
+      <div style={{ flexShrink: 0, textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, paddingTop: 2 }}>
+        <span style={{ fontSize: 16, fontWeight: 800, color: '#1a1a1a', letterSpacing: '-.2px', whiteSpace: 'nowrap' }}>
+          {hasOptions ? `from $${minOptPrice}` : formatPrice(svc.basePrice, svc.priceFrom)}
+        </span>
+        <button onClick={handleBookClick}
+          style={{
             fontSize: 12, fontWeight: 700,
-            color: '#fff',
+            color: '#fff', border: 'none',
             background: selected ? '#1a1a1a' : 'var(--tm-primary, #2D7A5F)',
             padding: '7px 18px', borderRadius: 999,
             letterSpacing: '.04em', whiteSpace: 'nowrap',
             boxShadow: '0 2px 6px rgba(0,0,0,.10)',
+            cursor: 'pointer', fontFamily: 'inherit',
             transition: 'background .15s',
           }}>
-            {selected ? '✓ Selected' : 'Book'}
-          </span>
-        </div>
-      )}
+          {selected ? '✓ Selected' : 'Book'}
+        </button>
+      </div>
     </div>
   );
 }
