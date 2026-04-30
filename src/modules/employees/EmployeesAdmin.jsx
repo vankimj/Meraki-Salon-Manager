@@ -85,16 +85,35 @@ export default function EmployeesAdmin() {
     finally { setSeeding(false); }
   }
 
+  async function assignAllServicesToAll() {
+    if (!confirm(`Mark every employee as able to perform all ${services.length} services? You can fine-tune individual techs after.`)) return;
+    const allIds = services.map(s => s.id);
+    try {
+      for (const emp of employees) {
+        await saveEmployee(emp.id, { ...emp, serviceIds: allIds });
+      }
+      logActivity('employees_services_bulk_set', `${employees.length} techs → ${allIds.length} services`);
+      showToast(`Assigned all services to ${employees.length} techs`);
+      await load();
+    } catch (e) {
+      console.error('[Employees] bulk service assign failed:', e);
+      showToast('Bulk update failed — ' + (e.message || 'unknown'), 4000);
+    }
+  }
+
   if (loading) return <Empty>Loading…</Empty>;
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: 1, fontSize: 13, color: '#888' }}>{employees.length} team member{employees.length !== 1 ? 's' : ''}</div>
         {employees.length === 0 && (
           <Btn onClick={seedEmployees} disabled={seeding} color="#f59e0b">
             {seeding ? 'Adding…' : '↺ Seed from defaults'}
           </Btn>
+        )}
+        {employees.length > 0 && services.length > 0 && (
+          <Btn onClick={assignAllServicesToAll} color="#7c3aed">↺ Assign all services to all</Btn>
         )}
         <Btn color="#3D95CE" onClick={() => setEditing(blankEmployee())}>+ Add</Btn>
       </div>
@@ -107,6 +126,7 @@ export default function EmployeesAdmin() {
             <EmployeeRow
               key={emp.id}
               emp={emp}
+              totalServices={services.length}
               last={i === employees.length - 1}
               onEdit={() => setEditing({ ...emp })}
               onDelete={() => handleDelete(emp)}
@@ -130,7 +150,9 @@ export default function EmployeesAdmin() {
   );
 }
 
-function EmployeeRow({ emp, last, onEdit, onDelete, onToggleActive }) {
+function EmployeeRow({ emp, totalServices, last, onEdit, onDelete, onToggleActive }) {
+  const svcCount = emp.serviceIds?.length || 0;
+  const svcConfigured = svcCount > 0;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: last ? 'none' : '1px solid #f0f0f0', opacity: emp.active ? 1 : .5 }}>
       <EmpAvatar emp={emp} size={40} />
@@ -138,6 +160,12 @@ function EmployeeRow({ emp, last, onEdit, onDelete, onToggleActive }) {
         <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>
           {emp.name}
           {!emp.active && <span style={{ fontSize: 10, color: '#bbb', marginLeft: 6, fontWeight: 400 }}>inactive</span>}
+          {totalServices > 0 && (
+            <span title={svcConfigured ? `Performs ${svcCount} of ${totalServices} services` : 'No services configured — defaults to all services'}
+              style={{ fontSize: 10, marginLeft: 8, padding: '1px 7px', borderRadius: 10, fontWeight: 600, background: svcConfigured ? '#EBF4FB' : '#fef3c7', color: svcConfigured ? '#1a5f8a' : '#92400e', border: `1px solid ${svcConfigured ? '#bfdbfe' : '#fde68a'}` }}>
+              {svcConfigured ? `${svcCount} svc` : 'all svc (default)'}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>
           {[emp.phone, emp.email].filter(Boolean).join(' · ') || (emp.instagram ? emp.instagram : 'No contact info')}

@@ -816,7 +816,7 @@ function BookingCalendar({ value, onChange }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(yr, mon, d));
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 16, padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,.05)' }}>
+    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 16, padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,.05)', maxWidth: 460, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <button onClick={prevMonth}
           style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#f0f0f0', color: '#555', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>
@@ -845,7 +845,7 @@ function BookingCalendar({ value, onChange }) {
           return (
             <button key={i} onClick={() => !disabled && onChange(ds)} disabled={disabled}
               style={{
-                height: 40, borderRadius: 10,
+                aspectRatio: '1', borderRadius: 10,
                 border: `1.5px solid ${isSel ? 'var(--tm-primary, #2D7A5F)' : isToday ? '#c3e6d8' : 'transparent'}`,
                 background: isSel ? 'var(--tm-primary, #2D7A5F)' : isToday ? '#f0f9f5' : 'transparent',
                 color: isSel ? '#fff' : disabled ? '#d8d8d8' : '#1a1a1a',
