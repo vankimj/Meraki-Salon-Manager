@@ -14,6 +14,12 @@ function startOf(daysAgo) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function daysBefore(dateStr, days) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function allDatesInRange(start, end) {
   const dates = [];
   const d = new Date(start + 'T12:00:00');
@@ -122,10 +128,12 @@ const TABS = [
 export default function ReportsAdmin() {
   const { isTech, isScheduler } = useApp();
   const [activeTab,  setActiveTab]  = useState('overview');
-  const [periodDays, setPeriodDays] = useState(30);
-  const [appts,      setAppts]      = useState(null);
-  const [priorAppts, setPriorAppts] = useState(null);
-  const [loading,    setLoading]    = useState(true);
+  const [periodDays,  setPeriodDays]  = useState(30); // number | 'custom'
+  const [customStart, setCustomStart] = useState(startOf(30));
+  const [customEnd,   setCustomEnd]   = useState(todayStr());
+  const [appts,       setAppts]       = useState(null);
+  const [priorAppts,  setPriorAppts]  = useState(null);
+  const [loading,     setLoading]     = useState(true);
 
   if (isTech || isScheduler) {
     return (
@@ -137,13 +145,19 @@ export default function ReportsAdmin() {
     );
   }
 
-  const endDate   = todayStr();
-  const startDate = startOf(periodDays);
-  const showComparison = periodDays <= 90;
+  const isCustom  = periodDays === 'custom';
+  const endDate   = isCustom ? customEnd   : todayStr();
+  const startDate = isCustom ? customStart : startOf(periodDays);
+  const durationDays = isCustom
+    ? Math.max(1, Math.round((new Date(endDate + 'T12:00:00') - new Date(startDate + 'T12:00:00')) / 86400000) + 1)
+    : periodDays;
+  const showComparison = durationDays <= 90;
+  const priorStart = daysBefore(startDate, durationDays);
+  const priorEnd   = daysBefore(startDate, 1);
 
   useEffect(() => {
     if (activeTab === 'overview') load();
-  }, [periodDays, activeTab]); // eslint-disable-line
+  }, [startDate, endDate, activeTab]); // eslint-disable-line
 
   async function load() {
     setLoading(true);
@@ -152,7 +166,7 @@ export default function ReportsAdmin() {
     try {
       const [current, prior] = await Promise.all([
         fetchAppointmentsByRange(startDate, endDate),
-        showComparison ? fetchAppointmentsByRange(startOf(periodDays * 2), startOf(periodDays)) : Promise.resolve([]),
+        showComparison ? fetchAppointmentsByRange(priorStart, priorEnd) : Promise.resolve([]),
       ]);
       setAppts(current);
       setPriorAppts(prior);
@@ -205,13 +219,23 @@ export default function ReportsAdmin() {
       ) : (
         <>
           {/* Toolbar */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               {PERIODS.map(p => (
                 <PillBtn key={p.days} active={periodDays === p.days} onClick={() => setPeriodDays(p.days)}>
                   {p.label}
                 </PillBtn>
               ))}
+              <PillBtn active={isCustom} onClick={() => setPeriodDays('custom')}>Custom</PillBtn>
+              {isCustom && (
+                <>
+                  <input type="date" value={customStart} max={customEnd} onChange={e => setCustomStart(e.target.value)}
+                    style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid #d8d8d8', fontFamily: 'inherit', background: '#fafafa', color: '#555', outline: 'none' }} />
+                  <span style={{ color: '#888', fontSize: 12 }}>→</span>
+                  <input type="date" value={customEnd} min={customStart} max={todayStr()} onChange={e => setCustomEnd(e.target.value)}
+                    style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid #d8d8d8', fontFamily: 'inherit', background: '#fafafa', color: '#555', outline: 'none' }} />
+                </>
+              )}
             </div>
             <ExportMenu appts={appts} metrics={metrics} startDate={startDate} endDate={endDate} />
           </div>
@@ -241,7 +265,7 @@ export default function ReportsAdmin() {
 
               {clientRetention && showComparison && (
                 <Card title="New vs Returning Clients" style={{ marginBottom: 12 }}>
-                  <NewVsReturning retention={clientRetention} periodDays={periodDays} />
+                  <NewVsReturning retention={clientRetention} periodDays={durationDays} />
                 </Card>
               )}
 
