@@ -604,7 +604,6 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
 function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onChange, onNext, onBack }) {
   // Required: name + phone (signed-in users skip this step entirely so they bypass the validation)
   const valid = form.name.trim() && form.phone.trim();
-  const hasEmail = form.email.trim().includes('@');
 
   const formCard = (
     <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
@@ -664,37 +663,12 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
         </div>
 
         {/* Email magic link */}
-        <div style={{ padding: '14px 16px', borderTop: '1px solid #f0f0f0' }}>
-          {emailLinkState === 'sent' ? (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              <span style={{ fontSize: 22, marginTop: 2 }}>📬</span>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginBottom: 3 }}>Check your email!</div>
-                <div style={{ fontSize: 12, color: '#888', lineHeight: 1.5 }}>
-                  We sent a sign-in link to <strong>{form.email}</strong>. Click it to come back and finish.
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>Sign in with email link</div>
-                <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
-                  {hasEmail ? `Send a link to ${form.email}` : 'Enter your email below first'}
-                </div>
-                {emailLinkState === 'error' && (
-                  <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>Couldn't send link. Try Google or fill the form.</div>
-                )}
-              </div>
-              <button
-                onClick={() => hasEmail && onSendEmailLink(form.email)}
-                disabled={!hasEmail || emailLinkState === 'sending'}
-                style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, border: 'none', background: hasEmail && emailLinkState !== 'sending' ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: hasEmail && emailLinkState !== 'sending' ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                {emailLinkState === 'sending' ? 'Sending…' : 'Send link ✉️'}
-              </button>
-            </div>
-          )}
-        </div>
+        <EmailLinkRow
+          form={form}
+          onChange={onChange}
+          emailLinkState={emailLinkState}
+          onSendEmailLink={onSendEmailLink}
+        />
       </div>
 
       {/* Divider */}
@@ -963,6 +937,52 @@ function CrossDevicePrompt({ onDone }) {
 }
 
 // ── Shared UI ──────────────────────────────────────────
+function EmailLinkRow({ form, onChange, emailLinkState, onSendEmailLink }) {
+  const [localEmail, setLocalEmail] = useState(form.email || '');
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(localEmail.trim());
+
+  function send() {
+    if (!isValidEmail || emailLinkState === 'sending') return;
+    onChange({ email: localEmail.trim() });
+    onSendEmailLink(localEmail.trim());
+  }
+
+  if (emailLinkState === 'sent') {
+    return (
+      <div style={{ padding: '14px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 22, marginTop: 2 }}>📬</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginBottom: 3 }}>Check your email!</div>
+          <div style={{ fontSize: 12, color: '#888', lineHeight: 1.5 }}>
+            We sent a sign-in link to <strong>{localEmail}</strong>. Click it to come back and finish.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '14px 16px', borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginBottom: 8 }}>Sign in with email link</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+        <input
+          type="email" value={localEmail} onChange={e => setLocalEmail(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          placeholder="you@example.com" autoComplete="email"
+          style={{ flex: 1, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 10, padding: '10px 12px', fontSize: 16, outline: 'none', background: '#fafafa', color: '#1a1a1a', minWidth: 0 }}
+        />
+        <button onClick={send} disabled={!isValidEmail || emailLinkState === 'sending'}
+          style={{ flexShrink: 0, padding: '0 16px', borderRadius: 10, border: 'none', background: isValidEmail && emailLinkState !== 'sending' ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: isValidEmail && emailLinkState !== 'sending' ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+          {emailLinkState === 'sending' ? 'Sending…' : 'Send link ✉️'}
+        </button>
+      </div>
+      {emailLinkState === 'error' && (
+        <div style={{ fontSize: 11, color: '#ef4444', marginTop: 6 }}>Couldn't send link. Try Google or continue as guest.</div>
+      )}
+    </div>
+  );
+}
+
 function ServiceThumb({ svc, color, size = 36 }) {
   const [err, setErr] = useState(false);
   if (svc?.image && !err) {
