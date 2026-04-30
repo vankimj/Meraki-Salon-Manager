@@ -260,7 +260,7 @@ export default function BookingScreen() {
         <CrossDevicePrompt onDone={() => setEmailLinkDevice(false)} />
       )}
 
-      <div style={{ maxWidth: 960, margin: '0 auto', padding: '16px 16px 48px' }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '14px 12px 48px' }}>
         {/* Returning customer welcome */}
         {gUser && client && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f0f9f5', border: '1px solid #c3e6d8', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
@@ -332,7 +332,7 @@ export default function BookingScreen() {
 function Header({ step, cfg, gUser, client, onSignIn, onSignOut }) {
   return (
     <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', position: 'sticky', top: 0, zIndex: 10, boxShadow: '0 2px 12px rgba(0,0,0,.18)' }}>
-      <div style={{ maxWidth: 960, margin: '0 auto', padding: '14px 16px 10px' }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '14px 12px 10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           {/* Logo */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -501,7 +501,7 @@ function Step2Stylist({ techs, allTechs, service, selected, onSelect, onBack }) 
       </button>
 
       {/* Tech grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 8 }}>
         {techs.map(t => (
           <TechCard key={t.id} tech={t} selected={selected?.id === t.id} onSelect={() => onSelect(t)} />
         ))}
@@ -514,19 +514,19 @@ function Step2Stylist({ techs, allTechs, service, selected, onSelect, onBack }) 
 function TechCard({ tech, selected, onSelect }) {
   return (
     <button onClick={onSelect} style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '16px 12px',
-      borderRadius: 14, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 8px',
+      borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center',
       border: `1.5px solid ${selected ? 'var(--tm-primary, #2D7A5F)' : '#e8e8e8'}`,
       background: selected ? '#f0f9f5' : '#fff',
       boxShadow: selected ? '0 0 0 2px var(--tm-primary, #2D7A5F)30' : '0 1px 4px rgba(0,0,0,.05)',
       position: 'relative',
     }}>
       {selected && (
-        <div style={{ position: 'absolute', top: 8, right: 8, width: 20, height: 20, borderRadius: '50%', background: 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
+        <div style={{ position: 'absolute', top: 6, right: 6, width: 18, height: 18, borderRadius: '50%', background: 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
       )}
-      <TechAvatar tech={tech} size={64} />
-      <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginTop: 10, lineHeight: 1.3 }}>{tech.name}</div>
-      {tech.title && <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>{tech.title}</div>}
+      <TechAvatar tech={tech} size={48} />
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1a', marginTop: 6, lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>{tech.name}</div>
+      {tech.title && <div style={{ fontSize: 10, color: '#aaa', marginTop: 1 }}>{tech.title}</div>}
     </button>
   );
 }
@@ -548,17 +548,17 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
   return (
     <div>
       <StepTitle>Pick a date &amp; time</StepTitle>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'flex-start' }}>
-        <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
           <BookingCalendar value={date} onChange={onDateChange} />
         </div>
         {date && (
-          <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <div style={{ flex: '1 1 260px', minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#555', marginBottom: 12 }}>{fmtDate(date)}</div>
             {appts === null ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}><Spinner /></div>
             ) : hasAny ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(75px, 1fr))', gap: 6 }}>
               {allSlots.map(m => {
                 const avail = isAvailable(m);
                 const isSel = slot === m;
