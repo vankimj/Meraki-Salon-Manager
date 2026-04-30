@@ -247,7 +247,7 @@ export default function BookingScreen() {
       </div>
     </FullCenter>
   );
-  if (confirmed) return <SuccessScreen appt={confirmed} service={service} webCfg={webCfg} />;
+  if (confirmed) return <SuccessScreen appt={confirmed} service={service} techs={techs} webCfg={webCfg} />;
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', background: '#f5f6f8', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' }}>
@@ -758,12 +758,15 @@ function Step5Confirm({ service, tech, techs, date, slot, appts, form, submittin
 }
 
 // ── Success ────────────────────────────────────────────
-function SuccessScreen({ appt, service, webCfg }) {
+function SuccessScreen({ appt, service, techs, webCfg }) {
   const address = webCfg?.address || '5029 Olentangy River Rd\nColumbus, OH 43214';
   const addressOneLine = address.replace(/\n/g, ', ');
   const mapsUrl = webCfg?.mapsUrl || `https://maps.google.com/?q=${encodeURIComponent(addressOneLine)}`;
   const phone = webCfg?.phone?.trim();
   const telHref = phone ? `tel:${phone.replace(/[^\d+]/g, '')}` : null;
+  const assignedTech = techs?.find(t => t.id === appt.techId) || null;
+  const serviceCategory = service?.category;
+  const serviceColor = CATEGORY_COLORS[serviceCategory] || 'var(--tm-primary, #2D7A5F)';
   return (
     <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', background: '#f5f6f8', display: 'flex', flexDirection: 'column' }}>
       <div style={{ background: 'var(--tm-grad-dark, linear-gradient(135deg,#1e6b50,#2D7A5F 40%,#3D7FBF))', padding: '20px 20px 40px' }}>
@@ -787,14 +790,25 @@ function SuccessScreen({ appt, service, webCfg }) {
         </div>
 
         <div style={{ background: '#fff', borderRadius: 16, padding: '16px 20px', boxShadow: '0 2px 8px rgba(0,0,0,.06)', marginBottom: 16 }}>
+          {/* Service row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' }}>
+            <ServiceThumb svc={service} color={serviceColor} />
+            <span style={{ fontSize: 13, color: '#555' }}>{service?.name}</span>
+          </div>
+          {/* Tech row */}
+          {appt.techName !== 'TBD' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #f5f5f5' }}>
+              {assignedTech ? <TechAvatar tech={assignedTech} size={36} /> : <span style={{ fontSize: 18, width: 26, textAlign: 'center', flexShrink: 0 }}>👩‍💼</span>}
+              <span style={{ fontSize: 13, color: '#555' }}>{appt.techName}</span>
+            </div>
+          )}
+          {/* Address + contact rows */}
           {[
-            { icon: '💅', text: service?.name },
-            appt.techName !== 'TBD' && { icon: '👩‍💼', text: appt.techName },
             { icon: '📍', text: addressOneLine, href: mapsUrl, external: true },
             phone
               ? { icon: '📞', text: phone, href: telHref }
               : { icon: '💬', text: 'Have a question? Chat with us', href: '/?web#chat' },
-          ].filter(Boolean).map(({ icon, text, href, external }) => {
+          ].map(({ icon, text, href, external }) => {
             const inner = (
               <>
                 <span style={{ fontSize: 18, width: 26, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
@@ -930,6 +944,20 @@ function CrossDevicePrompt({ onDone }) {
 }
 
 // ── Shared UI ──────────────────────────────────────────
+function ServiceThumb({ svc, color, size = 36 }) {
+  const [err, setErr] = useState(false);
+  if (svc?.image && !err) {
+    return <img src={svc.image} alt={svc.name || ''} onError={() => setErr(true)}
+      style={{ width: size, height: size, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />;
+  }
+  const icon = CATEGORY_ICONS[svc?.category] || '💅';
+  return (
+    <div style={{ width: size, height: size, borderRadius: 8, background: `${typeof color === 'string' && color.startsWith('#') ? color + '20' : 'rgba(45,122,95,.12)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: size * 0.55, flexShrink: 0 }}>
+      {icon}
+    </div>
+  );
+}
+
 function TechAvatar({ tech, size = 56 }) {
   const [err, setErr] = useState(false);
   if (tech.photo && !err) {
