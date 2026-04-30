@@ -303,10 +303,10 @@ export default function BookingScreen() {
             onDateChange={d => { setDate(d); setSlot(null); }}
             onSlotSelect={s => {
               setSlot(s);
-              // Skip the info step entirely when we already have name + phone
-              // (signed-in returning customer with a complete client record).
-              const haveAll = form.name.trim() && form.phone.trim();
-              setStep(haveAll ? 5 : 4);
+              // Signed-in users skip Step 4 entirely — we'll book with whatever
+              // we know (name + email from auth, phone if there's a client record).
+              // Guests go to Step 4 to either sign in or fill out the form.
+              setStep(gUser ? 5 : 4);
             }}
             onBack={() => setStep(2)}
           />
@@ -329,7 +329,7 @@ export default function BookingScreen() {
             form={form} submitting={submitting}
             onEditInfo={() => setStep(4)}
             onConfirm={handleBook}
-            onBack={() => setStep(form.name.trim() && form.phone.trim() ? 3 : 4)}
+            onBack={() => setStep(gUser ? 3 : 4)}
           />
         )}
       </div>
@@ -602,104 +602,109 @@ function Step3DateTime({ service, tech, techs, date, slot, appts, onDateChange, 
 
 // ── Step 4: Info ───────────────────────────────────────
 function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onChange, onNext, onBack }) {
+  // Required: name + phone (signed-in users skip this step entirely so they bypass the validation)
   const valid = form.name.trim() && form.phone.trim();
-  const isReturning = gUser && client && client.name && client.phone;
-  const [editing, setEditing] = useState(!isReturning);
   const hasEmail = form.email.trim().includes('@');
 
+  const formCard = (
+    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
+      {[
+        { key: 'name',  label: 'Name',  type: 'text',  placeholder: 'Your full name',                 required: true  },
+        { key: 'phone', label: 'Phone', type: 'tel',   placeholder: '(555) 000-0000',                 required: true  },
+        { key: 'email', label: 'Email', type: 'email', placeholder: 'For confirmation & sign-in',     required: false },
+        { key: 'notes', label: 'Notes', type: 'text',  placeholder: 'Any requests or preferences?',   required: false },
+      ].map(({ key, label, type, placeholder, required }, i, arr) => (
+        <div key={key} style={{ display: 'flex', alignItems: 'center', padding: '13px 16px', borderBottom: i < arr.length - 1 ? '1px solid #f0f0f0' : 'none', gap: 12 }}>
+          <div style={{ width: 52, fontSize: 12, color: '#aaa', fontWeight: 600, flexShrink: 0 }}>
+            {label}{required && <span style={{ color: '#ef4444' }}> *</span>}
+          </div>
+          <input
+            type={type} value={form[key]} onChange={e => onChange({ [key]: e.target.value })}
+            placeholder={placeholder}
+            style={{ flex: 1, fontFamily: 'inherit', border: 'none', outline: 'none', fontSize: 16, background: 'transparent', color: '#1a1a1a' }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+
+  // Signed-in: this step is only reachable via 'Edit my info'. Show form straight up.
+  if (gUser) {
+    return (
+      <div>
+        <StepTitle>Your information</StepTitle>
+        {formCard}
+        <button onClick={onNext} disabled={!valid}
+          style={{ width: '100%', padding: '15px', borderRadius: 12, border: 'none', background: valid ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 16, fontWeight: 700, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit', marginBottom: 10 }}>
+          Review Booking →
+        </button>
+        <BackBtn onClick={onBack} />
+      </div>
+    );
+  }
+
+  // Not signed in: present sign-in as the primary path with manual form below.
   return (
     <div>
-      <StepTitle>Your information</StepTitle>
+      <StepTitle>Sign in or continue as guest</StepTitle>
 
-      {isReturning && !editing ? (
-        <div style={{ background: '#fff', border: '1.5px solid #c3e6d8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
-          <div style={{ padding: '14px 16px', background: '#f0f9f5', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#1a6040' }}>Using your saved info</div>
-            <button onClick={() => setEditing(true)} style={{ fontSize: 12, color: 'var(--tm-accent, #3D95CE)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Edit</button>
-          </div>
-          {[
-            { icon: '👤', value: form.name  || client.name  },
-            { icon: '📞', value: form.phone || client.phone },
-            { icon: '✉️', value: form.email || gUser.email  },
-          ].map(({ icon, value }) => value ? (
-            <div key={icon} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderTop: '1px solid #f0f0f0' }}>
-              <span style={{ fontSize: 16, width: 22, textAlign: 'center' }}>{icon}</span>
-              <span style={{ fontSize: 13, color: '#333' }}>{value}</span>
-            </div>
-          ) : null)}
+      <div style={{ background: '#fff', border: '1.5px solid var(--tm-primary, #2D7A5F)', borderRadius: 14, overflow: 'hidden', marginBottom: 16, boxShadow: '0 2px 12px rgba(0,0,0,.06)' }}>
+        <div style={{ padding: '14px 16px', background: '#f0f9f5', borderBottom: '1px solid #e8f5ee' }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#1a6040' }}>Sign in for a faster checkout</div>
+          <div style={{ fontSize: 12, color: '#4a9070', marginTop: 2 }}>We'll auto-fill your info from your account.</div>
         </div>
-      ) : (
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
-          {[
-            { key: 'name',  label: 'Name',  type: 'text',  placeholder: 'Your full name',           required: true  },
-            { key: 'phone', label: 'Phone', type: 'tel',   placeholder: '(555) 000-0000',           required: true  },
-            { key: 'email', label: 'Email', type: 'email', placeholder: 'For confirmation & sign-in', required: false },
-            { key: 'notes', label: 'Notes', type: 'text',  placeholder: 'Any requests or preferences?', required: false },
-          ].map(({ key, label, type, placeholder, required }, i, arr) => (
-            <div key={key} style={{ display: 'flex', alignItems: 'center', padding: '13px 16px', borderBottom: i < arr.length - 1 ? '1px solid #f0f0f0' : 'none', gap: 12 }}>
-              <div style={{ width: 52, fontSize: 12, color: '#aaa', fontWeight: 600, flexShrink: 0 }}>
-                {label}{required && <span style={{ color: '#ef4444' }}> *</span>}
-              </div>
-              <input
-                type={type} value={form[key]} onChange={e => onChange({ [key]: e.target.value })}
-                placeholder={placeholder}
-                style={{ flex: 1, fontFamily: 'inherit', border: 'none', outline: 'none', fontSize: 16, background: 'transparent', color: '#1a1a1a' }}
-              />
-            </div>
-          ))}
-        </div>
-      )}
 
-      {/* Sign-in options — only shown when not already signed in */}
-      {!gUser && (
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
-          <div style={{ padding: '10px 16px', background: '#fafafa', fontSize: 11, fontWeight: 700, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase' }}>
-            Returning customer? Sign in to auto-fill
+        {/* Google sign-in */}
+        <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>Sign in with Google</div>
+            <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>One tap, no password</div>
           </div>
+          <GoogleSignInBtn />
+        </div>
 
-          {/* Email magic link */}
-          <div style={{ padding: '14px 16px', borderTop: '1px solid #f0f0f0' }}>
-            {emailLinkState === 'sent' ? (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                <span style={{ fontSize: 22, marginTop: 2 }}>📬</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginBottom: 3 }}>Check your email!</div>
-                  <div style={{ fontSize: 12, color: '#888', lineHeight: 1.5 }}>
-                    We sent a sign-in link to <strong>{form.email}</strong>. Click it to sign in — you can come back and finish booking.
-                  </div>
+        {/* Email magic link */}
+        <div style={{ padding: '14px 16px', borderTop: '1px solid #f0f0f0' }}>
+          {emailLinkState === 'sent' ? (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <span style={{ fontSize: 22, marginTop: 2 }}>📬</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginBottom: 3 }}>Check your email!</div>
+                <div style={{ fontSize: 12, color: '#888', lineHeight: 1.5 }}>
+                  We sent a sign-in link to <strong>{form.email}</strong>. Click it to come back and finish.
                 </div>
               </div>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>Sign in with email link</div>
-                  <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
-                    {hasEmail ? `Send a link to ${form.email}` : 'Enter your email above first'}
-                  </div>
-                  {emailLinkState === 'error' && (
-                    <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>Couldn't send link. Try again or use Google below.</div>
-                  )}
-                </div>
-                <button
-                  onClick={() => hasEmail && onSendEmailLink(form.email)}
-                  disabled={!hasEmail || emailLinkState === 'sending'}
-                  style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, border: 'none', background: hasEmail && emailLinkState !== 'sending' ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: hasEmail && emailLinkState !== 'sending' ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                  {emailLinkState === 'sending' ? 'Sending…' : 'Send link ✉️'}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Google sign-in */}
-          <div style={{ padding: '14px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>Sign in with Google</div>
-              <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>Quick sign-in with your Google account</div>
             </div>
-            <GoogleSignInBtn />
-          </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>Sign in with email link</div>
+                <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
+                  {hasEmail ? `Send a link to ${form.email}` : 'Enter your email below first'}
+                </div>
+                {emailLinkState === 'error' && (
+                  <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>Couldn't send link. Try Google or fill the form.</div>
+                )}
+              </div>
+              <button
+                onClick={() => hasEmail && onSendEmailLink(form.email)}
+                disabled={!hasEmail || emailLinkState === 'sending'}
+                style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, border: 'none', background: hasEmail && emailLinkState !== 'sending' ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: hasEmail && emailLinkState !== 'sending' ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                {emailLinkState === 'sending' ? 'Sending…' : 'Send link ✉️'}
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
+
+      {/* Divider */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0' }}>
+        <div style={{ flex: 1, height: 1, background: '#e0e0e0' }} />
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#bbb', letterSpacing: '.08em', textTransform: 'uppercase' }}>or continue as guest</div>
+        <div style={{ flex: 1, height: 1, background: '#e0e0e0' }} />
+      </div>
+
+      {formCard}
 
       <button onClick={onNext} disabled={!valid}
         style={{ width: '100%', padding: '15px', borderRadius: 12, border: 'none', background: valid ? 'var(--tm-primary, #2D7A5F)' : '#d0d0d0', color: '#fff', fontSize: 16, fontWeight: 700, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit', marginBottom: 10 }}>
