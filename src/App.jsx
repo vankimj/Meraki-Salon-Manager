@@ -148,14 +148,6 @@ function AppShell() {
       {/* Admin settings overlay */}
       {showAdmin && <Admin onClose={() => setShowAdmin(false)} />}
 
-      {/* Version badge — fixed bottom-right, always visible */}
-      <div style={{ position: 'fixed', bottom: 'calc(6px + env(safe-area-inset-bottom, 0px))', right: 10, zIndex: 5 }}>
-        <span title="Click to copy" onClick={() => { navigator.clipboard?.writeText(BUILD_LABEL); }}
-          style={{ fontSize: 10, color: '#777', fontWeight: 500, letterSpacing: '.03em', background: 'rgba(255,255,255,.85)', padding: '3px 8px', borderRadius: 8, backdropFilter: 'blur(4px)', border: '1px solid rgba(0,0,0,.06)', cursor: 'pointer', userSelect: 'all' }}>
-          {BUILD_LABEL}
-        </span>
-      </div>
-
       {/* Handbook signing — shown to non-admin staff on first login after publish */}
       {handbookPending && <HandbookModal />}
 
@@ -165,32 +157,46 @@ function AppShell() {
   );
 }
 
+function VersionBadge() {
+  return (
+    <div style={{ position: 'fixed', bottom: 'calc(6px + env(safe-area-inset-bottom, 0px))', right: 10, zIndex: 9999 }}>
+      <span title="Click to copy" onClick={() => { navigator.clipboard?.writeText(BUILD_LABEL); }}
+        style={{ fontSize: 10, color: '#777', fontWeight: 500, letterSpacing: '.03em', background: 'rgba(255,255,255,.85)', padding: '3px 8px', borderRadius: 8, backdropFilter: 'blur(4px)', border: '1px solid rgba(0,0,0,.06)', cursor: 'pointer', userSelect: 'all' }}>
+        {BUILD_LABEL}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
   const { hostname } = window.location;
+
+  let content;
   // tipflow.app root domain → marketing landing page
   if (hostname === 'tipflow.app' || hostname === 'www.tipflow.app') {
-    return <TipFlowLanding />;
+    content = <TipFlowLanding />;
+  } else {
+    const params = new URLSearchParams(window.location.search);
+    const checkinId = params.get('checkin');
+    const isBooking  = params.has('book');
+    const isQueue    = params.has('queue');
+    const isWeb      = params.has('web') || window.location.search === '?web';
+    const isSignup   = params.has('signup');
+    if      (checkinId) content = <CheckInScreen apptId={checkinId} />;
+    else if (isBooking) content = <BookingScreen />;
+    else if (isQueue)   content = <QueueKiosk />;
+    else if (isWeb)     content = <SalonWebfront />;
+    else if (isSignup)  content = <OnboardingScreen />;
+    else content = (
+      <AppProvider>
+        <ThemeProvider>
+          <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#eef0f3', overflow: 'hidden' }}>
+            <AppShell />
+          </div>
+        </ThemeProvider>
+      </AppProvider>
+    );
   }
 
-  const params = new URLSearchParams(window.location.search);
-  const checkinId = params.get('checkin');
-  const isBooking  = params.has('book');
-  const isQueue    = params.has('queue');
-  const isWeb      = params.has('web') || window.location.search === '?web';
-  const isSignup   = params.has('signup');
-  if (checkinId) return <CheckInScreen apptId={checkinId} />;
-  if (isBooking)  return <BookingScreen />;
-  if (isQueue)    return <QueueKiosk />;
-  if (isWeb)      return <SalonWebfront />;
-  if (isSignup)   return <OnboardingScreen />;
-
-  return (
-    <AppProvider>
-      <ThemeProvider>
-        <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#eef0f3', overflow: 'hidden' }}>
-          <AppShell />
-        </div>
-      </ThemeProvider>
-    </AppProvider>
-  );
+  return <>{content}<VersionBadge /></>;
 }
