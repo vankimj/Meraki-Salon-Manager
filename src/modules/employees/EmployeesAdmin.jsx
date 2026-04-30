@@ -112,9 +112,6 @@ export default function EmployeesAdmin() {
             {seeding ? 'Adding…' : '↺ Seed from defaults'}
           </Btn>
         )}
-        {employees.length > 0 && services.length > 0 && (
-          <Btn onClick={assignAllServicesToAll} color="#7c3aed">↺ Assign all services to all</Btn>
-        )}
         <Btn color="#3D95CE" onClick={() => setEditing(blankEmployee())}>+ Add</Btn>
       </div>
 
