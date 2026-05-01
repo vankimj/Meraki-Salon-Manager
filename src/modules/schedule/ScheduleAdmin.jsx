@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchAppointments, fetchAppointmentsByRange, subscribeToAppointments, subscribeToAppointmentsByRange, createAppointment, saveAppointment, deleteAppointment, deleteRecurringGroup, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs, subscribeQueue, updateWaitlistEntry, removeWaitlistEntry } from '../../lib/firestore';
+import { fetchAppointments, fetchAppointmentsByRange, fetchAppointmentById, subscribeToAppointments, subscribeToAppointmentsByRange, createAppointment, saveAppointment, deleteAppointment, deleteRecurringGroup, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs, subscribeQueue, updateWaitlistEntry, removeWaitlistEntry } from '../../lib/firestore';
 import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
@@ -115,7 +115,7 @@ function blankAppt(date, techName, startMins, clientName = '', serviceName = '')
 
 // ── Main ──────────────────────────────────────────────
 export default function ScheduleAdmin() {
-  const { settings, updateSettings, isTech, isAdmin, myTechName, gUser } = useApp();
+  const { settings, updateSettings, isTech, isAdmin, myTechName, gUser, showToast } = useApp();
 
   const [date,         setDate]        = useState(todayStr());
 
@@ -149,6 +149,7 @@ export default function ScheduleAdmin() {
   const [weekLoading,      setWeekLoading]      = useState(false);
   const [showQueue,        setShowQueue]        = useState(false);
   const [queueEntries,     setQueueEntries]     = useState([]);
+  const [showProductSale,  setShowProductSale]  = useState(false);
   const [deleteDialog,     setDeleteDialog]     = useState(null); // appt with recurringGroupId
 
   const load = useCallback(async () => {
@@ -434,6 +435,32 @@ function openNew(techName, slotMins) {
           }}
           onRemove={async entry => { await removeWaitlistEntry(entry.id).catch(() => {}); }}
           onDone={async entry => { await updateWaitlistEntry(entry.id, { status: 'done' }).catch(() => {}); }}
+          onCheckoutMulti={async (entriesToCheckout, onDone) => {
+            const apptIds = entriesToCheckout.map(e => e.apptId).filter(Boolean);
+            if (apptIds.length === 0) return;
+            const fetched = await Promise.all(apptIds.map(id => fetchAppointmentById(id).catch(() => null)));
+            const apptsToCheckout = fetched.filter(Boolean);
+            if (apptsToCheckout.length === 0) {
+              showToast('Could not load appointments. Try refreshing.', 4000);
+              return;
+            }
+            // Mark each entry done so it falls off the queue when checkout completes.
+            entriesToCheckout.forEach(e => updateWaitlistEntry(e.id, { status: 'done' }).catch(() => {}));
+            setCheckout({ appts: apptsToCheckout, walkInClient: null });
+            if (onDone) onDone();
+          }}
+          onSellProducts={() => setShowProductSale(true)}
+        />
+      )}
+
+      {/* Walk-in product-only sale: tiny client-info form, then unified checkout */}
+      {showProductSale && (
+        <ProductSalePrompt
+          onCancel={() => setShowProductSale(false)}
+          onConfirm={(walkInClient) => {
+            setShowProductSale(false);
+            setCheckout({ appts: [], walkInClient });
+          }}
         />
       )}
 
@@ -570,14 +597,15 @@ function openNew(techName, slotMins) {
           onSave={() => handleSave(modal.appt, modal.original)}
           onDelete={() => handleDelete(modal.appt)}
           onClose={() => setModal(null)}
-          onCheckout={appt => { setModal(null); setCheckout(appt); }}
+          onCheckout={appt => { setModal(null); setCheckout({ appts: [appt], walkInClient: null }); }}
           onRefund={appt => setRefund(appt)}
         />
       )}
 
       {checkout && (
         <CheckoutModal
-          appt={checkout}
+          appts={checkout.appts}
+          walkInClient={checkout.walkInClient}
           techs={techs}
           onComplete={() => { setCheckout(null); load(); }}
           onClose={() => setCheckout(null)}
@@ -604,12 +632,69 @@ function openNew(techName, slotMins) {
   );
 }
 
+// ── Walk-in product sale prompt ───────────────────────
+// Tiny one-step form to capture the buyer's name (and optional contact) before
+// launching the unified checkout in retail-only mode.
+function ProductSalePrompt({ onCancel, onConfirm }) {
+  const [name,  setName]  = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const valid = name.trim().length > 0;
+
+  function submit() {
+    if (!valid) return;
+    onConfirm({ name: name.trim(), phone: phone.trim(), email: email.trim() });
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 350 }}
+         onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div style={{ background: '#fff', borderRadius: 16, padding: '20px 22px', width: '92%', maxWidth: 380, boxShadow: '0 20px 60px rgba(0,0,0,.3)' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1a1a', marginBottom: 4 }}>🛍 Sell products</div>
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>Just a customer name so we can attach the receipt. Phone and email are optional.</div>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Customer name *" autoFocus
+          onKeyDown={e => e.key === 'Enter' && valid && submit()}
+          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: '1px solid #d8d8d8', fontSize: 13, fontFamily: 'inherit', marginBottom: 8, background: '#fafafa' }} />
+        <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="Phone (optional)" inputMode="tel"
+          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: '1px solid #d8d8d8', fontSize: 13, fontFamily: 'inherit', marginBottom: 8, background: '#fafafa' }} />
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (optional, for receipt)" inputMode="email"
+          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: '1px solid #d8d8d8', fontSize: 13, fontFamily: 'inherit', marginBottom: 14, background: '#fafafa' }} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onCancel} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #d8d8d8', background: '#fff', color: '#555', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={submit} disabled={!valid}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: valid ? '#7c3aed' : '#d0d0d0', color: '#fff', fontSize: 13, fontWeight: 700, cursor: valid ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+            Continue to checkout →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Queue panel ───────────────────────────────────────
-function QueuePanel({ entries, onSeat, onRemove, onDone }) {
+function QueuePanel({ entries, onSeat, onRemove, onDone, onCheckoutMulti, onSellProducts }) {
   const waiting  = entries.filter(e => e.status === 'waiting');
   const arrived  = entries.filter(e => e.status === 'waiting' && e.hasAppointment);
-  const walkIns  = entries.filter(e => e.status === 'waiting' && e.isWalkIn);
   const done     = entries.filter(e => ['seated','done','removed'].includes(e.status));
+  const [selected, setSelected] = useState(new Set());
+
+  function toggleSelect(id) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  // Keep selection in sync — drop any IDs that are no longer in the waiting list.
+  useEffect(() => {
+    setSelected(prev => {
+      const valid = new Set(waiting.map(e => e.id));
+      const next = new Set();
+      prev.forEach(id => { if (valid.has(id)) next.add(id); });
+      return next;
+    });
+  }, [waiting.length, waiting.map(e => e.id).join(',')]);
 
   function waitTime(iso) {
     const mins = Math.round((Date.now() - new Date(iso)) / 60000);
@@ -619,15 +704,21 @@ function QueuePanel({ entries, onSeat, onRemove, onDone }) {
   }
 
   const kioskUrl = `${window.location.origin}/?queue`;
+  const selectedEntries = waiting.filter(e => selected.has(e.id));
+  const checkoutableSelected = selectedEntries.filter(e => e.hasAppointment && e.apptId);
 
   return (
     <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 12, marginBottom: 12, overflow: 'hidden', flexShrink: 0 }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: '#fafafa', gap: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: '#fafafa', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', flex: 1, minWidth: 0 }}>
           📋 Today's Queue
           {waiting.length > 0 && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: '#fff', background: '#ef4444', borderRadius: 20, padding: '1px 7px' }}>{waiting.length}</span>}
         </span>
+        <button onClick={onSellProducts}
+          style={{ fontSize: 11, color: '#fff', background: '#7c3aed', border: 'none', fontWeight: 600, padding: '5px 12px', borderRadius: 20, cursor: 'pointer', fontFamily: 'inherit' }}>
+          🛍 Sell products
+        </button>
         <a href={kioskUrl} target="_blank" rel="noreferrer"
           style={{ fontSize: 11, color: '#3D95CE', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid #3D95CE', borderRadius: 20 }}>
           Open Kiosk ↗
@@ -638,47 +729,73 @@ function QueuePanel({ entries, onSeat, onRemove, onDone }) {
         <div style={{ padding: '20px 14px', fontSize: 12, color: '#bbb', textAlign: 'center' }}>Queue is empty — clients can add themselves at <strong style={{ color: '#3D95CE' }}>/?queue</strong></div>
       ) : (
         <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-          {waiting.map((entry, i) => (
-            <div key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderBottom: '1px solid #f5f5f5' }}>
-              <div style={{ width: 22, height: 22, borderRadius: '50%', background: entry.hasAppointment ? '#EBF4FB' : '#f0faf6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: entry.hasAppointment ? '#1a5f8a' : '#2D7A5F', flexShrink: 0 }}>
-                {entry.hasAppointment ? '📅' : i + 1 - arrived.filter((_, j) => j < arrived.indexOf(entry)).length}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{entry.clientName}</span>
-                  {entry.hasAppointment && <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: '#EBF4FB', color: '#1a5f8a', border: '1px solid #93C5FD' }}>Has appt</span>}
-                </div>
-                <div style={{ fontSize: 11, color: '#aaa', marginTop: 1 }}>
-                  {entry.serviceName || '—'}
-                  {entry.techName && entry.techName !== 'Any' ? ` · ${entry.techName}` : ' · Any tech'}
-                  <span style={{ marginLeft: 6, color: '#ccc' }}>· {waitTime(entry.addedAt)}</span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                {entry.isWalkIn && (
-                  <button onClick={() => onSeat(entry)}
-                    style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #c6e8d5', background: '#f0faf6', color: '#2D7A5F', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                    Seat
-                  </button>
+          {waiting.map((entry, i) => {
+            const canCheckout = entry.hasAppointment && entry.apptId;
+            const isSel = selected.has(entry.id);
+            return (
+              <div key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderBottom: '1px solid #f5f5f5', background: isSel ? '#f8fbfd' : 'transparent' }}>
+                {canCheckout && (
+                  <input type="checkbox" checked={isSel} onChange={() => toggleSelect(entry.id)}
+                    title="Select for combined checkout" style={{ flexShrink: 0, cursor: 'pointer' }} />
                 )}
-                {entry.hasAppointment && (
-                  <button onClick={() => onDone(entry)}
-                    style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#16a34a', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                    ✓ Done
+                {!canCheckout && <span style={{ width: 13, flexShrink: 0 }} />}
+                <div style={{ width: 22, height: 22, borderRadius: '50%', background: entry.hasAppointment ? '#EBF4FB' : '#f0faf6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: entry.hasAppointment ? '#1a5f8a' : '#2D7A5F', flexShrink: 0 }}>
+                  {entry.hasAppointment ? '📅' : i + 1 - arrived.filter((_, j) => j < arrived.indexOf(entry)).length}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{entry.clientName}</span>
+                    {entry.hasAppointment && <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: '#EBF4FB', color: '#1a5f8a', border: '1px solid #93C5FD' }}>Has appt</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 1 }}>
+                    {entry.serviceName || '—'}
+                    {entry.techName && entry.techName !== 'Any' ? ` · ${entry.techName}` : ' · Any tech'}
+                    <span style={{ marginLeft: 6, color: '#ccc' }}>· {waitTime(entry.addedAt)}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  {entry.isWalkIn && (
+                    <button onClick={() => onSeat(entry)}
+                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #c6e8d5', background: '#f0faf6', color: '#2D7A5F', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                      Seat
+                    </button>
+                  )}
+                  {canCheckout && (
+                    <button onClick={() => onCheckoutMulti([entry], () => { setSelected(new Set()); onDone(entry); })}
+                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #bfdbfe', background: '#EBF4FB', color: '#1a5f8a', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                      💳 Check out
+                    </button>
+                  )}
+                  <button onClick={() => onRemove(entry)}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#ef4444', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    ✕
                   </button>
-                )}
-                <button onClick={() => onRemove(entry)}
-                  style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#ef4444', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
-                  ✕
-                </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {done.length > 0 && (
             <div style={{ padding: '6px 14px', fontSize: 10, fontWeight: 600, color: '#ccc', textTransform: 'uppercase', letterSpacing: '.06em', borderTop: '1px solid #f5f5f5', background: '#fafafa' }}>
               Completed today ({done.length})
             </div>
           )}
+        </div>
+      )}
+
+      {/* Sticky multi-select bar */}
+      {checkoutableSelected.length > 0 && (
+        <div style={{ borderTop: '1px solid #e8e8e8', background: '#1a1a1a', color: '#fff', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 12, flex: 1 }}>
+            {checkoutableSelected.length} selected · {checkoutableSelected.map(e => e.clientName).join(', ')}
+          </span>
+          <button onClick={() => setSelected(new Set())}
+            style={{ fontSize: 11, color: 'rgba(255,255,255,.7)', background: 'transparent', border: '1px solid rgba(255,255,255,.25)', padding: '5px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Clear
+          </button>
+          <button onClick={() => onCheckoutMulti(checkoutableSelected, () => setSelected(new Set()))}
+            style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1a', background: '#fbbf24', border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+            💳 Check out together ({checkoutableSelected.length})
+          </button>
         </div>
       )}
     </div>

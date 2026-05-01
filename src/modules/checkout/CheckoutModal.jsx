@@ -37,11 +37,35 @@ export default function CheckoutModal(props) {
   );
 }
 
-function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
+function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, onComplete, onClose, techs = [] }) {
+  // Backward-compat: if a single `appt` prop is passed, normalize to an array.
+  const appts = apptsProp || (appt ? [appt] : []);
+  const isWalkInRetail = appts.length === 0;
+
+  // Flatten every appt's services into a single array of editable lines so the
+  // existing per-row UI keeps working. Each entry remembers which appt + svc
+  // index it belongs to, so we can rebuild the per-appt services arrays at save time.
+  // Memo via initial useState — these don't need to be recomputed mid-checkout.
+  const [serviceLines] = useState(() => {
+    const lines = [];
+    appts.forEach((a, ai) => {
+      (a.services || []).forEach((s, si) => {
+        lines.push({ apptIdx: ai, svcIdx: si, name: s.name, defaultPrice: s.price, defaultTech: s.techName || a.techName || '' });
+      });
+    });
+    return lines;
+  });
+
+  // Primary client for receipt/credit lookups: the first non-walk-in client encountered.
+  const primaryAppt = appts[0] || null;
+  const primaryClient = isWalkInRetail
+    ? walkInClient
+    : { id: primaryAppt?.clientId, name: primaryAppt?.clientName, email: null };
+
   const stripe   = useStripe();
   const elements = useElements();
-  const [prices,       setPrices]       = useState((appt.services || []).map(s => String(s.price ?? '')));
-  const [techNames,    setTechNames]    = useState((appt.services || []).map(() => appt.techName || ''));
+  const [prices,       setPrices]       = useState(serviceLines.map(l => String(l.defaultPrice ?? '')));
+  const [techNames,    setTechNames]    = useState(serviceLines.map(l => l.defaultTech));
   const [discountType, setDiscountType] = useState(null);
   const [discountValue,setDiscountValue]= useState('');
   const [promoInput,   setPromoInput]   = useState('');
@@ -67,14 +91,14 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
   const [cardError,    setCardError]    = useState('');
 
   useEffect(() => {
-    if (appt.clientId) {
-      fetchClient(appt.clientId).then(c => {
+    if (primaryClient?.id) {
+      fetchClient(primaryClient.id).then(c => {
         const cr = Number(c?.credit) || 0;
         setClientCredit(cr);
         if (cr > 0) setApplyCredit(true);
       }).catch(() => {});
     }
-  }, [appt.clientId]);
+  }, [primaryClient?.id]);
 
   // ── Math ───────────────────────────────────────────────
   const productsTotal = cartItems.reduce((s, item) => s + (item.product.price || 0) * item.qty, 0);
@@ -173,11 +197,17 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
     setCardError('');
     let stripePaymentIntentId = null;
 
+    // Build a friendly description for Stripe + the receipt header.
+    const clientNames = isWalkInRetail
+      ? [walkInClient?.name || 'Walk-in retail']
+      : Array.from(new Set(appts.map(a => a.clientName || 'Walk-in').filter(Boolean)));
+    const combinedClientLabel = clientNames.join(' + ');
+
     if (method === 'card' && charged > 0 && stripe && elements) {
       try {
         const res = await callFn('createPaymentIntent')({
           amountCents: Math.round(total * 100),
-          description: `${appt.clientName || 'Walk-in'} · ${appt.techName || ''}`.trim(),
+          description: combinedClientLabel,
         });
         const { error: stripeErr, paymentIntent } = await stripe.confirmCardPayment(
           res.data.clientSecret,
@@ -197,14 +227,27 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
     }
 
     try {
-      const updatedServices = (appt.services || []).map((s, i) => ({
-        ...s, price: Number(prices[i]) || 0, techName: techNames[i] || appt.techName || '',
-      }));
+      // Reconstruct each appointment's services array with edited prices/techs.
+      // Per-appt subtotal is each service's edited price summed, used for revenue split.
+      const updatedByAppt = appts.map((a, ai) => {
+        const svc = (a.services || []).map((s, si) => {
+          const flatIdx = serviceLines.findIndex(l => l.apptIdx === ai && l.svcIdx === si);
+          return {
+            ...s,
+            price: Number(prices[flatIdx]) || 0,
+            techName: techNames[flatIdx] || a.techName || '',
+          };
+        });
+        return { appt: a, services: svc };
+      });
 
-      // Build per-tech revenue split (only stored when >1 tech involved)
+      // Flat list of all updated service lines for receipt + tech split.
+      const allUpdatedServices = updatedByAppt.flatMap(g => g.services);
+
+      // Per-tech revenue split across all appts.
       const splitMap = {};
-      updatedServices.forEach(s => {
-        const t = s.techName || appt.techName || '';
+      allUpdatedServices.forEach(s => {
+        const t = s.techName || '';
         if (!splitMap[t]) splitMap[t] = { revenue: 0, services: [] };
         splitMap[t].revenue += s.price;
         splitMap[t].services.push(s.name || '—');
@@ -235,16 +278,29 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
         method,
         techSplit,
         retailProducts,
+        apptIds:        appts.map(a => a.id),
         paidAt:         new Date().toISOString(),
         ...(stripePaymentIntentId ? { stripePaymentIntentId } : {}),
       };
-      const { id, createdAt, ...data } = appt;
-      await saveAppointment(id, { ...data, services: updatedServices, status: 'done', payment });
 
-      const techLabel = techSplit ? techSplit.map(t => t.techName).join(', ') : (appt.techName || 'unknown');
-      logActivity('checkout_complete', `${appt.clientName || 'Walk-in'} · ${techLabel} · $${total.toFixed(2)} via ${method}${discountAmount > 0 ? ` · discount -$${discountAmount.toFixed(2)}` : ''}${promoAmount > 0 ? ` · promo ${promo?.code}` : ''}${gcApply > 0 ? ` · GC -$${gcApply.toFixed(2)}` : ''}${tipAmt > 0 ? ` · tip $${tipAmt.toFixed(2)}` : ''}`);
+      // Save each appointment marked done with its share of the payment.
+      // amountForThisAppt = sum of its updated service prices, so revenue reports per-appt stay accurate.
+      for (const g of updatedByAppt) {
+        const apptSubtotal = g.services.reduce((s, sv) => s + (sv.price || 0), 0);
+        const { id, createdAt, ...data } = g.appt;
+        await saveAppointment(id, {
+          ...data,
+          services: g.services,
+          status: 'done',
+          payment: { ...payment, amountForThisAppt: apptSubtotal },
+        });
+      }
 
-      // Side effects (fire-and-forget errors don't block checkout)
+      const techLabel = techSplit ? techSplit.map(t => t.techName).join(', ') : (allUpdatedServices[0]?.techName || 'unknown');
+      logActivity('checkout_complete',
+        `${combinedClientLabel}${appts.length > 1 ? ` (${appts.length} appts)` : ''}${retailProducts ? ` · ${retailProducts.length} product${retailProducts.length > 1 ? 's' : ''}` : ''} · ${techLabel} · $${total.toFixed(2)} via ${method}${discountAmount > 0 ? ` · discount -$${discountAmount.toFixed(2)}` : ''}${promoAmount > 0 ? ` · promo ${promo?.code}` : ''}${gcApply > 0 ? ` · GC -$${gcApply.toFixed(2)}` : ''}${tipAmt > 0 ? ` · tip $${tipAmt.toFixed(2)}` : ''}`);
+
+      // Side effects (single application across the whole bill)
       if (giftCard && applyGC && gcApply > 0) {
         await updateGiftCard(giftCard.id, { balance: Math.max(giftCard.balance - gcApply, 0) });
       }
@@ -258,7 +314,6 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
           ...(promo.singleUse ? { usedAt: new Date().toISOString() } : {}),
         });
       }
-      // Decrement stock for each retail product sold
       if (cartItems.length > 0) {
         await Promise.all(cartItems.map(async item => {
           const newStock = Math.max(0, (item.product.stock || 0) - item.qty);
@@ -266,42 +321,44 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
         }));
       }
 
-      let clientEmail = '';
-      if (appt.clientId) {
-        const c = await fetchClient(appt.clientId);
+      // Client-side bookkeeping (credit + receipt email) for the primary client.
+      let clientEmail = walkInClient?.email?.trim() || '';
+      if (primaryClient?.id) {
+        const c = await fetchClient(primaryClient.id);
         if (c) {
-          clientEmail = c.email?.trim() || '';
+          clientEmail = c.email?.trim() || clientEmail;
           if (creditApply > 0 || Number(issueCredit) > 0) {
             const newCredit = Math.max((c.credit || 0) - creditApply, 0) + (Number(issueCredit) || 0);
             const { id: cid, createdAt: cc, ...cd } = c;
             await saveClient(cid, { ...cd, credit: newCredit });
             if (Number(issueCredit) > 0) {
-              logActivity('credit_issued', `${appt.clientName || c.name} · +$${Number(issueCredit).toFixed(2)} → balance $${newCredit.toFixed(2)}`);
+              logActivity('credit_issued', `${primaryClient.name || c.name} · +$${Number(issueCredit).toFixed(2)} → balance $${newCredit.toFixed(2)}`);
             }
-          }
-          if (clientEmail) {
-            createReceipt({
-              clientId:    appt.clientId,
-              clientName:  appt.clientName || c.name,
-              clientEmail,
-              techName:    appt.techName,
-              date:        appt.date,
-              startTime:   appt.startTime,
-              services:    updatedServices.map(s => ({ name: s.name, price: s.price, techName: s.techName })),
-              retailProducts,
-              payment,
-            }).catch(() => {});
           }
         }
       }
+      if (clientEmail) {
+        createReceipt({
+          clientId:    primaryClient?.id || null,
+          clientName:  combinedClientLabel,
+          clientEmail,
+          techName:    techSplit ? techSplit.map(t => t.techName).join(', ') : (allUpdatedServices[0]?.techName || ''),
+          date:        primaryAppt?.date || new Date().toISOString().slice(0, 10),
+          startTime:   primaryAppt?.startTime || '',
+          services:    allUpdatedServices.map(s => ({ name: s.name, price: s.price, techName: s.techName })),
+          retailProducts,
+          apptIds:     payment.apptIds,
+          payment,
+        }).catch(() => {});
+      }
 
       setReceipt({
-        client:         appt.clientName || 'Walk-in',
-        clientId:       appt.clientId   || null,
+        client:         combinedClientLabel,
+        clientId:       primaryClient?.id || null,
         clientEmail,
-        tech:           appt.techName,
-        date:           appt.date,
-        services:       updatedServices.map(s => ({ name: s.name, price: s.price, techName: s.techName })),
+        tech:           techSplit ? techSplit.map(t => t.techName).join(', ') : (allUpdatedServices[0]?.techName || ''),
+        date:           primaryAppt?.date || new Date().toISOString().slice(0, 10),
+        services:       allUpdatedServices.map(s => ({ name: s.name, price: s.price, techName: s.techName })),
         retailProducts,
         payment,
       });
@@ -323,47 +380,84 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
 
         {/* Header */}
         <div style={{ padding: '14px 18px', borderRadius: '16px 16px 0 0', background: 'linear-gradient(135deg,#2D7A5F 0%,#3D95CE 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>{appt.clientName || 'Walk-in'}</div>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,.75)', marginTop: 2 }}>
-              {appt.techName} · {new Date(appt.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {isWalkInRetail
+                ? (walkInClient?.name || 'Walk-in retail')
+                : appts.length > 1
+                  ? `${primaryAppt?.clientName || 'Walk-in'} + ${appts.length - 1} more`
+                  : (primaryAppt?.clientName || 'Walk-in')}
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,.75)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {isWalkInRetail
+                ? 'Retail sale'
+                : appts.length > 1
+                  ? `${appts.length} appointments`
+                  : `${primaryAppt?.techName || ''} · ${primaryAppt?.date ? new Date(primaryAppt.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : ''}`}
             </div>
           </div>
-          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(255,255,255,.4)', background: 'rgba(255,255,255,.15)', cursor: 'pointer', fontSize: 16, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(255,255,255,.4)', background: 'rgba(255,255,255,.15)', cursor: 'pointer', fontSize: 16, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginLeft: 8 }}>×</button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
 
-          {/* Services */}
-          <Section title={techs.length > 1 ? 'Services & Techs' : 'Services'}>
-            {(appt.services || []).map((svc, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 0', borderBottom: i < appt.services.length - 1 ? '1px solid #f5f5f5' : 'none' }}>
-                <span style={{ fontSize: 13, color: '#333', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.name || '—'}</span>
-                {techs.length > 1 && (
-                  <select
-                    value={techNames[i] || ''}
-                    onChange={e => setTechNames(n => n.map((v, idx) => idx === i ? e.target.value : v))}
-                    style={{ fontFamily: 'inherit', fontSize: 11, border: '1px solid #d8d8d8', borderRadius: 6, padding: '3px 4px', background: '#fafafa', color: '#555', maxWidth: 90, flexShrink: 0 }}
-                  >
-                    {techs.map(t => <option key={t} value={t}>{t.split(' ')[0]}</option>)}
-                  </select>
-                )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: 11, color: '#aaa' }}>$</span>
-                  <input type="number" min={0} value={prices[i]}
-                    onChange={e => setPrices(p => p.map((v, idx) => idx === i ? e.target.value : v))}
-                    style={{ width: 68, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 6, padding: '4px 6px', fontSize: 13, textAlign: 'right', background: '#fafafa', color: '#1a1a1a' }}
-                  />
-                </div>
-              </div>
-            ))}
-            <SummaryRow label="Subtotal" value={`$${subtotal}`} bold />
-          </Section>
+          {/* Services — single flat list when one appt, grouped per-appt when multiple */}
+          {!isWalkInRetail && (
+            <Section title={techs.length > 1 ? 'Services & Techs' : 'Services'}>
+              {appts.map((a, ai) => {
+                const apptLines = serviceLines
+                  .map((l, flatIdx) => ({ ...l, flatIdx }))
+                  .filter(l => l.apptIdx === ai);
+                if (apptLines.length === 0) return null;
+                const showHeader = appts.length > 1;
+                return (
+                  <div key={a.id || ai} style={{ marginBottom: showHeader ? 10 : 0 }}>
+                    {showHeader && (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4, paddingTop: ai > 0 ? 6 : 0 }}>
+                        {a.clientName || 'Walk-in'}
+                        <span style={{ marginLeft: 6, color: '#bbb', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>· {a.techName || 'TBD'}</span>
+                      </div>
+                    )}
+                    {apptLines.map((l, lidx) => (
+                      <div key={l.flatIdx} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 0', borderBottom: lidx < apptLines.length - 1 ? '1px solid #f5f5f5' : 'none' }}>
+                        <span style={{ fontSize: 13, color: '#333', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name || '—'}</span>
+                        {techs.length > 1 && (
+                          <select
+                            value={techNames[l.flatIdx] || ''}
+                            onChange={e => setTechNames(n => n.map((v, idx) => idx === l.flatIdx ? e.target.value : v))}
+                            style={{ fontFamily: 'inherit', fontSize: 11, border: '1px solid #d8d8d8', borderRadius: 6, padding: '3px 4px', background: '#fafafa', color: '#555', maxWidth: 90, flexShrink: 0 }}
+                          >
+                            {techs.map(t => <option key={t} value={t}>{t.split(' ')[0]}</option>)}
+                          </select>
+                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                          <span style={{ fontSize: 11, color: '#aaa' }}>$</span>
+                          <input type="number" min={0} value={prices[l.flatIdx]}
+                            onChange={e => setPrices(p => p.map((v, idx) => idx === l.flatIdx ? e.target.value : v))}
+                            style={{ width: 68, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 6, padding: '4px 6px', fontSize: 13, textAlign: 'right', background: '#fafafa', color: '#1a1a1a' }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              <SummaryRow label="Services subtotal" value={`$${(subtotal - productsTotal).toFixed(2)}`} bold />
+            </Section>
+          )}
 
-          {/* Retail Products */}
-          <Section title="Retail Products">
-            {cartItems.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
+          {/* Retail Products — persistent section with inline + Add CTA */}
+          <Section
+            title="Retail / Add-ons"
+            action={
+              <button onClick={openProductPicker}
+                style={{ fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 6, border: 'none', background: 'var(--tm-accent, #3D95CE)', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '.02em' }}>
+                + Add product
+              </button>
+            }
+          >
+            {cartItems.length > 0 ? (
+              <div>
                 {cartItems.map(item => (
                   <div key={item.product.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #f5f5f5' }}>
                     <span style={{ fontSize: 13, color: '#333', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.product.name}</span>
@@ -378,11 +472,11 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
                 ))}
                 <SummaryRow label="Products total" value={`$${productsTotal.toFixed(2)}`} />
               </div>
+            ) : (
+              <div style={{ fontSize: 11, color: '#aaa', padding: '4px 2px', lineHeight: 1.5 }}>
+                Selling polish, lotion, or a gift card? Tap <strong style={{ color: '#666' }}>+ Add product</strong> to include it on this bill.
+              </div>
             )}
-            <button onClick={openProductPicker}
-              style={{ width: '100%', padding: '7px', borderRadius: 8, border: '1.5px dashed #d0d0d0', background: '#fafafa', color: '#888', fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>
-              + Add retail product
-            </button>
           </Section>
 
           {showPicker && (
@@ -581,8 +675,8 @@ function CheckoutInner({ appt, onComplete, onClose, techs = [] }) {
             </div>
           </div>
 
-          {/* Issue store credit (optional) */}
-          {appt.clientId && (
+          {/* Issue store credit (optional) — only if we have a known client */}
+          {primaryClient?.id && (
             <Section title="Issue Store Credit">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 12, color: '#aaa' }}>$</span>
@@ -768,10 +862,13 @@ function RRow({ label, value, color }) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, action, children }) {
   return (
     <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8 }}>{title}</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '.08em' }}>{title}</div>
+        {action}
+      </div>
       {children}
     </div>
   );

@@ -164,6 +164,12 @@ export async function fetchAppointments(date) {
     .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
 }
 
+export async function fetchAppointmentById(id) {
+  if (!id) return null;
+  const snap = await getDoc(doc(APPTS_COL, id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
 // Find today's appointment for a given client (by id or by phone digits).
 // Returns the soonest upcoming one, or the in-progress one if started.
 export async function findTodaysAppointmentForClient({ clientId, phone, date }) {
