@@ -5,6 +5,7 @@ import { fetchClients, fetchAppointmentsByRange, fetchCampaigns, createCampaign,
          fetchCampaignTemplates, saveCampaignTemplate, deleteCampaignTemplate,
          fetchReviewReceived } from '../../lib/firestore';
 import { logActivity } from '../../lib/logger';
+import GoogleReviewsPanel from '../../components/GoogleReviewsPanel';
 
 // ── Built-in templates ─────────────────────────────────
 const BUILTIN_TEMPLATES = [
@@ -110,6 +111,7 @@ export default function MarketingAdmin() {
   const { showToast, isAdmin, settings } = useApp();
   const [campaigns, setCampaigns] = useState(null);
   const [modal,     setModal]     = useState(false);  // false | true | campaign-object (clone)
+  const [tab,       setTab]       = useState('campaigns');
 
   useEffect(() => { load(); }, []); // eslint-disable-line
 
@@ -144,38 +146,63 @@ export default function MarketingAdmin() {
 
   if (!campaigns) return <div style={{ textAlign: 'center', padding: 80, color: '#bbb', fontSize: 14 }}>Loading…</div>;
 
+  const TABS = [
+    { id: 'campaigns', label: 'Campaigns' },
+    { id: 'reviews',   label: 'Google Reviews' },
+  ];
+
   return (
     <div style={{ maxWidth: 860, margin: '0 auto', paddingBottom: 32 }}>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
-        <StatCard label="Campaigns run"   value={campaigns.length}  accent="#2D7A5F" />
-        <StatCard label="Messages sent"    value={fmtNum(totalSent)} accent="#3D95CE" />
-        <StatCard label="This month"      value={thisMonth}         accent="#7c3aed" />
-        <StatCard label="Automations on"  value={`${autoActive} / 2`} accent={autoActive ? '#f59e0b' : '#ccc'}
-          sub={autoActive === 0 ? 'Enable in Admin → Settings' : autoActive === 1 ? '1 active' : 'Birthday + Lapsed'} />
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
-        {isAdmin && (
-          <button onClick={() => setModal(true)}
-            style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#2D7A5F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-            + New Campaign
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e8e8e8' }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            padding: '8px 18px', fontFamily: 'inherit', fontSize: 13, fontWeight: tab === t.id ? 600 : 400,
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: tab === t.id ? '#1a1a1a' : '#888',
+            borderBottom: tab === t.id ? '2px solid #2D7A5F' : '2px solid transparent',
+            marginBottom: -1, transition: 'color .15s',
+          }}>
+            {t.label}
           </button>
-        )}
+        ))}
       </div>
 
-      {campaigns.length === 0
-        ? <Empty>No campaigns yet. Click "New Campaign" to start reaching clients.</Empty>
-        : (
-          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 12, overflow: 'hidden' }}>
-            {campaigns.map((c, i) => (
-              <CampaignRow key={c.id} campaign={c} last={i === campaigns.length - 1}
-                onDelete={() => handleDelete(c.id)}
-                onClone={() => setModal(c)} />
-            ))}
+      {tab === 'reviews' ? (
+        <GoogleReviewsPanel />
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
+            <StatCard label="Campaigns run"   value={campaigns.length}  accent="#2D7A5F" />
+            <StatCard label="Messages sent"    value={fmtNum(totalSent)} accent="#3D95CE" />
+            <StatCard label="This month"      value={thisMonth}         accent="#7c3aed" />
+            <StatCard label="Automations on"  value={`${autoActive} / 2`} accent={autoActive ? '#f59e0b' : '#ccc'}
+              sub={autoActive === 0 ? 'Enable in Admin → Settings' : autoActive === 1 ? '1 active' : 'Birthday + Lapsed'} />
           </div>
-        )
-      }
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
+            {isAdmin && (
+              <button onClick={() => setModal(true)}
+                style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#2D7A5F', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                + New Campaign
+              </button>
+            )}
+          </div>
+
+          {campaigns.length === 0
+            ? <Empty>No campaigns yet. Click "New Campaign" to start reaching clients.</Empty>
+            : (
+              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 12, overflow: 'hidden' }}>
+                {campaigns.map((c, i) => (
+                  <CampaignRow key={c.id} campaign={c} last={i === campaigns.length - 1}
+                    onDelete={() => handleDelete(c.id)}
+                    onClone={() => setModal(c)} />
+                ))}
+              </div>
+            )
+          }
+        </>
+      )}
 
       {modal && (
         <CampaignModal
