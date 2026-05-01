@@ -11,6 +11,8 @@
     "deploy:prod": "npm run build && firebase deploy --only hosting && npm run version:print",
     "deploy:staging": "npm run build:staging && firebase hosting:channel:deploy staging && npm run version:print",
     "promote:staging": "npm run deploy:prod",
+    "rollback:prod": "git revert HEAD --no-edit && npm run deploy:prod && echo '\\n↩  Rolled prod back by reverting the last commit and redeploying.'",
+    "rollback:console": "node -e \"console.log('\\\\nOpen Firebase Console → Hosting → Release History to roll back to any specific past release:\\\\nhttps://console.firebase.google.com/project/meraki-salon-manager/hosting/main\\\\n');\"",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
