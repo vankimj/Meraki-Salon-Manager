@@ -1032,10 +1032,19 @@ function TaxReport() {
   useEffect(() => { loadYear(); }, [year]); // eslint-disable-line
   useEffect(() => { fetchEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
 
-  function downloadPdfFor(techName, revenue) {
-    const emp = employees.find(e => e.name === techName) || {};
+  async function downloadPdfFor(techName, revenue) {
+    // Refetch employees on click so a recently-edited TIN/address shows up
+    // without forcing a tab reload.
+    let emp = {};
+    try {
+      const fresh = await fetchEmployees();
+      setEmployees(fresh);
+      emp = fresh.find(e => e.name === techName) || {};
+    } catch {
+      emp = employees.find(e => e.name === techName) || {};
+    }
     const payer = {
-      name:    settings?.brandName || 'Meraki Nail Studio',
+      name:    settings?.brandName    || 'Meraki Nail Studio',
       address: settings?.brandAddress || '',
       city:    settings?.brandCity    || '',
       state:   settings?.brandState   || '',

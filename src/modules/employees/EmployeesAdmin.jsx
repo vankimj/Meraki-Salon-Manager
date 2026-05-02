@@ -25,7 +25,7 @@ function blankEmployee() {
 }
 
 export default function EmployeesAdmin() {
-  const { isAdmin, showToast } = useApp();
+  const { isAdmin, showToast, settings, updateSettings } = useApp();
   const [employees, setEmployees] = useState([]);
   const [services,  setServices]  = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -88,9 +88,10 @@ export default function EmployeesAdmin() {
   }
 
   // Patch existing employees with the demo contact + TIN data from SEED_EMPLOYEES
-  // (matched by name). Only fills missing fields — never overwrites real data.
+  // (matched by name) AND populate the salon's own demo address + EIN in
+  // settings. Only fills missing fields — never overwrites real data.
   async function backfillContactInfo() {
-    if (!confirm('Fill in demo address + TIN for any employee where those fields are blank? Existing values will not be overwritten.')) return;
+    if (!confirm('Fill in demo address + TIN for any employee where those fields are blank, and set demo salon EIN/address. Existing values will not be overwritten.')) return;
     setSeeding(true);
     try {
       let patched = 0;
@@ -106,8 +107,25 @@ export default function EmployeesAdmin() {
           patched++;
         }
       }
-      logActivity('employees_contact_backfilled', `${patched} employees`);
-      showToast(`Filled in contact/TIN for ${patched} employees`);
+
+      const salonDefaults = {
+        ein:          '83-2917458',
+        brandAddress: '4500 N High St',
+        brandCity:    'Columbus',
+        brandState:   'OH',
+        brandZip:     '43214',
+        brandPhone:   '(614) 555-0100',
+      };
+      const salonUpdates = {};
+      Object.entries(salonDefaults).forEach(([k, v]) => {
+        if (!settings?.[k]) salonUpdates[k] = v;
+      });
+      if (Object.keys(salonUpdates).length > 0) {
+        await updateSettings({ ...settings, ...salonUpdates });
+      }
+
+      logActivity('employees_contact_backfilled', `${patched} employees · salon: ${Object.keys(salonUpdates).join(', ') || 'no changes'}`);
+      showToast(`Filled in contact/TIN for ${patched} employees${Object.keys(salonUpdates).length > 0 ? ' + salon EIN/address' : ''}`);
       await load();
     } catch (e) {
       console.error('[Employees] backfill failed:', e);
