@@ -31,6 +31,7 @@ export default function Admin({ onClose }) {
   const [taxRate,        setTaxRate]       = useState(settings.taxRate ?? 7.5);
   const [ccFeePct,       setCcFeePct]      = useState(settings.ccFeePct ?? 2.9);
   const [ccFeeFlat,      setCcFeeFlat]     = useState(settings.ccFeeFlat ?? 0.30);
+  const [removalPrice,   setRemovalPrice]  = useState(settings.removalPrice ?? 15);
   const [finSaving,      setFinSaving]     = useState(false);
   const [themeId,        setThemeId]       = useState(settings.themeId   || 'meraki');
   const [autoTheme,      setAutoTheme]     = useState(!!settings.autoTheme);
@@ -352,10 +353,29 @@ export default function Admin({ onClose }) {
                     style={{ width: 70, textAlign: 'right', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
                 </div>
               </div>
+              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#333' }}>Removal service price</div>
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Charged when a customer says "yes" to the removal question on a service that allows it.</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, color: '#aaa' }}>$</span>
+                  <input type="number" value={removalPrice} step="1" min={0} max={200}
+                    onChange={e => setRemovalPrice(Number(e.target.value))}
+                    style={{ width: 90, textAlign: 'right', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
+                </div>
+              </div>
               <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
                 <Btn color="#2D7A5F" onClick={async () => {
                   setFinSaving(true);
-                  await updateSettings({ ...settings, taxRate, ccFeePct, ccFeeFlat });
+                  await updateSettings({ ...settings, taxRate, ccFeePct, ccFeeFlat, removalPrice });
+                  // Mirror removalPrice onto bookingConfig so the public-facing
+                  // booking page can read it without admin permissions.
+                  if (bookingCfg) {
+                    const next = { ...bookingCfg, removalPrice };
+                    setBookingCfg(next);
+                    try { await saveBookingConfig(next); } catch (e) { console.warn('[bookingCfg removalPrice mirror]', e); }
+                  }
                   setFinSaving(false);
                 }}>{finSaving ? 'Saving…' : 'Save Financial Settings'}</Btn>
               </div>

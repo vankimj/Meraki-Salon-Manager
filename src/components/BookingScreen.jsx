@@ -197,7 +197,7 @@ export default function BookingScreen() {
   // Cart helpers ─────────────────────────────────────────
   function addToCart(svc, opt) {
     const id = `cart_${Date.now()}_${Math.floor(Math.random() * 9999)}`;
-    setCart(c => [...c, { id, service: svc, option: opt || null, tech: undefined, date: '', slot: null }]);
+    setCart(c => [...c, { id, service: svc, option: opt || null, tech: undefined, date: '', slot: null, removal: false }]);
   }
   function removeFromCart(itemId) {
     setCart(c => c.filter(i => i.id !== itemId));
@@ -281,10 +281,31 @@ export default function BookingScreen() {
         }
         const h = Math.floor(itemSlot / 60), m = itemSlot % 60;
 
+        // Build service line + optional removal line. Removal price comes from
+        // bookingConfig (mirror of settings.removalPrice). Removal duration
+        // defaults to 15 min — adjust if needed in a future setting.
+        const removalAddPrice = item.removal && svc.canRequireRemoval ? Number(cfg?.removalPrice ?? 15) : 0;
+        const services = [{
+          id: svc.id,
+          name: opt?.name ? `${svc.name} — ${opt.name}` : svc.name,
+          price, duration: dur,
+          optionId: opt?.id || null, optionName: opt?.name || null,
+        }];
+        if (removalAddPrice > 0) {
+          services.push({
+            id: 'removal',
+            name: `Removal (${svc.name})`,
+            price: removalAddPrice,
+            duration: 15,
+            isRemoval: true,
+          });
+        }
+        const totalDur = services.reduce((s, sv) => s + (Number(sv.duration) || 0), 0);
+
         const appt = {
           date:        itemDate,
           startTime:   `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
-          duration:    dur,
+          duration:    totalDur,
           techId:      assignedTech?.id   || null,
           techName:    assignedTech?.name || 'TBD',
           techRequestType,
@@ -292,7 +313,7 @@ export default function BookingScreen() {
           clientName:  form.name.trim(),
           clientPhone: form.phone.trim(),
           clientEmail: form.email.trim() || gUser?.email || null,
-          services:    [{ id: svc.id, name: opt?.name ? `${svc.name} — ${opt.name}` : svc.name, price, duration: dur, optionId: opt?.id || null, optionName: opt?.name || null }],
+          services,
           status:      'scheduled',
           notes:       form.notes.trim() || null,
           source:      'online_booking',
@@ -406,6 +427,8 @@ export default function BookingScreen() {
             cart={cart} allTechs={techs}
             apptsByDate={apptsByDate}
             form={form} submitting={submitting}
+            removalPrice={Number(cfg?.removalPrice ?? 15)}
+            updateCartItem={updateCartItem}
             onEditInfo={() => setStep(4)}
             onConfirm={handleBook}
             onBack={() => setStep(form.name.trim() && form.phone.trim() ? 3 : 4)}
@@ -953,8 +976,12 @@ function Step4Info({ form, gUser, client, emailLinkState, onSendEmailLink, onCha
 }
 
 // ── Step 5: Confirm (multi-item) ────────────────────────
-function Step5Confirm({ cart, allTechs, apptsByDate, form, submitting, onConfirm, onBack, onEditInfo }) {
-  const totalPrice = cart.reduce((sum, item) => sum + (resolveServicePricing(item.service, item.option).price || 0), 0);
+function Step5Confirm({ cart, allTechs, apptsByDate, form, submitting, removalPrice, updateCartItem, onConfirm, onBack, onEditInfo }) {
+  const removalCount = cart.filter(it => it.removal).length;
+  const totalPrice = cart.reduce((sum, item) => {
+    const base = resolveServicePricing(item.service, item.option).price || 0;
+    return sum + base + (item.removal ? Number(removalPrice) || 0 : 0);
+  }, 0);
   const totalDur   = cart.reduce((sum, item) => sum + (resolveServicePricing(item.service, item.option).duration || 0), 0);
 
   return (
@@ -990,6 +1017,25 @@ function Step5Confirm({ cart, allTechs, apptsByDate, form, submitting, onConfirm
                 <span style={{ fontSize: 13, color: '#1a1a1a', fontWeight: 500 }}>{value}</span>
               </div>
             ))}
+            {item.service.canRequireRemoval && (
+              <div style={{ padding: '12px 18px', borderTop: '1px solid #f0f0f0', background: '#fafafa' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1a', marginBottom: 4 }}>Do you need a removal first?</div>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.5 }}>
+                  Remove an existing set of {item.service.category === 'Acrylics' ? 'acrylics' : 'gel/dip'} before this service. Adds <strong>${Number(removalPrice).toFixed(2)}</strong>.
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {[true, false].map(v => {
+                    const sel = item.removal === v;
+                    return (
+                      <button key={String(v)} onClick={() => updateCartItem(item.id, { removal: v })}
+                        style={{ flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 700, borderRadius: 8, border: `1.5px solid ${sel ? (v ? '#2D7A5F' : '#3D95CE') : '#e0e0e0'}`, background: sel ? (v ? '#EDFAF3' : '#EBF4FB') : '#fff', color: sel ? (v ? '#166534' : '#1a5f8a') : '#888', cursor: 'pointer', fontFamily: 'inherit' }}>
+                        {v ? `✓ Yes — add removal (+$${Number(removalPrice).toFixed(2)})` : 'No removal'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
