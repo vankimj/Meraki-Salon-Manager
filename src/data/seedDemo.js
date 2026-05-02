@@ -2,6 +2,8 @@ import {
   createClient, createAppointment,
   deleteClient, deleteAppointment,
   fetchDemoClients, fetchDemoAppointments,
+  saveAppointment, createReceipt,
+  fetchDemoReceipts, deleteReceipt,
 } from '../lib/firestore';
 
 // ── Name pools ─────────────────────────────────────────
@@ -900,6 +902,102 @@ export async function addFutureAppointments(onProgress) {
   return { appointments: appts.length };
 }
 
+// ── Backfill receipts + statuses ───────────────────────
+// For all past demo appointments currently marked "done":
+//   75% keep "done" and get a synthetic receipt with full payment data
+//   15% flip to "cancelled" (no receipt)
+//   10% flip to "no_show"   (no receipt)
+// The synthetic receipt mirrors what CheckoutModal would write — random method
+// (60% card, 35% cash, 5% venmo), random tip (15–25%), tax at 7.5%, and a CC
+// fee on card transactions. This makes the Reports → Transactions tab show
+// realistic per-tech / per-method breakdowns immediately.
+export async function backfillDemoTransactions(onProgress) {
+  onProgress?.('Loading demo appointments…');
+  const all = await fetchDemoAppointments();
+  const todayDate = localDateStr(today());
+  // Only past 'done' appointments — leave today's scheduled and future alone.
+  const candidates = all.filter(a => a.status === 'done' && a.date < todayDate);
+  if (candidates.length === 0) {
+    onProgress?.('No past done appointments found. Seed demo data first.');
+    return { receipts: 0, cancelled: 0, noShow: 0 };
+  }
+
+  onProgress?.(`Backfilling ${candidates.length} appointments…`);
+  const TAX_RATE   = 7.5;
+  const CC_FEE_PCT = 2.9;
+  const CC_FEE_FLAT= 0.30;
+  const TIP_PCTS   = [15, 18, 20, 22, 25];
+  const METHODS    = [
+    ...Array(60).fill('card'),
+    ...Array(35).fill('cash'),
+    ...Array(5).fill('venmo'),
+  ];
+  const round2 = n => Math.round(n * 100) / 100;
+
+  let receiptCount = 0, cancelledCount = 0, noShowCount = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const a = candidates[i];
+    const roll = Math.random();
+    try {
+      if (roll < 0.10) {
+        // No-show
+        await saveAppointment(a.id, { ...a, status: 'no_show' });
+        noShowCount++;
+      } else if (roll < 0.25) {
+        // Cancelled
+        await saveAppointment(a.id, { ...a, status: 'cancelled' });
+        cancelledCount++;
+      } else {
+        // Done — build a payment + receipt
+        const subtotal   = (a.services || []).reduce((s, sv) => s + (Number(sv.price) || 0), 0);
+        const tax        = round2(subtotal * TAX_RATE / 100);
+        const tipPct     = TIP_PCTS[Math.floor(Math.random() * TIP_PCTS.length)];
+        const tip        = round2(subtotal * tipPct / 100);
+        const total      = round2(subtotal + tax + tip);
+        const method     = METHODS[Math.floor(Math.random() * METHODS.length)];
+        const ccFee      = method === 'card' ? round2(total * CC_FEE_PCT / 100 + CC_FEE_FLAT) : 0;
+        const startISO   = `${a.date}T${(a.startTime || '12:00')}:00.000Z`;
+        const payment = {
+          subtotal, tax, taxRate: TAX_RATE,
+          discountAmount: 0, promoAmount: 0,
+          tip,
+          charged: total - tip, total,
+          method, ccFee, ccFeePct: CC_FEE_PCT, ccFeeFlat: CC_FEE_FLAT,
+          techSplit: null,
+          retailProducts: null,
+          giftCardsSold: null,
+          gcSalesTotal: 0,
+          apptIds: [a.id],
+          paidAt: startISO,
+          amountForThisAppt: subtotal,
+        };
+        await saveAppointment(a.id, { ...a, payment });
+        await createReceipt({
+          _demo: true,
+          clientId:    a.clientId || null,
+          clientName:  a.clientName || 'Walk-in',
+          clientEmail: null,
+          techName:    a.techName || '',
+          date:        a.date,
+          startTime:   a.startTime || '',
+          services:    (a.services || []).map(sv => ({ name: sv.name, price: sv.price, techName: a.techName })),
+          retailProducts: null,
+          giftCardsSold: null,
+          apptIds:     [a.id],
+          payment,
+        });
+        receiptCount++;
+      }
+    } catch (e) {
+      console.warn('[backfill]', a.id, e?.message || e);
+    }
+    if ((i + 1) % 50 === 0) onProgress?.(`Backfilled ${i + 1} / ${candidates.length}…`);
+  }
+
+  onProgress?.('Done!');
+  return { receipts: receiptCount, cancelled: cancelledCount, noShow: noShowCount };
+}
+
 // ── Clear ──────────────────────────────────────────────
 export async function clearDemoData(onProgress) {
   onProgress?.('Finding demo clients…');
@@ -918,6 +1016,14 @@ export async function clearDemoData(onProgress) {
     if ((i + 1) % 50 === 0) onProgress?.(`Appointments removed: ${i + 1} / ${demoAppts.length}`);
   }
 
+  onProgress?.('Finding demo receipts…');
+  const demoReceipts = await fetchDemoReceipts();
+  onProgress?.(`Removing ${demoReceipts.length} receipts…`);
+  for (let i = 0; i < demoReceipts.length; i++) {
+    await deleteReceipt(demoReceipts[i].id);
+    if ((i + 1) % 50 === 0) onProgress?.(`Receipts removed: ${i + 1} / ${demoReceipts.length}`);
+  }
+
   onProgress?.('Done!');
-  return { clients: demoClients.length, appointments: demoAppts.length };
+  return { clients: demoClients.length, appointments: demoAppts.length, receipts: demoReceipts.length };
 }

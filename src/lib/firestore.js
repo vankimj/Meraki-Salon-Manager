@@ -488,6 +488,13 @@ export async function createReceipt(data) {
   await addDoc(RECEIPTS_COL, { ...data, createdAt: new Date().toISOString(), sent: false });
 }
 
+export async function fetchDemoReceipts() {
+  const snap = await getDocs(query(RECEIPTS_COL, where('_demo', '==', true)));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export const deleteReceipt = (id) => deleteDoc(doc(RECEIPTS_COL, id));
+
 export async function fetchReceiptsByRange(startDate, endDate) {
   // createdAt is an ISO timestamp; build inclusive bounds on the date portion.
   const startISO = `${startDate}T00:00:00.000Z`;

@@ -44,6 +44,7 @@ const STATUS_COLORS = {
   'in-progress': { bg: '#FEF3C7', border: '#F59E0B', text: '#78350f' },
   done:          { bg: '#D1FAE5', border: '#10B981', text: '#065f46' },
   cancelled:     { bg: '#FEE2E2', border: '#EF4444', text: '#991b1b' },
+  no_show:       { bg: '#F3F4F6', border: '#6B7280', text: '#374151' },
 };
 
 // One distinct color per tech, assigned by stable index in the full tech list
@@ -70,6 +71,7 @@ const STATUS_DOT = {
   'in-progress': { color: '#F59E0B', label: '●' },
   done:          { color: '#10B981', label: '●' },
   cancelled:     { color: '#EF4444', label: '●' },
+  no_show:       { color: '#6B7280', label: '●' },
 };
 
 const OVERLAY_KEY = 'meraki_visible_techs';
@@ -1048,6 +1050,7 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
     { value: 'in-progress',  label: 'In Progress' },
     { value: 'done',         label: 'Done' },
     { value: 'cancelled',    label: 'Cancelled' },
+    { value: 'no_show',      label: 'No-show' },
   ];
 
   return (

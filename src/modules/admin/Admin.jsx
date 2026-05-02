@@ -14,7 +14,7 @@ import { fetchLogs, fetchEmployees, createEmployee, saveEmployee,
 import { ASSIGNMENT_METHODS, ASSIGNMENT_METHOD_LABELS, ASSIGNMENT_METHOD_DESCRIPTIONS, DEFAULT_ASSIGNMENT_METHOD } from '../../lib/techAssignment';
 import { formatTime } from '../../utils/helpers';
 import { logActivity } from '../../lib/logger';
-import { seedDemoData, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
+import { seedDemoData, clearDemoData, addFutureAppointments, backfillDemoTransactions } from '../../data/seedDemo';
 import { seedProducts, clearSeedProducts } from '../../data/seedProducts';
 import FeedbackModal from '../../components/FeedbackModal';
 
@@ -1156,9 +1156,22 @@ function DemoSeedSection() {
     setRunning(true); setPhase('idle'); setStatus('');
     try {
       const result = await clearDemoData(msg => setStatus(msg));
-      setStatus(`Removed ${result.clients} clients and ${result.appointments} appointments.`);
+      setStatus(`Removed ${result.clients} clients, ${result.appointments} appointments, and ${result.receipts || 0} receipts.`);
       setPhase('cleared');
-      logActivity('demo_cleared', `${result.clients} clients · ${result.appointments} appts`);
+      logActivity('demo_cleared', `${result.clients} clients · ${result.appointments} appts · ${result.receipts || 0} receipts`);
+    } catch (e) {
+      setStatus('Error: ' + e.message); setPhase('error');
+    } finally { setRunning(false); }
+  }
+
+  async function runBackfill() {
+    if (!confirm('Backfill all past "done" demo appointments with realistic receipts (random method, tip, tax). Some will flip to Cancelled (~15%) and No-show (~10%) for variety. Continue?')) return;
+    setRunning(true); setPhase('idle'); setStatus('');
+    try {
+      const result = await backfillDemoTransactions(msg => setStatus(msg));
+      setStatus(`Created ${result.receipts} receipts · ${result.cancelled} cancelled · ${result.noShow} no-shows.`);
+      setPhase('seeded');
+      logActivity('demo_backfilled', `${result.receipts} receipts · ${result.cancelled} cancelled · ${result.noShow} no-shows`);
     } catch (e) {
       setStatus('Error: ' + e.message); setPhase('error');
     } finally { setRunning(false); }
@@ -1183,6 +1196,9 @@ function DemoSeedSection() {
           </Btn>
           <Btn color="#3D95CE" onClick={runAddFuture} disabled={running}>
             {busy ? 'Running…' : '+ Add 1 Month Future'}
+          </Btn>
+          <Btn color="#7c3aed" onClick={runBackfill} disabled={running}>
+            {busy ? 'Running…' : '$ Backfill Receipts'}
           </Btn>
           <Btn color="#ef4444" onClick={runClear} disabled={running}>
             {busy ? 'Removing…' : '× Remove All Demo'}
