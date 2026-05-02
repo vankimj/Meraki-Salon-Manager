@@ -13,7 +13,9 @@ function blankEmployee() {
   return {
     name: '', photo: '', active: true, sortOrder: 0, notes: '',
     extendedHoursAllowed: false,
-    phone: '', email: '', address: '',
+    phone: '', email: '',
+    address: '', city: '', state: '', zip: '',
+    tin: '',
     instagram: '', facebook: '', tiktok: '', venmo: '', homepage: '',
     rateType: 'commission', commissionPct: '', hourlyRate: '',
     paymentPref: 'cash', paymentNotes: '',
@@ -85,6 +87,34 @@ export default function EmployeesAdmin() {
     finally { setSeeding(false); }
   }
 
+  // Patch existing employees with the demo contact + TIN data from SEED_EMPLOYEES
+  // (matched by name). Only fills missing fields — never overwrites real data.
+  async function backfillContactInfo() {
+    if (!confirm('Fill in demo address + TIN for any employee where those fields are blank? Existing values will not be overwritten.')) return;
+    setSeeding(true);
+    try {
+      let patched = 0;
+      for (const emp of employees) {
+        const seed = SEED_EMPLOYEES.find(s => s.name === emp.name);
+        if (!seed) continue;
+        const updates = {};
+        ['phone','email','address','city','state','zip','tin'].forEach(k => {
+          if (!emp[k] && seed[k]) updates[k] = seed[k];
+        });
+        if (Object.keys(updates).length > 0) {
+          await saveEmployee(emp.id, { ...emp, ...updates });
+          patched++;
+        }
+      }
+      logActivity('employees_contact_backfilled', `${patched} employees`);
+      showToast(`Filled in contact/TIN for ${patched} employees`);
+      await load();
+    } catch (e) {
+      console.error('[Employees] backfill failed:', e);
+      showToast('Backfill failed — ' + (e.message || 'unknown'), 4000);
+    } finally { setSeeding(false); }
+  }
+
   async function assignAllServicesToAll() {
     if (!confirm(`Mark every employee as able to perform all ${services.length} services? You can fine-tune individual techs after.`)) return;
     const allIds = services.map(s => s.id);
@@ -110,6 +140,11 @@ export default function EmployeesAdmin() {
         {employees.length === 0 && (
           <Btn onClick={seedEmployees} disabled={seeding} color="#f59e0b">
             {seeding ? 'Adding…' : '↺ Seed from defaults'}
+          </Btn>
+        )}
+        {employees.length > 0 && isAdmin && (
+          <Btn onClick={backfillContactInfo} disabled={seeding} color="#7c3aed">
+            {seeding ? 'Filling…' : '✚ Fill demo contact/TIN'}
           </Btn>
         )}
         <Btn color="#3D95CE" onClick={() => setEditing(blankEmployee())}>+ Add</Btn>
@@ -290,8 +325,26 @@ function EmployeeModal({ emp, services, isAdmin, onChange, onSave, onClose }) {
               <Field label="Email">
                 <input type="email" value={emp.email || ''} onChange={e => onChange({ email: e.target.value })} placeholder="jane@example.com" style={inp} />
               </Field>
-              <Field label="Address">
-                <input value={emp.address || ''} onChange={e => onChange({ address: e.target.value })} placeholder="123 Main St, City, State" style={inp} />
+              <Field label="Street address">
+                <input value={emp.address || ''} onChange={e => onChange({ address: e.target.value })} placeholder="123 Main St" style={inp} />
+              </Field>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <Field label="City" style={{ flex: 2 }}>
+                  <input value={emp.city || ''} onChange={e => onChange({ city: e.target.value })} placeholder="Columbus" style={inp} />
+                </Field>
+                <Field label="State" style={{ flex: 1 }}>
+                  <input value={emp.state || ''} maxLength={2} onChange={e => onChange({ state: e.target.value.toUpperCase() })} placeholder="OH" style={inp} />
+                </Field>
+                <Field label="ZIP" style={{ flex: 1 }}>
+                  <input value={emp.zip || ''} maxLength={10} onChange={e => onChange({ zip: e.target.value })} placeholder="43214" style={inp} />
+                </Field>
+              </div>
+              <Field label="Taxpayer ID (TIN / SSN)">
+                <input value={emp.tin || ''} onChange={e => onChange({ tin: e.target.value })}
+                  placeholder="XXX-XX-XXXX or XX-XXXXXXX" style={inp} />
+                <div style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                  Used on the contractor's 1099-NEC summary. Stored encrypted at rest by Firestore.
+                </div>
               </Field>
             </>
           )}
