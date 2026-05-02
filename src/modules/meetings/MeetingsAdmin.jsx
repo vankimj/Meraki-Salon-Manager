@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { fetchMeetings, createMeeting, updateMeeting, deleteMeeting, fetchEmployees } from '../../lib/firestore';
 import { logActivity } from '../../lib/logger';
 import { useApp } from '../../context/AppContext';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../../lib/firebase';
 
 function fmtTime(str) {
   if (!str) return '';
@@ -142,6 +144,26 @@ export default function MeetingsAdmin() {
     }
   }
 
+  async function handleSendInvites(meeting) {
+    const parts = (meeting.participants || []).filter(p => (p.email || '').trim());
+    if (parts.length === 0) {
+      showToast('No participants with email addresses to invite.', 4000);
+      return;
+    }
+    if (!confirm(`Send invites to ${parts.length} participant${parts.length === 1 ? '' : 's'}?\n\n${parts.map(p => `• ${p.name || p.email}`).join('\n')}`)) return;
+    try {
+      const res = await httpsCallable(functions, 'sendMeetingInvites')({ meetingId: meeting.id });
+      const { sent, skipped } = res.data || {};
+      showToast(`Sent ${sent} invite${sent === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped — no email)` : ''}`);
+      logActivity('meeting_invites_sent', `"${meeting.title}" → ${sent} sent`);
+      // Reload meetings so we see the new tokens / inviteSentAt timestamps that the function wrote.
+      const fresh = await fetchMeetings();
+      setMeetings(fresh);
+    } catch (e) {
+      showToast('Send failed: ' + (e.message || 'unknown'), 5000);
+    }
+  }
+
   const today    = todayStr();
   const upcoming = meetings.filter(m => m.date >= today);
   const past     = meetings.filter(m => m.date <  today).slice().reverse();
@@ -180,6 +202,7 @@ export default function MeetingsAdmin() {
             <MeetingCard key={m.id} meeting={m}
               onEdit={() => setEditMtg(m)}
               onDelete={() => handleDelete(m)}
+              onSendInvites={() => handleSendInvites(m)}
             />
           ))}
         </div>
@@ -219,8 +242,17 @@ export default function MeetingsAdmin() {
 
 // ── Meeting card ───────────────────────────────────────
 
-function MeetingCard({ meeting, past, onEdit, onDelete }) {
+function MeetingCard({ meeting, past, onEdit, onDelete, onSendInvites }) {
   const parts = meeting.participants || [];
+  const counts = parts.reduce((acc, p) => {
+    if (p.response === 'accept')  acc.accepted++;
+    else if (p.response === 'maybe')   acc.maybe++;
+    else if (p.response === 'decline') acc.declined++;
+    else acc.pending++;
+    return acc;
+  }, { accepted: 0, maybe: 0, declined: 0, pending: 0 });
+  const anySent = parts.some(p => p.inviteSentAt);
+  const [showAttendance, setShowAttendance] = useState(false);
 
   return (
     <div style={{ background: '#fff', borderRadius: 12, border: `1.5px solid ${past ? '#f0f0f0' : '#e8e8e8'}`, overflow: 'hidden', opacity: past ? 0.65 : 1 }}>
@@ -255,14 +287,54 @@ function MeetingCard({ meeting, past, onEdit, onDelete }) {
                 </div>
               )}
               {parts.length > 0 && (
-                <div style={{ fontSize: 11, color: '#aaa', marginTop: 5 }}>
-                  👥 {parts.map(p => p.name || p.email).join(', ')}
+                <div style={{ marginTop: 8 }}>
+                  <button onClick={() => setShowAttendance(s => !s)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11, padding: '4px 10px', borderRadius: 20, border: '1px solid #e8e8e8', background: '#fafafa', cursor: 'pointer', fontFamily: 'inherit', color: '#555' }}>
+                    <span>👥 {parts.length}</span>
+                    {anySent ? (
+                      <>
+                        {counts.accepted > 0 && <span style={{ color: '#16a34a', fontWeight: 700 }}>✓ {counts.accepted}</span>}
+                        {counts.maybe    > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>? {counts.maybe}</span>}
+                        {counts.declined > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}>✗ {counts.declined}</span>}
+                        {counts.pending  > 0 && <span style={{ color: '#888' }}>⏳ {counts.pending}</span>}
+                      </>
+                    ) : (
+                      <span style={{ color: '#aaa' }}>not yet invited</span>
+                    )}
+                    <span style={{ color: '#bbb' }}>{showAttendance ? '▴' : '▾'}</span>
+                  </button>
+                  {showAttendance && (
+                    <div style={{ marginTop: 8, background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: '8px 12px' }}>
+                      {parts.map((p, i) => {
+                        const sty = p.response === 'accept'  ? { color: '#16a34a', label: '✓ Accepted' }
+                                  : p.response === 'maybe'   ? { color: '#f59e0b', label: '? Maybe' }
+                                  : p.response === 'decline' ? { color: '#ef4444', label: '✗ Declined' }
+                                  : p.inviteSentAt           ? { color: '#888',   label: '⏳ No response yet' }
+                                  :                            { color: '#bbb',   label: 'not invited' };
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0', borderBottom: i < parts.length - 1 ? '1px solid #f1f1f1' : 'none' }}>
+                            <div style={{ fontSize: 12, color: '#1a1a1a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {p.name || p.email}
+                              {p.email && p.name && <span style={{ color: '#aaa', marginLeft: 6, fontSize: 11 }}>{p.email}</span>}
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: sty.color, flexShrink: 0, marginLeft: 8 }}>{sty.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
             {/* Action buttons */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flexShrink: 0, justifyContent: 'flex-end' }}>
+              {!past && parts.some(p => (p.email || '').trim()) && onSendInvites && (
+                <button onClick={onSendInvites} title={anySent ? 'Resend invitation emails' : 'Send invitation emails to all participants'}
+                  style={{ ...btnStyle, background: anySent ? '#fafafa' : 'linear-gradient(135deg,#2D7A5F,#3D95CE)', color: anySent ? '#555' : '#fff', border: anySent ? '1px solid #d8d8d8' : 'none', fontWeight: 700 }}>
+                  {anySent ? '✉ Resend invites' : '✉ Send invites'}
+                </button>
+              )}
               <button onClick={() => downloadICS(meeting)} title="Download .ics file"
                 style={btnStyle}>⬇ iCal</button>
               <button onClick={() => window.open(googleCalendarUrl(meeting), '_blank')} title="Add to Google Calendar"

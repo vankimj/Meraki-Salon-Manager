@@ -30,6 +30,7 @@ import SalonWebfront from './modules/webfront/SalonWebfront';
 import OnboardingScreen from './components/OnboardingScreen';
 import TipFlowLanding from './components/TipFlowLanding';
 import CartCheckoutLauncher from './components/CartCheckoutLauncher';
+import RsvpScreen from './components/RsvpScreen';
 
 const MODULE_TITLES = {
   schedule:   'Schedule',
@@ -211,7 +212,9 @@ export default function App() {
     const isQueue    = params.has('queue');
     const isWeb      = params.has('web') || window.location.search === '?web';
     const isSignup   = params.has('signup');
-    if      (checkinId) content = <CheckInScreen apptId={checkinId} />;
+    const isRsvp     = params.has('rsvp');
+    if      (isRsvp)    content = <RsvpScreen />;
+    else if (checkinId) content = <CheckInScreen apptId={checkinId} />;
     else if (isBooking) content = <BookingScreen />;
     else if (isQueue)   content = <QueueKiosk />;
     else if (isWeb)     content = <SalonWebfront />;

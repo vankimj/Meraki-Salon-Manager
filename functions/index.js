@@ -1746,3 +1746,195 @@ exports.gustoSubmitPayroll = onCall({ cors: true }, async (request) => {
 
   return { gustoPayrollId: payroll.payroll_id || payroll.id };
 });
+
+// ── Meeting RSVP ──────────────────────────────────────
+// Token-based public RSVP flow: each participant gets a random per-person
+// token stored on the meeting record; clicking their email link hits
+// recordMeetingResponse with { meetingId, token, response } and we update
+// participants[i].response in place.
+
+function rsvpAppUrl({ meetingId, token, response }) {
+  const base = 'https://meraki-salon-manager.web.app';
+  const params = new URLSearchParams({ rsvp: meetingId, token });
+  if (response) params.set('r', response);
+  return `${base}/?${params.toString()}`;
+}
+
+function buildIcsForMeeting(meeting) {
+  // Minimal RFC 5545 ICS payload — enough for Apple Mail, Outlook, Google to
+  // import into the recipient's calendar.
+  const dt = (date, time) => {
+    const [y, mo, d] = date.split('-').map(Number);
+    const [h, mi]    = (time || '09:00').split(':').map(Number);
+    const local = new Date(y, mo - 1, d, h, mi);
+    return local.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  };
+  const dtStart = dt(meeting.date, meeting.startTime);
+  const dur = Number(meeting.duration) || 30;
+  const endLocal = new Date(meeting.date + 'T' + (meeting.startTime || '09:00'));
+  endLocal.setMinutes(endLocal.getMinutes() + dur);
+  const dtEnd = endLocal.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const escape = s => (s || '').replace(/[\;,]/g, m => '\\' + m).replace(/\n/g, '\\n');
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Meraki Nail Studio//Meetings//EN',
+    'BEGIN:VEVENT',
+    `UID:meraki-meeting-${meeting.id || Date.now()}@meraki-salon-manager.web.app`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${escape(meeting.title || 'Meraki meeting')}`,
+    meeting.location    ? `LOCATION:${escape(meeting.location)}`    : '',
+    meeting.description ? `DESCRIPTION:${escape(meeting.description)}` : '',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].filter(Boolean).join('\r\n');
+}
+
+function meetingInviteHtml({ meeting, token, recipientName, baseUrl }) {
+  const acceptUrl  = rsvpAppUrl({ meetingId: meeting.id, token, response: 'accept'  });
+  const maybeUrl   = rsvpAppUrl({ meetingId: meeting.id, token, response: 'maybe'   });
+  const declineUrl = rsvpAppUrl({ meetingId: meeting.id, token, response: 'decline' });
+  const detailsUrl = rsvpAppUrl({ meetingId: meeting.id, token });
+  const dur = Number(meeting.duration) || 30;
+  const endHHMM = (() => {
+    const [h, mi] = (meeting.startTime || '09:00').split(':').map(Number);
+    const total = h * 60 + mi + dur;
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  })();
+  return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
+    <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:24px 24px 20px;color:#fff;">
+      <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.8;">Meeting invitation</div>
+      <div style="font-size:22px;font-weight:800;margin-top:4px;line-height:1.25;">${meeting.title || 'Meraki team meeting'}</div>
+    </div>
+    <div style="padding:22px 24px;color:#1a1a1a;">
+      <p style="margin:0 0 14px;font-size:14px;line-height:1.6;">Hi ${recipientName || 'there'},<br>You're invited to the following meeting. Please let us know if you can make it:</p>
+      <table style="width:100%;border-collapse:collapse;margin:8px 0 18px;font-size:14px;">
+        <tr><td style="padding:6px 0;color:#888;width:84px;">Date</td><td style="padding:6px 0;">${fmtDate(meeting.date)}</td></tr>
+        <tr><td style="padding:6px 0;color:#888;">Time</td><td style="padding:6px 0;">${fmtTime(meeting.startTime)} – ${fmtTime(endHHMM)}</td></tr>
+        ${meeting.location ? `<tr><td style="padding:6px 0;color:#888;">Location</td><td style="padding:6px 0;">${meeting.location}</td></tr>` : ''}
+        ${meeting.description ? `<tr><td style="padding:6px 0;color:#888;vertical-align:top;">Details</td><td style="padding:6px 0;line-height:1.5;">${meeting.description.replace(/\n/g, '<br>')}</td></tr>` : ''}
+      </table>
+      <div style="display:block;text-align:center;margin:22px 0 12px;">
+        <a href="${acceptUrl}"  style="display:inline-block;margin:4px 4px;padding:11px 22px;border-radius:8px;background:#16a34a;color:#fff;text-decoration:none;font-weight:700;font-size:14px;">✓ Accept</a>
+        <a href="${maybeUrl}"   style="display:inline-block;margin:4px 4px;padding:11px 22px;border-radius:8px;background:#f59e0b;color:#fff;text-decoration:none;font-weight:700;font-size:14px;">? Maybe</a>
+        <a href="${declineUrl}" style="display:inline-block;margin:4px 4px;padding:11px 22px;border-radius:8px;background:#ef4444;color:#fff;text-decoration:none;font-weight:700;font-size:14px;">✗ Decline</a>
+      </div>
+      <div style="text-align:center;font-size:12px;color:#888;margin-top:6px;">
+        Or <a href="${detailsUrl}" style="color:#3D95CE;text-decoration:none;">view meeting details &amp; respond there</a>
+      </div>
+    </div>
+    <div style="padding:14px 24px;background:#fafafa;border-top:1px solid #f0f0f0;text-align:center;font-size:11px;color:#aaa;">
+      Meraki Nail Studio · Sent from your salon's meeting tool
+    </div>
+  </div>
+</body></html>`;
+}
+
+exports.sendMeetingInvites = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const { meetingId } = request.data || {};
+  if (!meetingId) throw new HttpsError('invalid-argument', 'meetingId required');
+  const apiKey = resendKey.value();
+  if (!apiKey) throw new HttpsError('failed-precondition', 'Email is not configured (RESEND_API_KEY missing)');
+
+  const db = getFirestore();
+  const meetingRef = db.doc(`tenants/${TENANT_ID}/meetings/${meetingId}`);
+  const snap = await meetingRef.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Meeting not found');
+  const meeting = { id: snap.id, ...snap.data() };
+  const participants = Array.isArray(meeting.participants) ? meeting.participants : [];
+  if (participants.length === 0) throw new HttpsError('failed-precondition', 'Meeting has no participants');
+
+  const resend = new Resend(apiKey);
+  const ics = buildIcsForMeeting(meeting);
+  const icsB64 = Buffer.from(ics, 'utf8').toString('base64');
+  const sentAt = new Date().toISOString();
+  const updated = [];
+  let sent = 0, skipped = 0;
+
+  for (const p of participants) {
+    const email = (p.email || '').trim();
+    if (!email) { updated.push(p); skipped++; continue; }
+    const token = p.inviteToken || (require('crypto').randomUUID());
+    try {
+      await resend.emails.send({
+        from:    resendFrom.value(),
+        to:      email,
+        subject: `You're invited: ${meeting.title || 'Meraki meeting'} · ${fmtDate(meeting.date)}`,
+        html:    meetingInviteHtml({ meeting, token, recipientName: p.name }),
+        attachments: [{
+          filename: 'meeting.ics',
+          content: icsB64,
+        }],
+      });
+      sent++;
+      updated.push({ ...p, inviteToken: token, inviteSentAt: sentAt });
+    } catch (e) {
+      // Email failure shouldn't drop the participant from the list — keep the
+      // existing entry but record the error so the admin can see what happened.
+      updated.push({ ...p, inviteToken: token, inviteError: e.message || 'send failed' });
+    }
+  }
+
+  await meetingRef.set({ participants: updated, lastInvitesSentAt: sentAt }, { merge: true });
+  return { sent, skipped, total: participants.length };
+});
+
+exports.recordMeetingResponse = onCall(async (request) => {
+  // Public — no auth required. Token is the credential.
+  const { meetingId, token, response } = request.data || {};
+  if (!meetingId || !token) throw new HttpsError('invalid-argument', 'meetingId and token required');
+  if (!['accept', 'maybe', 'decline'].includes(response)) {
+    throw new HttpsError('invalid-argument', 'response must be accept | maybe | decline');
+  }
+  const db = getFirestore();
+  const meetingRef = db.doc(`tenants/${TENANT_ID}/meetings/${meetingId}`);
+  const snap = await meetingRef.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Meeting not found');
+  const meeting = snap.data();
+  const participants = Array.isArray(meeting.participants) ? meeting.participants : [];
+  const idx = participants.findIndex(p => p.inviteToken === token);
+  if (idx < 0) throw new HttpsError('permission-denied', 'Invalid token');
+  const updated = participants.slice();
+  updated[idx] = { ...updated[idx], response, respondedAt: new Date().toISOString() };
+  await meetingRef.set({ participants: updated }, { merge: true });
+  return {
+    ok: true,
+    participantName: updated[idx].name || updated[idx].email,
+    meetingTitle:    meeting.title,
+    meetingDate:     meeting.date,
+    meetingTime:     meeting.startTime,
+    response,
+  };
+});
+
+exports.fetchMeetingForRsvp = onCall(async (request) => {
+  // Public read of a single meeting + this participant's current response,
+  // gated by the per-participant token.
+  const { meetingId, token } = request.data || {};
+  if (!meetingId || !token) throw new HttpsError('invalid-argument', 'meetingId and token required');
+  const db = getFirestore();
+  const snap = await db.doc(`tenants/${TENANT_ID}/meetings/${meetingId}`).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Meeting not found');
+  const meeting = snap.data();
+  const participants = Array.isArray(meeting.participants) ? meeting.participants : [];
+  const me = participants.find(p => p.inviteToken === token);
+  if (!me) throw new HttpsError('permission-denied', 'Invalid token');
+  return {
+    meeting: {
+      id:          meetingId,
+      title:       meeting.title,
+      date:        meeting.date,
+      startTime:   meeting.startTime,
+      duration:    meeting.duration,
+      location:    meeting.location,
+      description: meeting.description,
+    },
+    participant: {
+      name:        me.name,
+      email:       me.email,
+      response:    me.response || null,
+      respondedAt: me.respondedAt || null,
+    },
+  };
+});
