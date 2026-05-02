@@ -37,54 +37,58 @@ export function AppProvider({ children }) {
   const [totalChatUnread,   setTotalChatUnread]   = useState(0);
   const [recentNotifs,      setRecentNotifs]      = useState([]);
 
-  // ── Per-user checkout cart ─────────────────────────────
+  // ── Per-user checkout ticket ───────────────────────────
   // Lives in localStorage so a refresh doesn't lose what's been added.
   // Shape: { appts: [Appointment], products: [{ product, qty }] }
-  const CART_STORAGE_KEY = 'meraki:cart:v1';
-  const [cart, setCart] = useState(() => {
+  const TICKET_STORAGE_KEY = 'meraki:ticket:v1';
+  const LEGACY_CART_STORAGE_KEY = 'meraki:cart:v1';
+  const [ticket, setTicket] = useState(() => {
     try {
-      const raw = localStorage.getItem(CART_STORAGE_KEY);
+      let raw = localStorage.getItem(TICKET_STORAGE_KEY);
+      if (!raw) {
+        raw = localStorage.getItem(LEGACY_CART_STORAGE_KEY);
+        if (raw) localStorage.removeItem(LEGACY_CART_STORAGE_KEY);
+      }
       if (!raw) return { appts: [], products: [] };
       const parsed = JSON.parse(raw);
-      // Sanity-check shape — drop anything that doesn't match.
       return {
         appts:    Array.isArray(parsed.appts)    ? parsed.appts    : [],
         products: Array.isArray(parsed.products) ? parsed.products : [],
       };
     } catch { return { appts: [], products: [] }; }
   });
-  const [cartCheckoutOpen, setCartCheckoutOpen] = useState(false);
+  const [ticketCheckoutOpen, setTicketCheckoutOpen] = useState(false);
 
   useEffect(() => {
-    try { localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart)); } catch {}
-  }, [cart]);
+    try { localStorage.setItem(TICKET_STORAGE_KEY, JSON.stringify(ticket)); } catch {}
+  }, [ticket]);
 
-  function addApptToCart(appt) {
+  function addApptToTicket(appt) {
     if (!appt?.id) return;
-    setCart(c => {
-      if (c.appts.some(a => a.id === appt.id)) return c;
-      return { ...c, appts: [...c.appts, appt] };
+    setTicket(t => {
+      if (t.appts.some(a => a.id === appt.id)) return t;
+      return { ...t, appts: [...t.appts, appt] };
     });
   }
-  function removeApptFromCart(apptId) {
-    setCart(c => ({ ...c, appts: c.appts.filter(a => a.id !== apptId) }));
+  function removeApptFromTicket(apptId) {
+    setTicket(t => ({ ...t, appts: t.appts.filter(a => a.id !== apptId) }));
   }
-  function addProductToCart(product) {
+  function addProductToTicket(product) {
     if (!product?.id) return;
-    setCart(c => {
-      const existing = c.products.find(p => p.product.id === product.id);
-      if (existing) return { ...c, products: c.products.map(p => p.product.id === product.id ? { ...p, qty: p.qty + 1 } : p) };
-      return { ...c, products: [...c.products, { product, qty: 1 }] };
+    setTicket(t => {
+      const existing = t.products.find(p => p.product.id === product.id);
+      if (existing) return { ...t, products: t.products.map(p => p.product.id === product.id ? { ...p, qty: p.qty + 1 } : p) };
+      return { ...t, products: [...t.products, { product, qty: 1 }] };
     });
   }
-  function setCartProductQty(productId, qty) {
-    setCart(c => {
-      if (qty < 1) return { ...c, products: c.products.filter(p => p.product.id !== productId) };
-      return { ...c, products: c.products.map(p => p.product.id === productId ? { ...p, qty } : p) };
+  function setTicketProductQty(productId, qty) {
+    setTicket(t => {
+      if (qty < 1) return { ...t, products: t.products.filter(p => p.product.id !== productId) };
+      return { ...t, products: t.products.map(p => p.product.id === productId ? { ...p, qty } : p) };
     });
   }
-  function clearCart() { setCart({ appts: [], products: [] }); }
-  const cartCount = cart.appts.length + cart.products.reduce((s, p) => s + p.qty, 0);
+  function clearTicket() { setTicket({ appts: [], products: [] }); }
+  const ticketCount = ticket.appts.length + ticket.products.reduce((s, p) => s + p.qty, 0);
   const [viewAs,            setViewAs]            = useState(null); // null | { role: 'tech', techName: string } | { role: 'scheduler' } | { role: 'readonly' }
 
   const logoutTimer    = useRef(null);
@@ -502,8 +506,8 @@ export function AppProvider({ children }) {
       handbookPending, handbookDoc, signHandbook,
       totalChatUnread,
       recentNotifs, unreadNotifCount, markNotifRead,
-      cart, cartCount, addApptToCart, removeApptFromCart, addProductToCart, setCartProductQty, clearCart,
-      cartCheckoutOpen, setCartCheckoutOpen,
+      ticket, ticketCount, addApptToTicket, removeApptFromTicket, addProductToTicket, setTicketProductQty, clearTicket,
+      ticketCheckoutOpen, setTicketCheckoutOpen,
       activeTheme,
     }}>
       {children}

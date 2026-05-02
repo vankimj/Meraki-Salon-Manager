@@ -3,11 +3,11 @@ import { useApp } from '../context/AppContext';
 import { fetchEmployees } from '../lib/firestore';
 import CheckoutModal from '../modules/checkout/CheckoutModal';
 
-// Renders the CheckoutModal driven by the cart. Lives at AppShell level so
+// Renders the CheckoutModal driven by the ticket. Lives at AppShell level so
 // it can launch from any module (Schedule, Clients, Reports, etc.) — wherever
-// the user is when they click "Continue to checkout" in the cart panel.
-export default function CartCheckoutLauncher() {
-  const { cart, cartCheckoutOpen, setCartCheckoutOpen, clearCart } = useApp();
+// the user is when they click "Continue to checkout" in the ticket panel.
+export default function TicketCheckoutLauncher() {
+  const { ticket, ticketCheckoutOpen, setTicketCheckoutOpen, clearTicket } = useApp();
   const [techs, setTechs] = useState(null);
   const [walkInClient, setWalkInClient] = useState(null);
   const [askName, setAskName] = useState(false);
@@ -15,36 +15,35 @@ export default function CartCheckoutLauncher() {
   const [tmpPhone, setTmpPhone] = useState('');
   const [tmpEmail, setTmpEmail] = useState('');
 
-  // Load techs lazily on first open.
   useEffect(() => {
-    if (cartCheckoutOpen && techs === null) {
+    if (ticketCheckoutOpen && techs === null) {
       fetchEmployees().then(emps => {
         const names = emps.filter(e => e.active !== false).map(e => e.name);
         setTechs(names);
       }).catch(() => setTechs([]));
     }
-  }, [cartCheckoutOpen, techs]);
+  }, [ticketCheckoutOpen, techs]);
 
-  // When cart has only products (no appts), we need a walk-in client name
+  // When ticket has only products (no appts), we need a walk-in client name
   // before the checkout modal can render — capture it in a tiny pre-step.
   useEffect(() => {
-    if (!cartCheckoutOpen) {
+    if (!ticketCheckoutOpen) {
       setWalkInClient(null);
       setAskName(false);
       setTmpName(''); setTmpPhone(''); setTmpEmail('');
       return;
     }
-    if (cart.appts.length === 0 && cart.products.length > 0 && !walkInClient) {
+    if (ticket.appts.length === 0 && ticket.products.length > 0 && !walkInClient) {
       setAskName(true);
     }
-  }, [cartCheckoutOpen, cart.appts.length, cart.products.length, walkInClient]);
+  }, [ticketCheckoutOpen, ticket.appts.length, ticket.products.length, walkInClient]);
 
-  if (!cartCheckoutOpen) return null;
+  if (!ticketCheckoutOpen) return null;
 
-  function close() { setCartCheckoutOpen(false); }
+  function close() { setTicketCheckoutOpen(false); }
   function complete() {
-    clearCart();
-    setCartCheckoutOpen(false);
+    clearTicket();
+    setTicketCheckoutOpen(false);
   }
 
   // Walk-in name capture step
@@ -88,17 +87,17 @@ export default function CartCheckoutLauncher() {
     );
   }
 
-  // Empty cart guard (shouldn't normally happen — guard anyway)
-  if (cart.appts.length === 0 && cart.products.length === 0) {
-    setCartCheckoutOpen(false);
+  // Empty ticket guard (shouldn't normally happen — guard anyway)
+  if (ticket.appts.length === 0 && ticket.products.length === 0) {
+    setTicketCheckoutOpen(false);
     return null;
   }
 
   return (
     <CheckoutModal
-      appts={cart.appts}
-      walkInClient={cart.appts.length === 0 ? walkInClient : null}
-      initialProducts={cart.products}
+      appts={ticket.appts}
+      walkInClient={ticket.appts.length === 0 ? walkInClient : null}
+      initialProducts={ticket.products}
       techs={techs}
       onComplete={complete}
       onClose={close}

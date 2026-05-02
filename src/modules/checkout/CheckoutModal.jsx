@@ -505,7 +505,7 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
                               </div>
                               <div style={{ textAlign: 'right', flexShrink: 0 }}>
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#2D7A5F' }}>${(p.price || 0).toFixed(2)}</div>
-                                <div style={{ fontSize: 10, color: '#bbb' }}>{p.stock} in stock{inCart ? ` · ${inCart.qty} in cart` : ''}</div>
+                                <div style={{ fontSize: 10, color: '#bbb' }}>{p.stock} in stock{inCart ? ` · ${inCart.qty} added` : ''}</div>
                               </div>
                             </div>
                           );

@@ -115,7 +115,7 @@ function blankAppt(date, techName, startMins, clientName = '', serviceName = '')
 
 // ── Main ──────────────────────────────────────────────
 export default function ScheduleAdmin() {
-  const { settings, updateSettings, isTech, isAdmin, myTechName, gUser, showToast, addApptToCart } = useApp();
+  const { settings, updateSettings, isTech, isAdmin, myTechName, gUser, showToast, addApptToTicket } = useApp();
 
   const [date,         setDate]        = useState(todayStr());
 
@@ -434,16 +434,16 @@ function openNew(techName, slotMins) {
           }}
           onRemove={async entry => { await removeWaitlistEntry(entry.id).catch(() => {}); }}
           onDone={async entry => { await updateWaitlistEntry(entry.id, { status: 'done' }).catch(() => {}); }}
-          onAddToCart={async entry => {
+          onAddToTicket={async entry => {
             if (!entry.apptId) return;
             const appt = await fetchAppointmentById(entry.apptId).catch(() => null);
             if (!appt) {
               showToast('Could not load appointment. Try refreshing.', 4000);
               return;
             }
-            addApptToCart(appt);
+            addApptToTicket(appt);
             updateWaitlistEntry(entry.id, { status: 'done' }).catch(() => {});
-            showToast(`Added ${appt.clientName || 'walk-in'} to cart`);
+            showToast(`Added ${appt.clientName || 'walk-in'} to ticket`);
           }}
         />
       )}
@@ -582,7 +582,7 @@ function openNew(techName, slotMins) {
           onDelete={() => handleDelete(modal.appt)}
           onClose={() => setModal(null)}
           onCheckout={appt => { setModal(null); setCheckout({ appts: [appt], walkInClient: null }); }}
-          onAddToCart={appt => { setModal(null); addApptToCart(appt); showToast(`Added ${appt.clientName || 'walk-in'} to cart`); }}
+          onAddToTicket={appt => { setModal(null); addApptToTicket(appt); showToast(`Added ${appt.clientName || 'walk-in'} to ticket`); }}
           onRefund={appt => setRefund(appt)}
         />
       )}
@@ -618,7 +618,7 @@ function openNew(techName, slotMins) {
 }
 
 // ── Queue panel ───────────────────────────────────────
-function QueuePanel({ entries, onSeat, onRemove, onDone, onAddToCart }) {
+function QueuePanel({ entries, onSeat, onRemove, onDone, onAddToTicket }) {
   const waiting  = entries.filter(e => e.status === 'waiting');
   const arrived  = entries.filter(e => e.status === 'waiting' && e.hasAppointment);
   const done     = entries.filter(e => ['seated','done','removed'].includes(e.status));
@@ -676,9 +676,9 @@ function QueuePanel({ entries, onSeat, onRemove, onDone, onAddToCart }) {
                     </button>
                   )}
                   {canCheckout && (
-                    <button onClick={() => onAddToCart(entry)}
+                    <button onClick={() => onAddToTicket(entry)}
                       style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #bfdbfe', background: '#EBF4FB', color: '#1a5f8a', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                      🛒 Add to cart
+                      🧾 Add to ticket
                     </button>
                   )}
                   <button onClick={() => onRemove(entry)}
@@ -993,7 +993,7 @@ function DayGrid({ date, appts, techs, allTechs, techExtended, empWorkDays, slot
 }
 
 // ── Appointment modal ─────────────────────────────────
-function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, onAddToCart, onRefund, viewOnly }) {
+function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, onAddToTicket, onRefund, viewOnly }) {
   const [saving,    setSaving]    = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const isView = mode === 'view';
@@ -1236,9 +1236,9 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
               )}
               {appt.id && appt.status !== 'done' && appt.status !== 'cancelled' && (
                 <>
-                  <button onClick={() => onAddToCart(appt)}
+                  <button onClick={() => onAddToTicket(appt)}
                     style={{ flex: 1, fontFamily: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: '#fff', color: '#2D7A5F', border: '1.5px solid #2D7A5F', borderRadius: 8, padding: '8px 10px' }}>
-                    🛒 Add to cart
+                    🧾 Add to ticket
                   </button>
                   <button onClick={() => onCheckout(appt)}
                     style={{ flex: 2, fontFamily: 'inherit', fontSize: 13, fontWeight: 700, cursor: 'pointer', background: 'linear-gradient(135deg,#2D7A5F 0%,#3D95CE 100%)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px' }}>

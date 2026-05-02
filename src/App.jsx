@@ -29,7 +29,7 @@ import ClientPortal from './components/ClientPortal';
 import SalonWebfront from './modules/webfront/SalonWebfront';
 import OnboardingScreen from './components/OnboardingScreen';
 import TipFlowLanding from './components/TipFlowLanding';
-import CartCheckoutLauncher from './components/CartCheckoutLauncher';
+import TicketCheckoutLauncher from './components/TicketCheckoutLauncher';
 import RsvpScreen from './components/RsvpScreen';
 
 const MODULE_TITLES = {
@@ -157,8 +157,8 @@ function AppShell() {
       {/* Magic link completion — shown when user arrives via link on a different device */}
       {magicLinkPending && <MagicLinkPrompt />}
 
-      {/* Cart-driven checkout — opens from any module when the cart panel's Continue button fires */}
-      <CartCheckoutLauncher />
+      {/* Ticket-driven checkout — opens from any module when the ticket panel's Continue button fires */}
+      <TicketCheckoutLauncher />
     </div>
   );
 }
