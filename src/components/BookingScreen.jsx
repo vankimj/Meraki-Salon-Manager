@@ -4,10 +4,12 @@ import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut as fbS
 import { auth } from '../lib/firebase';
 import {
   fetchServices, fetchEmployees, fetchBookingConfig, fetchWebfrontConfig,
-  fetchAppointments, createAppointment, fetchClientByEmail, createClient,
+  fetchAppointments, fetchAppointmentsByRange, createAppointment, fetchClientByEmail, createClient,
+  saveBookingConfig,
 } from '../lib/firestore';
 import { getTheme, detectAutoTheme } from '../lib/themes';
 import { groupByCategory, formatPrice, formatDuration, resolveServicePricing } from '../utils/serviceHelpers';
+import { pickTech, startOfWeek, endOfWeek, DEFAULT_ASSIGNMENT_METHOD } from '../lib/techAssignment';
 
 // ── constants ──────────────────────────────────────────
 const BOOKING_START = 9 * 60;
@@ -243,6 +245,19 @@ export default function BookingScreen() {
         } catch (e) { console.error('[Booking] auto-create client failed:', e); }
       }
 
+      // Pre-fetch week appointments once per unique week the cart spans —
+      // needed for leastBusyWeek and lowestRevenueWeek assignment methods.
+      const method = cfg?.assignmentMethod || DEFAULT_ASSIGNMENT_METHOD;
+      const weekCache = {};
+      if (method === 'leastBusyWeek' || method === 'lowestRevenueWeek') {
+        const weeks = [...new Set(cart.map(it => startOfWeek(it.date)))];
+        await Promise.all(weeks.map(async wk => {
+          weekCache[wk] = await fetchAppointmentsByRange(wk, endOfWeek(wk)).catch(() => []);
+        }));
+      }
+      let rrIdx = cfg?.roundRobinIndex || 0;
+      const startingRrIdx = rrIdx;
+
       const created = [];
       for (const item of cart) {
         const { service: svc, option: opt, tech: itemTech, date: itemDate, slot: itemSlot } = item;
@@ -252,7 +267,18 @@ export default function BookingScreen() {
         const dayAppts = apptsByDate[itemDate] || [];
         const eligible = techsForService(techs, svc);
         let assignedTech = itemTech;
-        if (itemTech === null) assignedTech = firstFreeTech(eligible, itemSlot, dur, dayAppts);
+        let techRequestType = 'specific';
+        if (itemTech === null) {
+          techRequestType = 'auto';
+          const free = eligible.filter(t => isTechFreeAt(t, itemSlot, dur, dayAppts));
+          const weekAppts = weekCache[startOfWeek(itemDate)] || [];
+          const result = pickTech({
+            method, freeTechs: free,
+            dayAppts, weekAppts, roundRobinIndex: rrIdx,
+          });
+          assignedTech = result.tech || firstFreeTech(eligible, itemSlot, dur, dayAppts);
+          rrIdx = result.nextRoundRobinIndex;
+        }
         const h = Math.floor(itemSlot / 60), m = itemSlot % 60;
 
         const appt = {
@@ -261,6 +287,7 @@ export default function BookingScreen() {
           duration:    dur,
           techId:      assignedTech?.id   || null,
           techName:    assignedTech?.name || 'TBD',
+          techRequestType,
           clientId,
           clientName:  form.name.trim(),
           clientPhone: form.phone.trim(),
@@ -275,6 +302,13 @@ export default function BookingScreen() {
         await createAppointment(appt);
         created.push({ ...appt, _service: svc, _option: opt, _tech: assignedTech });
       }
+
+      // Persist round-robin counter so the next booking continues the cycle.
+      if (rrIdx !== startingRrIdx && cfg) {
+        try { await saveBookingConfig({ ...cfg, roundRobinIndex: rrIdx }); }
+        catch (e) { console.warn('[Booking] roundRobin persist failed:', e); }
+      }
+
       setConfirmed(created);
     } catch (e) {
       console.error('[Booking] failed:', e);

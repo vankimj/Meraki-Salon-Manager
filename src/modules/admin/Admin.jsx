@@ -11,6 +11,7 @@ import { fetchLogs, fetchEmployees, createEmployee, saveEmployee,
          saveReviewReceived,
          fetchTenants, createTenantRecord, updateTenantRecord,
          provisionNewTenant, fetchTenantStats } from '../../lib/firestore';
+import { ASSIGNMENT_METHODS, ASSIGNMENT_METHOD_LABELS, ASSIGNMENT_METHOD_DESCRIPTIONS, DEFAULT_ASSIGNMENT_METHOD } from '../../lib/techAssignment';
 import { formatTime } from '../../utils/helpers';
 import { logActivity } from '../../lib/logger';
 import { seedDemoData, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
@@ -440,6 +441,11 @@ function BookingSection({ bookingCfg, setBookingCfg }) {
               style={{ width: '100%', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 12px', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
             />
           </div>
+          <AutoAssignSection
+            method={bookingCfg.assignmentMethod || DEFAULT_ASSIGNMENT_METHOD}
+            onChange={m => save({ assignmentMethod: m })}
+            saving={saving}
+          />
         </>
       )}
 
@@ -504,6 +510,36 @@ function Toggle({ active, onChange, disabled }) {
       style={{ width: 44, height: 26, borderRadius: 13, border: 'none', background: active ? '#2D7A5F' : '#d0d0d0', cursor: disabled ? 'default' : 'pointer', position: 'relative', transition: 'background .2s', flexShrink: 0 }}>
       <div style={{ position: 'absolute', top: 3, left: active ? 21 : 3, width: 20, height: 20, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
     </button>
+  );
+}
+
+function AutoAssignSection({ method, onChange, saving }) {
+  return (
+    <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8, fontWeight: 600 }}>"NO PREFERENCE" AUTO-ASSIGNMENT</div>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.5 }}>
+        When a customer picks "no preference" while booking, how should we choose which tech gets the appointment? Specifically requested techs are always honored — appointments specifically requested show a ⭐ on the schedule.
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {ASSIGNMENT_METHODS.map(m => {
+          const selected = method === m;
+          return (
+            <label key={m} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 8, cursor: saving ? 'default' : 'pointer', border: `1.5px solid ${selected ? '#2D7A5F' : '#e8e8e8'}`, background: selected ? '#f0faf6' : '#fff', transition: 'border-color .15s, background .15s' }}>
+              <input type="radio" name="assignmentMethod" value={m}
+                checked={selected}
+                disabled={saving}
+                onChange={() => onChange(m)}
+                style={{ marginTop: 2, accentColor: '#2D7A5F', cursor: saving ? 'default' : 'pointer' }}
+              />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#1a1a1a' }}>{ASSIGNMENT_METHOD_LABELS[m]}</div>
+                <div style={{ fontSize: 11, color: '#888', marginTop: 2, lineHeight: 1.45 }}>{ASSIGNMENT_METHOD_DESCRIPTIONS[m]}</div>
+              </div>
+            </label>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
