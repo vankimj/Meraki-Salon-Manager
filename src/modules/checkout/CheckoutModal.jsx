@@ -27,7 +27,7 @@ const DISCOUNT_TYPES = [
   { id: 'fixed',   label: '$ Off', isPercent: false, hint: '$', default: 5  },
 ];
 
-const QUICK_TIPS = [5, 10, 15, 20];
+const QUICK_TIP_PCTS = [15, 18, 20, 25];
 
 export default function CheckoutModal(props) {
   return (
@@ -80,7 +80,8 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
   const [clientCredit, setClientCredit] = useState(0);
   const [applyCredit,  setApplyCredit]  = useState(false);
   const [issueCredit,  setIssueCredit]  = useState('');
-  const [tip,          setTip]          = useState('');
+  const [tip,          setTip]          = useState('');     // dollar amount when customTip is on
+  const [tipPct,       setTipPct]       = useState(null);    // selected percentage (null = none)
   const [customTip,    setCustomTip]    = useState(false);
   const [method,       setMethod]       = useState('card');
   const [cartItems,    setCartItems]    = useState(() => Array.isArray(initialProducts) ? initialProducts : []);
@@ -121,7 +122,9 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
   })();
 
   const afterDiscounts = Math.max(subtotal - discountAmount - promoAmount, 0);
-  const tipAmt         = Number(tip) || 0;
+  const tipAmt         = customTip
+    ? (Number(tip) || 0)
+    : (tipPct ? Math.round(subtotal * tipPct) / 100 : 0);
   const gcApply        = giftCard && applyGC ? Math.min(giftCard.balance, afterDiscounts) : 0;
   const creditApply    = applyCredit && clientCredit > 0
     ? Math.min(clientCredit, afterDiscounts - gcApply)
@@ -158,7 +161,8 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
     setDiscountValue(id && def.default ? String(def.default) : '');
   }
 
-  function pickQuickTip(amt) { setTip(String(amt)); setCustomTip(false); }
+  function pickTipPct(pct) { setTipPct(pct); setCustomTip(false); setTip(''); }
+  function pickCustomTip()  { setCustomTip(true); setTipPct(null); setTip(''); }
 
   async function applyPromo() {
     const code = promoInput.trim();
@@ -253,9 +257,20 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
         splitMap[t].services.push(s.name || '—');
       });
       const splitEntries = Object.entries(splitMap);
-      const techSplit = splitEntries.length > 1
-        ? splitEntries.map(([techName, d]) => ({ techName, revenue: d.revenue, services: d.services }))
-        : null;
+      const totalServiceRev = splitEntries.reduce((s, [, d]) => s + d.revenue, 0);
+      let techSplit = null;
+      if (splitEntries.length > 1) {
+        // Allocate tip across techs by service-revenue ratio.
+        // Last entry absorbs any rounding remainder so tipShares sum exactly to tipAmt.
+        let tipAllocated = 0;
+        techSplit = splitEntries.map(([techName, d], i) => {
+          const ratio = totalServiceRev > 0 ? d.revenue / totalServiceRev : 1 / splitEntries.length;
+          let tipShare;
+          if (i === splitEntries.length - 1) tipShare = Math.round((tipAmt - tipAllocated) * 100) / 100;
+          else { tipShare = Math.round(ratio * tipAmt * 100) / 100; tipAllocated += tipShare; }
+          return { techName, revenue: d.revenue, services: d.services, tipShare };
+        });
+      }
 
       const retailProducts = cartItems.length > 0
         ? cartItems.map(i => ({ id: i.product.id, name: i.product.name, price: i.product.price, qty: i.qty }))
@@ -615,18 +630,21 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
           {/* Tip */}
           <Section title="Tip">
             <div style={{ display: 'flex', gap: 6, marginBottom: customTip ? 10 : 0 }}>
-              {QUICK_TIPS.map(amt => {
-                const active = Number(tip) === amt && !customTip;
+              {QUICK_TIP_PCTS.map(pct => {
+                const active = !customTip && tipPct === pct;
+                const amt    = subtotal * pct / 100;
                 return (
-                  <button key={amt} onClick={() => pickQuickTip(amt)}
-                    style={{ flex: 1, padding: '8px 4px', fontSize: 12, fontWeight: 600, borderRadius: 8, border: `1.5px solid ${active ? '#2D7A5F' : '#e0e0e0'}`, background: active ? '#EDFAF3' : '#fafafa', color: active ? '#166534' : '#888', cursor: 'pointer', fontFamily: 'inherit' }}>
-                    ${amt}
+                  <button key={pct} onClick={() => pickTipPct(pct)}
+                    style={{ flex: 1, padding: '8px 4px', fontSize: 12, fontWeight: 600, borderRadius: 8, border: `1.5px solid ${active ? '#2D7A5F' : '#e0e0e0'}`, background: active ? '#EDFAF3' : '#fafafa', color: active ? '#166534' : '#888', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, lineHeight: 1.2 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>{pct}%</span>
+                    <span style={{ fontSize: 10, opacity: .7 }}>${amt.toFixed(2)}</span>
                   </button>
                 );
               })}
-              <button onClick={() => { setCustomTip(true); setTip(''); }}
-                style={{ flex: 1, padding: '8px 4px', fontSize: 12, fontWeight: 600, borderRadius: 8, border: `1.5px solid ${customTip ? '#2D7A5F' : '#e0e0e0'}`, background: customTip ? '#EDFAF3' : '#fafafa', color: customTip ? '#166534' : '#888', cursor: 'pointer', fontFamily: 'inherit' }}>
-                Other
+              <button onClick={pickCustomTip}
+                style={{ flex: 1, padding: '8px 4px', fontSize: 12, fontWeight: 600, borderRadius: 8, border: `1.5px solid ${customTip ? '#2D7A5F' : '#e0e0e0'}`, background: customTip ? '#EDFAF3' : '#fafafa', color: customTip ? '#166534' : '#888', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, lineHeight: 1.2 }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>Other</span>
+                <span style={{ fontSize: 10, opacity: .7 }}>custom $</span>
               </button>
             </div>
             {customTip && (
@@ -638,6 +656,7 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
                 />
               </div>
             )}
+            <TipSplitPreview tipAmt={tipAmt} serviceLines={serviceLines} prices={prices} techNames={techNames} />
           </Section>
 
           {/* Payment method */}
@@ -879,6 +898,42 @@ function SummaryRow({ label, value, valueColor, bold }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
       <span style={{ fontSize: 12, color: '#888', fontWeight: bold ? 600 : 400 }}>{label}</span>
       <span style={{ fontSize: bold ? 14 : 13, fontWeight: bold ? 700 : 500, color: valueColor || (bold ? '#1a1a1a' : '#333') }}>{value}</span>
+    </div>
+  );
+}
+
+// Shows how a multi-tech tip will be split across techs by service-revenue ratio.
+// Hidden when there's only one tech (or no tip / no services).
+function TipSplitPreview({ tipAmt, serviceLines, prices, techNames }) {
+  if (!tipAmt || tipAmt <= 0 || !serviceLines?.length) return null;
+  const byTech = {};
+  serviceLines.forEach((line, idx) => {
+    const t = techNames[idx] || line.techName || '—';
+    const p = Number(prices[idx]) || 0;
+    if (!byTech[t]) byTech[t] = 0;
+    byTech[t] += p;
+  });
+  const techs = Object.entries(byTech);
+  if (techs.length <= 1) return null;
+  const totalSvc = techs.reduce((s, [, rev]) => s + rev, 0);
+  // Allocate by ratio; last tech absorbs rounding remainder.
+  let allocated = 0;
+  const shares = techs.map(([name, rev], i) => {
+    const ratio = totalSvc > 0 ? rev / totalSvc : 1 / techs.length;
+    let share;
+    if (i === techs.length - 1) share = Math.round((tipAmt - allocated) * 100) / 100;
+    else { share = Math.round(ratio * tipAmt * 100) / 100; allocated += share; }
+    return { name, rev, ratio, share };
+  });
+  return (
+    <div style={{ marginTop: 10, padding: '10px 12px', background: '#f8f9fa', borderRadius: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#666', marginBottom: 6, letterSpacing: '.04em' }}>SPLIT BY SERVICE REVENUE</div>
+      {shares.map(s => (
+        <div key={s.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
+          <span style={{ color: '#1a1a1a', fontWeight: 500 }}>{s.name} <span style={{ color: '#aaa', fontWeight: 400 }}>· {(s.ratio * 100).toFixed(0)}% of services</span></span>
+          <span style={{ fontWeight: 700, color: '#2D7A5F' }}>${s.share.toFixed(2)}</span>
+        </div>
+      ))}
     </div>
   );
 }
