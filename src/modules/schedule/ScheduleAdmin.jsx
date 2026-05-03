@@ -1284,6 +1284,27 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
             </Field>
           </div>
 
+          {/* Specifically requested toggle (manual override of techRequestType) */}
+          {isView ? (
+            (appt.techRequestType === 'specific') && (
+              <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#1a1a1a', fontWeight: 600 }}>
+                <span style={{ fontSize: 14, color: '#ef4444', fontWeight: 700 }}>★</span>
+                Client specifically requested {appt.techName}
+              </div>
+            )
+          ) : (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, border: `1.5px solid ${appt.techRequestType === 'specific' ? '#ef4444' : '#e8e8e8'}`, background: appt.techRequestType === 'specific' ? '#fef2f2' : '#fafafa', cursor: 'pointer', marginBottom: 10 }}>
+              <input type="checkbox"
+                checked={appt.techRequestType === 'specific'}
+                onChange={e => onChange({ techRequestType: e.target.checked ? 'specific' : 'scheduler' })}
+                style={{ accentColor: '#ef4444', cursor: 'pointer' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: appt.techRequestType === 'specific' ? '#991b1b' : '#444' }}>
+                <span style={{ color: '#ef4444', fontWeight: 700, marginRight: 4 }}>★</span>
+                Client specifically requested this tech
+              </span>
+            </label>
+          )}
+
           {/* Date */}
           <Field label="Date">
             {isView ? (
