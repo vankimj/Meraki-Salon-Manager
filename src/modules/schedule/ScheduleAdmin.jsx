@@ -9,7 +9,7 @@ import { resizeImg } from '../../utils/helpers';
 
 const FALLBACK_TECHS = ['Yasmin D', 'Audriana L', 'Samantha T', 'Tess D', 'Elizabeth L', 'Yan W', 'Jen T', 'Marisela I', 'Ana P', 'Jenesis B'];
 
-const SLOT_H = 40; // px per 30-min slot
+const SLOT_H = 56; // px per 30-min slot
 
 function minsToStr(m) {
   const h = Math.floor(m / 60), min = m % 60;
@@ -922,7 +922,7 @@ function WeekGrid({ weekStart, appts, clients, employees, allTechs, onApptClick,
                               {minsToStr(strToMins(appt.startTime))}
                             </div>
                             {appt.techRequestType === 'specific' ? (
-                              <span title="Client specifically requested this tech" style={{ fontSize: 10, lineHeight: 1 }}>⭐</span>
+                              <span title="Client specifically requested this tech" style={{ fontSize: 13, color: '#ef4444', lineHeight: 1, fontWeight: 700 }}>★</span>
                             ) : appt.techRequestType === 'auto' ? (
                               <span title="No preference — auto-assigned" style={{ fontSize: 10, lineHeight: 1 }}>🎲</span>
                             ) : (
@@ -1022,7 +1022,7 @@ function DayGrid({ date, appts, techs, allTechs, techExtended, empWorkDays, slot
             {/* Time label */}
             <div style={{ width: TIME_COL, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-start', paddingRight: 6, paddingTop: 3, position: 'relative' }}>
               {slotMins % 60 === 0 && (
-                <span style={{ fontSize: 10, color: isCurrentHr ? '#ef4444' : isPast ? '#ccc' : '#aaa', fontWeight: isCurrentHr ? 700 : 500 }}>
+                <span style={{ fontSize: 12, color: isCurrentHr ? '#ef4444' : isPast ? '#ccc' : '#888', fontWeight: isCurrentHr ? 700 : 600 }}>
                   {minsToStr(slotMins)}
                 </span>
               )}
@@ -1112,28 +1112,28 @@ function DayGrid({ date, appts, techs, allTechs, techExtended, empWorkDays, slot
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 {appt.techRequestType === 'specific' ? (
-                  <span title="Client specifically requested this tech" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>⭐</span>
+                  <span title="Client specifically requested this tech" style={{ fontSize: 14, color: '#ef4444', flexShrink: 0, lineHeight: 1, fontWeight: 700 }}>★</span>
                 ) : appt.techRequestType === 'auto' ? (
                   <span title="No preference — auto-assigned" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>🎲</span>
                 ) : (
                   <span title="Scheduler assigned this tech" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>📋</span>
                 )}
-                <div style={{ fontSize: 11, fontWeight: 700, color: blockText, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: blockText, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                   {appt.clientName || 'Walk-in'}
                 </div>
-                <span title={appt.status} style={{ fontSize: 8, color: dot.color, flexShrink: 0, lineHeight: 1 }}>{dot.label}</span>
+                <span title={appt.status} style={{ fontSize: 10, color: dot.color, flexShrink: 0, lineHeight: 1 }}>{dot.label}</span>
                 {appt.source === 'online_booking' && (
-                  <span title="Online booking" style={{ fontSize: 9, background: blockBorder, color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>WEB</span>
+                  <span title="Online booking" style={{ fontSize: 10, background: blockBorder, color: '#fff', borderRadius: 4, padding: '1px 5px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>WEB</span>
                 )}
                 {appt.checkedInAt && (
-                  <span title="Client checked in" style={{ fontSize: 9, background: blockBorder, color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>IN</span>
+                  <span title="Client checked in" style={{ fontSize: 10, background: blockBorder, color: '#fff', borderRadius: 4, padding: '1px 5px', fontWeight: 700, flexShrink: 0, lineHeight: 1.5 }}>IN</span>
                 )}
               </div>
-              <div style={{ fontSize: 10, color: blockText, opacity: .8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 12, color: blockText, opacity: .85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {appt.services?.map(s => s.name).filter(Boolean).join(', ') || '—'}
               </div>
               {height > SLOT_H && (
-                <div style={{ fontSize: 10, color: blockText, opacity: .6 }}>
+                <div style={{ fontSize: 11, color: blockText, opacity: .65 }}>
                   {minsToStr(startMins)} · {appt.duration} min
                 </div>
               )}
