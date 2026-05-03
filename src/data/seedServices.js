@@ -37,6 +37,11 @@ export const SEED_SERVICES = [
     description: 'Polish-only service — not a full manicure.',
     image: '/services/gel-manicure.jpg',
   },
+  {
+    category: 'Manicures', name: 'Dip Manicure', basePrice: 45, priceFrom: true, duration: 45, durationMin: true, active: true, sortOrder: 7, canRequireRemoval: true,
+    description: 'Full manicure with pigmented dip powder for a long-lasting, durable finish. 9 color options available.',
+    image: '/services/dip.jpg',
+  },
 
   // ── Pedicures ───────────────────────────────────────
   {
@@ -61,11 +66,6 @@ export const SEED_SERVICES = [
   },
 
   // ── Add-ons ─────────────────────────────────────────
-  {
-    category: 'Add-ons', name: 'Dip', basePrice: 15, priceFrom: true, duration: 10, durationMin: true, active: true, sortOrder: 0,
-    description: 'Pigmented powders used to create a long-lasting, durable finish. 9 options available.',
-    image: '/services/dip.jpg',
-  },
   {
     category: 'Add-ons', name: 'Nail Repair', basePrice: 5, priceFrom: true, duration: 15, durationMin: true, active: true, sortOrder: 1,
     description: 'Professional repair service to fix broken or damaged nails, restoring shape and strength.',
