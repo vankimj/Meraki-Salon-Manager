@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchAppointments, fetchAppointmentsByRange, fetchAppointmentById, subscribeToAppointments, subscribeToAppointmentsByRange, createAppointment, saveAppointment, deleteAppointment, deleteRecurringGroup, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs, subscribeQueue, updateWaitlistEntry, removeWaitlistEntry } from '../../lib/firestore';
+import { fetchAppointments, fetchAppointmentsByRange, fetchAppointmentById, subscribeToAppointments, subscribeToAppointmentsByRange, createAppointment, saveAppointment, deleteAppointment, deleteRecurringGroup, fetchClients, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs, subscribeQueue, updateWaitlistEntry, removeWaitlistEntry, subscribeTurnRoster, saveTurnRoster } from '../../lib/firestore';
 import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
@@ -151,6 +151,7 @@ export default function ScheduleAdmin() {
   const [weekLoading,      setWeekLoading]      = useState(false);
   const [showQueue,        setShowQueue]        = useState(false);
   const [queueEntries,     setQueueEntries]     = useState([]);
+  const [turnRoster,       setTurnRoster]       = useState({ date: '', roster: [] });
   const [deleteDialog,     setDeleteDialog]     = useState(null); // appt with recurringGroupId
 
   const load = useCallback(async () => {
@@ -194,6 +195,12 @@ export default function ScheduleAdmin() {
   // Real-time queue listener — always on so badge stays current
   useEffect(() => {
     const unsub = subscribeQueue(todayStr(), setQueueEntries);
+    return unsub;
+  }, []);
+
+  // Real-time turn roster (today only) for the walk-in rotation panel.
+  useEffect(() => {
+    const unsub = subscribeTurnRoster(todayStr(), setTurnRoster);
     return unsub;
   }, []);
 
@@ -423,10 +430,49 @@ function openNew(techName, slotMins) {
       </div>
       {showHours && <HoursModal settings={settings} updateSettings={updateSettings} onClose={() => setShowHours(false)} />}
 
+      {/* Turn roster — walk-in rotation (visible whenever the queue is open or when there's a roster) */}
+      {(showQueue || (turnRoster.roster && turnRoster.roster.length > 0)) && date === todayStr() && (
+        <TurnRosterPanel
+          roster={turnRoster.roster || []}
+          allTechs={(employees && employees.length > 0) ? employees : techs.map(n => ({ id: n, name: n }))}
+          onAddTech={async tech => {
+            const next = [...(turnRoster.roster || []), { techId: tech.id, techName: tech.name, clockInAt: new Date().toISOString(), turnsTaken: 0 }];
+            await saveTurnRoster(todayStr(), next).catch(e => showToast('Save failed: ' + e.message, 3000));
+            logActivity('turn_clockin', tech.name);
+          }}
+          onRemoveTech={async techId => {
+            const next = (turnRoster.roster || []).filter(r => r.techId !== techId);
+            await saveTurnRoster(todayStr(), next).catch(e => showToast('Save failed: ' + e.message, 3000));
+          }}
+          onResetDay={async () => {
+            if (!window.confirm('Clear today\'s turn roster? Everyone will need to clock back in.')) return;
+            await saveTurnRoster(todayStr(), []).catch(e => showToast('Save failed: ' + e.message, 3000));
+          }}
+        />
+      )}
+
       {/* Queue panel */}
       {showQueue && (
         <QueuePanel
           entries={queueEntries}
+          turnRoster={turnRoster.roster || []}
+          onAutoSeatNext={async (entry) => {
+            const next = nextUpInRotation(turnRoster.roster || []);
+            if (!next) {
+              showToast('No techs in turn rotation. Clock someone in first.', 3500);
+              return;
+            }
+            const updatedRoster = (turnRoster.roster || []).map(r =>
+              r.techId === next.techId ? { ...r, turnsTaken: (r.turnsTaken || 0) + 1 } : r
+            );
+            await saveTurnRoster(todayStr(), updatedRoster).catch(() => {});
+            setShowQueue(false);
+            setDate(todayStr());
+            setViewMode('day');
+            setModal({ appt: blankAppt(todayStr(), next.techName, null, entry.clientName, entry.serviceName), original: null, mode: 'edit' });
+            updateWaitlistEntry(entry.id, { status: 'seated' }).catch(() => {});
+            logActivity('walkin_auto_seated', `${entry.clientName} → ${next.techName}`);
+          }}
           onSeat={entry => {
             setShowQueue(false);
             setDate(todayStr());
@@ -619,8 +665,93 @@ function openNew(techName, slotMins) {
   );
 }
 
+// ── Turn rotation helpers ─────────────────────────────
+// Pick the next "up" tech from the roster: lowest turnsTaken first, then
+// earliest clockInAt as the tiebreaker. Returns null if roster is empty.
+function nextUpInRotation(roster) {
+  if (!roster || roster.length === 0) return null;
+  const sorted = [...roster].sort((a, b) => {
+    const ta = a.turnsTaken || 0, tb = b.turnsTaken || 0;
+    if (ta !== tb) return ta - tb;
+    return (a.clockInAt || '').localeCompare(b.clockInAt || '');
+  });
+  return sorted[0];
+}
+
+function fmtClockIn(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const h = d.getHours(), m = d.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+  return `${hh}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+// ── Turn roster panel — today's walk-in rotation ──────
+function TurnRosterPanel({ roster, allTechs, onAddTech, onRemoveTech, onResetDay }) {
+  const [showPicker, setShowPicker] = useState(false);
+  const inRoster = new Set(roster.map(r => r.techId));
+  const available = (allTechs || []).filter(t => !inRoster.has(t.id));
+  const sorted = [...roster].sort((a, b) => {
+    const ta = a.turnsTaken || 0, tb = b.turnsTaken || 0;
+    if (ta !== tb) return ta - tb;
+    return (a.clockInAt || '').localeCompare(b.clockInAt || '');
+  });
+  const next = sorted[0];
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: 12, marginBottom: 12, overflow: 'visible', flexShrink: 0, position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: '#fafafa', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', flex: 1, minWidth: 0 }}>
+          🎯 Walk-in turn order
+          {next && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: '#2D7A5F', background: '#EDFAF3', borderRadius: 20, padding: '2px 10px', border: '1px solid #c6e8d5' }}>Next up: {next.techName}</span>}
+        </span>
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => setShowPicker(o => !o)} disabled={available.length === 0}
+            style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: available.length === 0 ? '#ccc' : 'var(--tm-primary, #2D7A5F)', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: available.length === 0 ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+            + Clock in
+          </button>
+          {showPicker && available.length > 0 && (
+            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 50, minWidth: 180, maxHeight: 280, overflowY: 'auto' }}>
+              {available.map(t => (
+                <button key={t.id} onClick={() => { onAddTech(t); setShowPicker(false); }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, color: '#333', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', borderBottom: '1px solid #f5f5f5' }}>
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {roster.length > 0 && (
+          <button onClick={onResetDay}
+            style={{ fontSize: 11, color: '#888', background: 'none', border: '1px solid #e0e0e0', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
+            Reset day
+          </button>
+        )}
+      </div>
+      {roster.length === 0 ? (
+        <div style={{ padding: '14px', fontSize: 12, color: '#bbb', textAlign: 'center' }}>
+          No techs clocked in yet. Click <strong style={{ color: '#666' }}>+ Clock in</strong> as people arrive — the rotation order is determined by clock-in time.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 10 }}>
+          {sorted.map((r, i) => (
+            <div key={r.techId} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 20, background: i === 0 ? '#EDFAF3' : '#fafafa', border: `1px solid ${i === 0 ? '#c6e8d5' : '#e8e8e8'}` }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: i === 0 ? '#2D7A5F' : '#888' }}>#{i + 1}</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#1a1a1a' }}>{r.techName}</span>
+              <span style={{ fontSize: 10, color: '#aaa' }}>{fmtClockIn(r.clockInAt)} · {r.turnsTaken || 0} turn{(r.turnsTaken || 0) === 1 ? '' : 's'}</span>
+              <button onClick={() => onRemoveTech(r.techId)} title="Clock out"
+                style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1, marginLeft: 2, fontFamily: 'inherit' }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Queue panel ───────────────────────────────────────
-function QueuePanel({ entries, onSeat, onRemove, onDone, onAddToTicket }) {
+function QueuePanel({ entries, turnRoster, onAutoSeatNext, onSeat, onRemove, onDone, onAddToTicket }) {
   const waiting  = entries.filter(e => e.status === 'waiting');
   const arrived  = entries.filter(e => e.status === 'waiting' && e.hasAppointment);
   const done     = entries.filter(e => ['seated','done','removed'].includes(e.status));
@@ -671,6 +802,12 @@ function QueuePanel({ entries, onSeat, onRemove, onDone, onAddToTicket }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  {entry.isWalkIn && turnRoster && turnRoster.length > 0 && (
+                    <button onClick={() => onAutoSeatNext(entry)} title={`Auto-seat with the next tech in rotation (${nextUpInRotation(turnRoster)?.techName || ''})`}
+                      style={{ padding: '4px 10px', borderRadius: 6, border: 'none', background: 'var(--tm-primary, #2D7A5F)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                      🎯 Next
+                    </button>
+                  )}
                   {entry.isWalkIn && (
                     <button onClick={() => onSeat(entry)}
                       style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #c6e8d5', background: '#f0faf6', color: '#2D7A5F', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>

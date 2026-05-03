@@ -124,6 +124,28 @@ export async function clearServices() {
   await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
 }
 
+// ── Turn roster (per-day walk-in rotation) ─────────────
+// One doc per date keyed YYYY-MM-DD with { roster: [{ techId, techName,
+// clockInAt, turnsTaken }] }. Order is determined by clockInAt + turnsTaken
+// at read time so the "next up" tech is always the one with the fewest turns.
+const TURN_ROSTER_COL = tenantCol('turnRoster');
+
+export async function fetchTurnRoster(date) {
+  const snap = await getDoc(doc(TURN_ROSTER_COL, date));
+  if (!snap.exists()) return { date, roster: [] };
+  return { date, ...snap.data() };
+}
+
+export function subscribeTurnRoster(date, cb) {
+  return onSnapshot(doc(TURN_ROSTER_COL, date), s => {
+    cb(s.exists() ? { date, ...s.data() } : { date, roster: [] });
+  });
+}
+
+export async function saveTurnRoster(date, roster) {
+  await setDoc(doc(TURN_ROSTER_COL, date), { date, roster, updatedAt: new Date().toISOString() });
+}
+
 // ── Employees ─────────────────────────────────────────
 const EMPLOYEES_COL = tenantCol('employees');
 
