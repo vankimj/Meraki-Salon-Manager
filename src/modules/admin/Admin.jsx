@@ -17,6 +17,7 @@ import { logActivity } from '../../lib/logger';
 import { seedDemoData, clearDemoData, addFutureAppointments, backfillDemoTransactions } from '../../data/seedDemo';
 import { seedProducts, clearSeedProducts } from '../../data/seedProducts';
 import FeedbackModal from '../../components/FeedbackModal';
+import CsvImportSection from '../../components/CsvImportSection';
 
 export default function Admin({ onClose }) {
   const { gUser, users, settings, grantAccess, grantPendingAccess, addTechUsersForEmployees, loadPendingRequests, updateSettings, signOut, isAdmin, syncState, showToast } = useApp();
@@ -399,6 +400,7 @@ export default function Admin({ onClose }) {
             <BrandingSection settings={settings} updateSettings={updateSettings} />
             <UpgradeSection settings={settings} gUser={gUser} />
             <BackupRestoreSection />
+            <CsvImportSection />
             <ProductSeedSection />
             <DemoSeedSection />
           </>
