@@ -5,7 +5,7 @@ import { auth } from '../lib/firebase';
 import {
   fetchServices, fetchEmployees, fetchBookingConfig, fetchWebfrontConfig,
   fetchAppointments, fetchAppointmentsByRange, createAppointment, fetchClientByEmail, createClient,
-  saveBookingConfig,
+  saveBookingConfig, fetchTurnRoster,
 } from '../lib/firestore';
 import { getTheme, detectAutoTheme } from '../lib/themes';
 import { groupByCategory, formatPrice, formatDuration, resolveServicePricing } from '../utils/serviceHelpers';
@@ -260,6 +260,14 @@ export default function BookingScreen() {
           weekCache[wk] = await fetchAppointmentsByRange(wk, endOfWeek(wk)).catch(() => []);
         }));
       }
+      // Pre-fetch today's turn roster once if any cart item is for today AND
+      // method is turnQueue. Future-dated items skip the roster automatically.
+      const today = dateStr(todayDate());
+      let todayRoster = null;
+      if (method === 'turnQueue' && cart.some(it => it.date === today)) {
+        const r = await fetchTurnRoster(today).catch(() => null);
+        todayRoster = (r && r.roster) || [];
+      }
       let rrIdx = cfg?.roundRobinIndex || 0;
       const startingRrIdx = rrIdx;
 
@@ -277,9 +285,11 @@ export default function BookingScreen() {
           techRequestType = 'auto';
           const free = eligible.filter(t => isTechFreeAt(t, itemSlot, dur, dayAppts));
           const weekAppts = weekCache[startOfWeek(itemDate)] || [];
+          // Roster only applies for today's bookings; future dates fall back.
+          const rosterForItem = (method === 'turnQueue' && itemDate === today) ? todayRoster : null;
           const result = pickTech({
             method, freeTechs: free,
-            dayAppts, weekAppts, roundRobinIndex: rrIdx,
+            dayAppts, weekAppts, turnRoster: rosterForItem, roundRobinIndex: rrIdx,
           });
           assignedTech = result.tech || firstFreeTech(eligible, itemSlot, dur, dayAppts);
           rrIdx = result.nextRoundRobinIndex;
