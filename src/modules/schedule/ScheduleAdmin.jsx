@@ -268,6 +268,21 @@ export default function ScheduleAdmin() {
         const { id, createdAt, ...data } = full;
         await saveAppointment(id, data);
         logActivity('appt_updated', logDetail);
+
+        // Turn rotation: a tech who completes a SPECIFIC-REQUEST appt today
+        // earns 0.5 turns of credit, reflecting that they handled workload.
+        // Two such completions = one full turn, pushing them down the
+        // walk-in rotation by one position.
+        const becameDone = original?.status !== 'done' && appt.status === 'done';
+        if (becameDone && appt.techRequestType === 'specific' && appt.date === todayStr() && appt.techName) {
+          const roster = turnRoster.roster || [];
+          const idx = roster.findIndex(r => r.techName === appt.techName);
+          if (idx >= 0) {
+            const next = roster.map((r, i) => i === idx ? { ...r, turnsTaken: (Number(r.turnsTaken) || 0) + 0.5 } : r);
+            saveTurnRoster(todayStr(), next).catch(e => console.warn('[turn credit]', e));
+            logActivity('turn_credit_half', `${appt.techName} +0.5 (specific request: ${appt.clientName || 'walk-in'})`);
+          }
+        }
       } else if (recurrence) {
         const groupId = crypto.randomUUID();
         for (let i = 0; i < recurrence.count; i++) {
@@ -739,7 +754,7 @@ function TurnRosterPanel({ roster, allTechs, onAddTech, onRemoveTech, onResetDay
             <div key={r.techId} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 20, background: i === 0 ? '#EDFAF3' : '#fafafa', border: `1px solid ${i === 0 ? '#c6e8d5' : '#e8e8e8'}` }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: i === 0 ? '#2D7A5F' : '#888' }}>#{i + 1}</span>
               <span style={{ fontSize: 12, fontWeight: 600, color: '#1a1a1a' }}>{r.techName}</span>
-              <span style={{ fontSize: 10, color: '#aaa' }}>{fmtClockIn(r.clockInAt)} · {r.turnsTaken || 0} turn{(r.turnsTaken || 0) === 1 ? '' : 's'}</span>
+              <span style={{ fontSize: 10, color: '#aaa' }}>{fmtClockIn(r.clockInAt)} · {(r.turnsTaken || 0) % 1 === 0 ? (r.turnsTaken || 0) : (r.turnsTaken || 0).toFixed(1)} turn{(r.turnsTaken || 0) === 1 ? '' : 's'}</span>
               <button onClick={() => onRemoveTech(r.techId)} title="Clock out"
                 style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1, marginLeft: 2, fontFamily: 'inherit' }}>×</button>
             </div>
