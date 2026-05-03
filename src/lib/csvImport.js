@@ -77,6 +77,26 @@ function normalizeDate(raw) {
   return '';
 }
 
+// GG combined timestamp like "11-13-24, 7:57 PM" → { date, time, iso }.
+// Falls back to plain date parsing.
+export function parseGgDateTime(raw) {
+  if (!raw) return { date: '', time: '', iso: '' };
+  const m = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4}),?\s*(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?/);
+  if (m) {
+    let [, mm, dd, yy, h, min, ap] = m;
+    if (yy.length === 2) yy = '20' + yy;
+    const date = `${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+    let hh = parseInt(h, 10);
+    if (ap && ap.toUpperCase() === 'PM' && hh !== 12) hh += 12;
+    if (ap && ap.toUpperCase() === 'AM' && hh === 12) hh = 0;
+    const time = `${String(hh).padStart(2, '0')}:${min}`;
+    const iso = `${date}T${time}:00.000Z`;
+    return { date, time, iso };
+  }
+  const date = normalizeDate(raw);
+  return { date, time: '', iso: date ? `${date}T12:00:00.000Z` : '' };
+}
+
 // "10:30 AM" or "13:45" → "13:45"
 function normalizeTime(raw) {
   if (!raw) return '';
@@ -122,7 +142,15 @@ export function detectType(headers) {
   const lower = headers.map(h => h.toLowerCase());
   const has = (...cands) => cands.some(c => lower.includes(c.toLowerCase()));
 
-  // Sales / receipts: presence of total or payment method
+  // GG-specific: Payment Details file (one row per transaction)
+  if (has('charge id') && has('amount') && has('payment method') && has('payment processing fee')) {
+    return 'ggPayments';
+  }
+  // GG-specific: Checkout Line Items file (multiple rows per transaction)
+  if (has('charge id') && has('descriptor') && has('item type')) {
+    return 'ggLineItems';
+  }
+  // Sales / receipts (generic single-file)
   if (has('total', 'tip', 'payment method', 'transaction date')) return 'sales';
   // Appointments: presence of date + service + provider/staff
   if (has('appointment date', 'service date', 'service') &&
@@ -131,6 +159,113 @@ export function detectType(headers) {
   // Clients: presence of email/phone but no date/service
   if ((has('email') || has('phone') || has('mobile')) && !has('date', 'service')) return 'clients';
   return 'unknown';
+}
+
+// ── GG two-file joiner ─────────────────────────────────
+// Joins a Payment Details record with all Checkout Line Items sharing the
+// same Charge ID, building one Meraki receipt doc per transaction.
+//
+// Line item types observed in GG exports:
+//   - Service     → goes into receipt.services[]
+//   - Other       → treated as retail product (receipt.retailProducts[])
+//   - Gratuity    → payment.tip
+//   - Sales Tax   → payment.tax
+//   - Discount    → payment.discountAmount (price comes through negative)
+export function buildReceiptsFromGg(payments, lineItems) {
+  // Index line items by charge id
+  const linesByCharge = {};
+  lineItems.forEach(li => {
+    const cid = getCol(li, ['Charge ID']);
+    if (!cid) return;
+    if (!linesByCharge[cid]) linesByCharge[cid] = [];
+    linesByCharge[cid].push(li);
+  });
+
+  const receipts = [];
+  payments.forEach(p => {
+    const chargeId = getCol(p, ['Charge ID']);
+    if (!chargeId) return;
+    const lines = linesByCharge[chargeId] || [];
+    const r = mapJoinedReceipt(p, lines);
+    if (r) receipts.push(r);
+  });
+  return receipts;
+}
+
+function mapJoinedReceipt(payment, lines) {
+  const txDateRaw = getCol(payment, ['Transaction Date', 'Date']);
+  const { date, iso } = parseGgDateTime(txDateRaw);
+  if (!date) return null;
+
+  const total      = normalizeMoney(getCol(payment, ['Amount', 'Total']));
+  const ccFee      = normalizeMoney(getCol(payment, ['Payment Processing Fee', 'Processor Fee']));
+  const methodRaw  = getCol(payment, ['Payment Method']);
+  const method     = normalizeMethod(methodRaw);
+  const txId       = getCol(payment, ['Payment Transaction ID', 'Transaction ID']);
+  const chargeId   = getCol(payment, ['Charge ID']);
+  const source     = getCol(payment, ['Payment Source']); // "Retail Purchase" | "Appointment"
+
+  // Pull client + tech from the first line item that has them.
+  const firstWithClient = lines.find(l => getCol(l, ['Client']));
+  const firstWithProv   = lines.find(l => getCol(l, ['Provider']));
+  const clientName = firstWithClient ? getCol(firstWithClient, ['Client']) : '';
+  const techName   = firstWithProv   ? getCol(firstWithProv,   ['Provider']) : '';
+
+  const services = [];
+  const retailProducts = [];
+  let tip = 0, tax = 0, discountAmount = 0;
+
+  lines.forEach(l => {
+    const itemType = (getCol(l, ['Item Type']) || '').toLowerCase();
+    const desc     = getCol(l, ['Descriptor']);
+    const price    = normalizeMoney(getCol(l, ['Price']));
+    const provider = getCol(l, ['Provider']);
+    if (itemType === 'service') {
+      services.push({ name: desc, price, techName: provider || techName });
+    } else if (itemType === 'other') {
+      retailProducts.push({ name: desc, price, qty: 1 });
+    } else if (itemType === 'gratuity') {
+      tip += price;
+    } else if (itemType === 'sales tax') {
+      tax += price;
+    } else if (itemType === 'discount') {
+      // Price is typically negative in GG exports
+      discountAmount += Math.abs(price);
+    }
+  });
+
+  const subtotal = services.reduce((s, sv) => s + sv.price, 0)
+                 + retailProducts.reduce((s, p) => s + p.price * p.qty, 0);
+
+  return {
+    clientId: null,
+    clientName: clientName || (source === 'Retail Purchase' ? 'Walk-in retail' : 'Walk-in'),
+    clientEmail: null,
+    techName: techName || '',
+    date,
+    startTime: '',
+    services,
+    retailProducts: retailProducts.length > 0 ? retailProducts : null,
+    giftCardsSold: null,
+    apptIds: [],
+    payment: {
+      subtotal,
+      tax, taxRate: 0,
+      discountAmount, promoAmount: 0,
+      tip,
+      charged: total - tip,
+      total,
+      method,
+      ccFee, ccFeePct: 0, ccFeeFlat: 0,
+      techSplit: null,
+      gcSalesTotal: 0,
+      paidAt: iso,
+    },
+    _importedFrom: 'glossgenius',
+    _glossgeniusChargeId: chargeId,
+    _glossgeniusTransactionId: txId,
+    _glossgeniusSource: source || null,
+  };
 }
 
 // ── Mappers ────────────────────────────────────────────
