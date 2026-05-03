@@ -4,7 +4,7 @@ import { saveAppointment, fetchClient, saveClient,
          fetchPromoByCode, savePromoCode, createReceipt,
          fetchProducts, saveProduct, createReviewRequest } from '../../lib/firestore';
 import { logActivity } from '../../lib/logger';
-import { applySpecificRequestCredit } from '../../lib/turnCredit';
+import { applyTurnCredit } from '../../lib/turnCredit';
 import { useApp } from '../../context/AppContext';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
@@ -357,10 +357,12 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
           status: 'done',
           payment: { ...payment, amountForThisAppt: apptSubtotal },
         });
-        // Half-turn credit when a ★ specific-request appt is checked out today.
+        // Turn credit: +1 for every completed appt (Mango POS model).
+        // applyTurnCredit checks the _turnCredited flag so walk-ins seated
+        // via the queue's 🎯 Next button don't double-count.
         if (wasNotDone) {
-          applySpecificRequestCredit({ ...g.appt, status: 'done' }).then(applied => {
-            if (applied) logActivity('turn_credit_half', `${g.appt.techName} +0.5 (specific request via checkout: ${g.appt.clientName || 'walk-in'})`);
+          applyTurnCredit({ ...g.appt, id, status: 'done' }).then(applied => {
+            if (applied) logActivity('turn_credit', `${g.appt.techName} +1 via checkout (${g.appt.clientName || 'walk-in'})`);
           });
         }
       }

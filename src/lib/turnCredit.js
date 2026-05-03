@@ -1,36 +1,68 @@
-import { fetchTurnRoster, saveTurnRoster } from './firestore';
+import { fetchTurnRoster, saveTurnRoster, fetchAppointments, saveAppointment } from './firestore';
 
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// When a tech completes a ★ "specifically requested" appointment today,
-// they earn 0.5 turns of credit on today's walk-in roster — so the rotation
-// reflects the workload they handled. Two such completions = one full turn.
+// Mango POS model: every completed appointment counts as +1 turn for the
+// performing tech. Walk-ins, scheduled appts, customer-requested techs — all
+// the same. Drops the tech to the back of the walk-in rotation as fairly
+// representing the work they actually did.
 //
-// Pass the appt that just got marked status='done'. Returns true if credit
-// was applied, false otherwise (no-op when not specific / not today / tech
-// not in roster).
-export async function applySpecificRequestCredit(appt) {
+// Idempotent guard: each appointment that's been credited gets a
+// _turnCredited timestamp written back, so re-saving the same appt (or
+// double-firing through both checkout + manual status edit) won't double-
+// count. Returns true if credit was applied, false otherwise.
+//
+// Today-only: the roster is per-day, so completing an appointment for a
+// past or future date doesn't move today's rotation.
+export async function applyTurnCredit(appt) {
   if (!appt) return false;
-  if (appt.techRequestType !== 'specific') return false;
   if (!appt.techName) return false;
   if (appt.date !== todayStr()) return false;
+  if (appt._turnCredited) return false;       // already credited — no-op
 
   const today = todayStr();
   try {
     const data = await fetchTurnRoster(today);
     const roster = (data && data.roster) || [];
     const idx = roster.findIndex(r => r.techName === appt.techName);
-    if (idx < 0) return false;
+    if (idx < 0) return false;                 // tech not in today's roster
     const next = roster.map((r, i) =>
-      i === idx ? { ...r, turnsTaken: (Number(r.turnsTaken) || 0) + 0.5 } : r
+      i === idx ? { ...r, turnsTaken: (Number(r.turnsTaken) || 0) + 1 } : r
     );
     await saveTurnRoster(today, next);
+    // Stamp the appt so we don't credit again.
+    if (appt.id) {
+      const { id, createdAt, ...rest } = appt;
+      saveAppointment(id, { ...rest, _turnCredited: new Date().toISOString() }).catch(() => {});
+    }
     return true;
   } catch (e) {
     console.warn('[turn credit]', e);
     return false;
   }
+}
+
+// Recompute today's roster turnsTaken from scratch by counting every
+// non-cancelled, non-no_show appointment that's marked done today. Used
+// to catch up after the rule changed (e.g., past checkouts that didn't
+// credit) or to manually fix drift. Returns { recounted, byTech }.
+export async function recomputeTodayTurns() {
+  const today = todayStr();
+  const data = await fetchTurnRoster(today);
+  const roster = (data && data.roster) || [];
+  if (roster.length === 0) return { recounted: 0, byTech: {} };
+
+  const todayAppts = await fetchAppointments(today);
+  const counted = todayAppts.filter(a => a.status === 'done');
+  const byTech = {};
+  counted.forEach(a => {
+    if (!a.techName) return;
+    byTech[a.techName] = (byTech[a.techName] || 0) + 1;
+  });
+  const next = roster.map(r => ({ ...r, turnsTaken: byTech[r.techName] || 0 }));
+  await saveTurnRoster(today, next);
+  return { recounted: counted.length, byTech };
 }

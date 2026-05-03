@@ -4,7 +4,7 @@ import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
 import { logActivity } from '../../lib/logger';
-import { applySpecificRequestCredit } from '../../lib/turnCredit';
+import { applyTurnCredit, recomputeTodayTurns } from '../../lib/turnCredit';
 import { notifyAffectedTechs } from '../../lib/notifications';
 import { resizeImg } from '../../utils/helpers';
 
@@ -270,11 +270,13 @@ export default function ScheduleAdmin() {
         await saveAppointment(id, data);
         logActivity('appt_updated', logDetail);
 
-        // Half-turn credit when a ★ specific-request appt is marked done today.
+        // Turn credit: every completed appointment today = +1 turn for the
+        // tech (Mango POS model — same whether it's a walk-in, a request, or
+        // a scheduled appt).
         const becameDone = original?.status !== 'done' && appt.status === 'done';
         if (becameDone) {
-          applySpecificRequestCredit(appt).then(applied => {
-            if (applied) logActivity('turn_credit_half', `${appt.techName} +0.5 (specific request: ${appt.clientName || 'walk-in'})`);
+          applyTurnCredit({ ...full, id: appt.id }).then(applied => {
+            if (applied) logActivity('turn_credit', `${appt.techName} +1 (${appt.clientName || 'walk-in'})`);
           });
         }
       } else if (recurrence) {
@@ -457,6 +459,15 @@ function openNew(techName, slotMins) {
             if (!window.confirm('Clear today\'s turn roster? Everyone will need to clock back in.')) return;
             await saveTurnRoster(todayStr(), []).catch(e => showToast('Save failed: ' + e.message, 3000));
           }}
+          onRecount={async () => {
+            try {
+              const result = await recomputeTodayTurns();
+              const lines = Object.entries(result.byTech).map(([n, c]) => `${n}: ${c}`).join(' · ');
+              showToast(`Recounted ${result.recounted} done appts today${lines ? ' — ' + lines : ''}`, 5000);
+            } catch (e) {
+              showToast('Recount failed: ' + e.message, 3500);
+            }
+          }}
         />
       )}
 
@@ -471,14 +482,24 @@ function openNew(techName, slotMins) {
               showToast('No techs in turn rotation. Clock someone in first.', 3500);
               return;
             }
+            // Immediate +1 so the rotation visibly advances at seating time.
+            // Mark the new appt as already-credited so the future checkout
+            // doesn't double-count this same walk-in.
             const updatedRoster = (turnRoster.roster || []).map(r =>
-              r.techId === next.techId ? { ...r, turnsTaken: (r.turnsTaken || 0) + 1 } : r
+              r.techId === next.techId ? { ...r, turnsTaken: (Number(r.turnsTaken) || 0) + 1 } : r
             );
             await saveTurnRoster(todayStr(), updatedRoster).catch(() => {});
             setShowQueue(false);
             setDate(todayStr());
             setViewMode('day');
-            setModal({ appt: blankAppt(todayStr(), next.techName, null, entry.clientName, entry.serviceName), original: null, mode: 'edit' });
+            setModal({
+              appt: {
+                ...blankAppt(todayStr(), next.techName, null, entry.clientName, entry.serviceName),
+                _turnCredited: new Date().toISOString(),
+              },
+              original: null,
+              mode: 'edit',
+            });
             updateWaitlistEntry(entry.id, { status: 'seated' }).catch(() => {});
             logActivity('walkin_auto_seated', `${entry.clientName} → ${next.techName}`);
           }}
@@ -697,7 +718,7 @@ function fmtClockIn(iso) {
 }
 
 // ── Turn roster panel — today's walk-in rotation ──────
-function TurnRosterPanel({ roster, allTechs, onAddTech, onRemoveTech, onResetDay }) {
+function TurnRosterPanel({ roster, allTechs, onAddTech, onRemoveTech, onResetDay, onRecount }) {
   const [showPicker, setShowPicker] = useState(false);
   const inRoster = new Set(roster.map(r => r.techId));
   const available = (allTechs || []).filter(t => !inRoster.has(t.id));
@@ -731,6 +752,13 @@ function TurnRosterPanel({ roster, allTechs, onAddTech, onRemoveTech, onResetDay
             </div>
           )}
         </div>
+        {roster.length > 0 && (
+          <button onClick={onRecount}
+            title="Rebuild turn counts from today's completed appointments"
+            style={{ fontSize: 11, color: '#1a5f8a', background: '#EBF4FB', border: '1px solid #bfdbfe', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
+            ↺ Recount
+          </button>
+        )}
         {roster.length > 0 && (
           <button onClick={onResetDay}
             style={{ fontSize: 11, color: '#888', background: 'none', border: '1px solid #e0e0e0', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit' }}>
