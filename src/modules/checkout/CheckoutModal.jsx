@@ -4,6 +4,7 @@ import { saveAppointment, fetchClient, saveClient,
          fetchPromoByCode, savePromoCode, createReceipt,
          fetchProducts, saveProduct, createReviewRequest } from '../../lib/firestore';
 import { logActivity } from '../../lib/logger';
+import { applySpecificRequestCredit } from '../../lib/turnCredit';
 import { useApp } from '../../context/AppContext';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
@@ -349,12 +350,19 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
       for (const g of updatedByAppt) {
         const apptSubtotal = g.services.reduce((s, sv) => s + (sv.price || 0), 0);
         const { id, createdAt, ...data } = g.appt;
+        const wasNotDone = g.appt.status !== 'done';
         await saveAppointment(id, {
           ...data,
           services: g.services,
           status: 'done',
           payment: { ...payment, amountForThisAppt: apptSubtotal },
         });
+        // Half-turn credit when a ★ specific-request appt is checked out today.
+        if (wasNotDone) {
+          applySpecificRequestCredit({ ...g.appt, status: 'done' }).then(applied => {
+            if (applied) logActivity('turn_credit_half', `${g.appt.techName} +0.5 (specific request via checkout: ${g.appt.clientName || 'walk-in'})`);
+          });
+        }
       }
 
       const techLabel = techSplit ? techSplit.map(t => t.techName).join(', ') : (allUpdatedServices[0]?.techName || 'unknown');

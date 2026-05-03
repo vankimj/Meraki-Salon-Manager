@@ -4,6 +4,7 @@ import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
 import { useApp } from '../../context/AppContext';
 import { logActivity } from '../../lib/logger';
+import { applySpecificRequestCredit } from '../../lib/turnCredit';
 import { notifyAffectedTechs } from '../../lib/notifications';
 import { resizeImg } from '../../utils/helpers';
 
@@ -269,19 +270,12 @@ export default function ScheduleAdmin() {
         await saveAppointment(id, data);
         logActivity('appt_updated', logDetail);
 
-        // Turn rotation: a tech who completes a SPECIFIC-REQUEST appt today
-        // earns 0.5 turns of credit, reflecting that they handled workload.
-        // Two such completions = one full turn, pushing them down the
-        // walk-in rotation by one position.
+        // Half-turn credit when a ★ specific-request appt is marked done today.
         const becameDone = original?.status !== 'done' && appt.status === 'done';
-        if (becameDone && appt.techRequestType === 'specific' && appt.date === todayStr() && appt.techName) {
-          const roster = turnRoster.roster || [];
-          const idx = roster.findIndex(r => r.techName === appt.techName);
-          if (idx >= 0) {
-            const next = roster.map((r, i) => i === idx ? { ...r, turnsTaken: (Number(r.turnsTaken) || 0) + 0.5 } : r);
-            saveTurnRoster(todayStr(), next).catch(e => console.warn('[turn credit]', e));
-            logActivity('turn_credit_half', `${appt.techName} +0.5 (specific request: ${appt.clientName || 'walk-in'})`);
-          }
+        if (becameDone) {
+          applySpecificRequestCredit(appt).then(applied => {
+            if (applied) logActivity('turn_credit_half', `${appt.techName} +0.5 (specific request: ${appt.clientName || 'walk-in'})`);
+          });
         }
       } else if (recurrence) {
         const groupId = crypto.randomUUID();
