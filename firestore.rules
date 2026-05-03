@@ -216,6 +216,13 @@ service cloud.firestore {
         allow update, delete: if isAuthenticated();
       }
 
+      // Walk-in turn rotation roster (one doc per day) — any authenticated
+      // staff can read & write so anyone at the front desk can clock techs
+      // in/out and rotate them as walk-ins are assigned.
+      match /turnRoster/{date} {
+        allow read, write: if isAuthenticated();
+      }
+
       // Tax forms (1099-NEC): admin manages all; authenticated users read their own (matched by email)
       match /taxForms/{formId} {
         allow read:                if isTenantAdmin(tenantId) ||
