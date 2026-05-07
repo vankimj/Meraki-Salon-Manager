@@ -215,6 +215,10 @@ export default function BookingScreen() {
 
   async function handleBook() {
     if (cart.length === 0 || !cartDate || cartSlot == null) return;
+    if (client?.banned) {
+      alert('We are unable to accept your booking online. Please contact the salon directly.');
+      return;
+    }
     setSubmitting(true);
     try {
       // Auto-create a client record once per booking session.

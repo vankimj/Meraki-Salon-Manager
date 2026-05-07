@@ -14,6 +14,7 @@ function blankClient() {
     instagramTags: [],
     googleReviews: [],
     visits: [],
+    banned: false,
   };
 }
 
@@ -490,6 +491,15 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
                 {isView
                   ? <ViewVal style={{ whiteSpace: 'pre-wrap' }}>{client.notes || '—'}</ViewVal>
                   : <textarea value={client.notes || ''} onChange={e => onChange({ notes: e.target.value })} rows={3} placeholder="Allergies, preferences, special notes…" style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }} />
+                }
+              </Field>
+              <Field label="Banned">
+                {isView
+                  ? <ViewVal style={{ color: client.banned ? '#b91c1c' : undefined, fontWeight: client.banned ? 600 : undefined }}>{client.banned ? '🚫 Banned — do not accept bookings' : '—'}</ViewVal>
+                  : <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#333' }}>
+                      <input type="checkbox" checked={!!client.banned} onChange={e => onChange({ banned: e.target.checked })} />
+                      Do not accept bookings from this client
+                    </label>
                 }
               </Field>
               <Field label="Referred by">

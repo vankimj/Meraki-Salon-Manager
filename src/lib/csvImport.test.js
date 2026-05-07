@@ -114,6 +114,12 @@ describe('mapClientRow', () => {
   it('returns null when no name is parseable', () => {
     expect(mapClientRow({ Email: 'no@name.com' })).toBeNull();
   });
+  it('reads the Banned column and sets boolean banned flag', () => {
+    expect(mapClientRow({ 'Client Name': 'A', Banned: 'yes' }).banned).toBe(true);
+    expect(mapClientRow({ 'Client Name': 'B', Banned: 'YES' }).banned).toBe(true);
+    expect(mapClientRow({ 'Client Name': 'C', Banned: '' }).banned).toBe(false);
+    expect(mapClientRow({ 'Client Name': 'D' }).banned).toBe(false); // column missing
+  });
 });
 
 // ── mapAppointmentRow ──────────────────────────────────

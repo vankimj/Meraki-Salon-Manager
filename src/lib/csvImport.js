@@ -309,6 +309,8 @@ export function mapClientRow(record) {
   const birthday = normalizeDate(getCol(record, ['Birthday', 'Birth Date', 'DOB', 'Date of Birth']));
   const address = getCol(record, ['Address', 'Street', 'Street Address']);
   const notes = getCol(record, ['Notes', 'Internal Notes', 'Client Notes']);
+  const bannedRaw = (getCol(record, ['Banned', 'Blocked', 'Block']) || '').toLowerCase().trim();
+  const banned = bannedRaw === 'yes' || bannedRaw === 'true' || bannedRaw === '1';
   return {
     name,
     email: email || '',
@@ -321,6 +323,7 @@ export function mapClientRow(record) {
     instagramTags: [],
     googleReviews: [],
     visits: [],
+    banned,
     _importedFrom: 'glossgenius',
     _importedAt: new Date().toISOString(),
   };
