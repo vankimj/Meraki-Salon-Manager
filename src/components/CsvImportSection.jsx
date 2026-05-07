@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { createClient, createAppointment, createReceipt, fetchClients, backfillImportedReceiptCreatedAt, backfillImportedReceiptClientIds, diagnoseUnlinkedReceipts, sampleGgReceiptsByTech, diagnoseCashTotals, dedupeImportedReceipts, diagnoseImportFormats, deleteImportedReceiptsWithoutChargeId, previewGgImportWipe, wipeAllGgImports, fetchExistingGgChargeIds, fetchExistingGgTransactionIds, fetchExistingClientNameKeys, fetchExistingApptKeys, apptDedupKey, fetchExistingReceiptKeys, saleDedupKey, countAllAppointments, wipeAllAppointments, countAllReceipts, wipeAllReceipts, diagnoseMethodBucket, backfillReceiptCreatedAtStrong, diagnoseReceiptCreatedAt, diagnoseReceiptDate, backfillReceiptDate } from '../lib/firestore';
+import { createClient, saveClient, createAppointment, createReceipt, fetchClients, backfillImportedReceiptCreatedAt, backfillImportedReceiptClientIds, diagnoseUnlinkedReceipts, sampleGgReceiptsByTech, diagnoseCashTotals, dedupeImportedReceipts, diagnoseImportFormats, deleteImportedReceiptsWithoutChargeId, previewGgImportWipe, wipeAllGgImports, fetchExistingGgChargeIds, fetchExistingGgTransactionIds, fetchExistingClientNameKeys, fetchExistingApptKeys, apptDedupKey, fetchExistingReceiptKeys, saleDedupKey, countAllAppointments, wipeAllAppointments, countAllReceipts, wipeAllReceipts, diagnoseMethodBucket, backfillReceiptCreatedAtStrong, diagnoseReceiptCreatedAt, diagnoseReceiptDate, backfillReceiptDate } from '../lib/firestore';
 import { logActivity } from '../lib/logger';
 import {
   parseCsv, detectType,
@@ -156,21 +156,36 @@ export default function CsvImportSection() {
     try {
       if (parsed.type === 'clients') {
         setProgress('Loading dedup index…');
-        const existing = await fetchExistingClientNameKeys().catch(() => new Set());
+        // Use full client docs (not just name keys) so we can propagate
+        // CSV-only fields like `banned` onto existing matches without
+        // duplicating the whole record.
+        const existingDocs = await fetchClients().catch(() => []);
+        const byKey = {};
+        existingDocs.forEach(d => { if (d.name) byKey[clientKey(d.name)] = d; });
+        let updated = 0;
         for (const c of parsed.mapped) {
           const key = clientKey(c.name);
-          if (key && existing.has(key)) {
+          const ex = key ? byKey[key] : null;
+          if (ex) {
+            // Re-import: the CSV may carry a fresh `banned` flag we don't
+            // have yet. Apply it; leave other fields alone to avoid
+            // overwriting in-app edits.
+            if (c.banned && !ex.banned) {
+              await saveClient(ex.id, { banned: true }).catch(() => {});
+              updated++;
+            }
             skippedRows.push({
               name: c.name, email: c.email || '', phone: c.phone || '',
-              reason: 'Client name already in DB',
+              reason: c.banned && !ex.banned ? 'Existed → banned flag applied' : 'Client name already in DB',
             });
             continue;
           }
           await createClient(c).catch(() => {});
-          if (key) existing.add(key);
+          if (key) byKey[key] = c;
           count++;
-          if ((count + skippedRows.length) % 20 === 0) setProgress(`Clients: ${count} imported, ${skippedRows.length} skipped / ${parsed.mapped.length}`);
+          if ((count + skippedRows.length) % 20 === 0) setProgress(`Clients: ${count} imported, ${updated} banned-updated, ${skippedRows.length} skipped / ${parsed.mapped.length}`);
         }
+        if (updated > 0) setProgress(`✓ Imported ${count} new · ${updated} existing flagged banned · ${skippedRows.length} skipped`);
       } else if (parsed.type === 'appointments') {
         setProgress('Loading client lookup + dedup index…');
         const [allClients, existingKeys] = await Promise.all([
