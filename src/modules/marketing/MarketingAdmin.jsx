@@ -61,14 +61,15 @@ const BUILTIN_TEMPLATES = [
 ];
 
 const SEGMENTS = [
-  { id: 'all',        label: 'All clients',          desc: 'Everyone with an email address' },
-  { id: 'lapsed',     label: 'Lapsed clients',       desc: 'No appointment in the last N days' },
-  { id: 'new_clients',label: 'New clients',           desc: 'First visit within the last N days' },
-  { id: 'top_clients',label: 'Top clients',           desc: 'Clients with at least N visits' },
-  { id: 'no_review',  label: 'Never reviewed',       desc: 'Clients who have never left a review' },
-  { id: 'birthday',   label: 'Birthday this month',  desc: "Clients whose birthday falls this month" },
-  { id: 'tech',       label: "Tech's clients",        desc: 'Clients who visited a specific nail tech' },
-  { id: 'service',    label: 'Clients by service',   desc: 'Clients who received a specific service' },
+  { id: 'all',          label: 'All clients',          desc: 'Everyone with an email address' },
+  { id: 'test_subjects',label: 'Test subjects',        desc: 'Clients flagged as test subjects on their profile' },
+  { id: 'lapsed',       label: 'Lapsed clients',       desc: 'No appointment in the last N days' },
+  { id: 'new_clients',  label: 'New clients',          desc: 'First visit within the last N days' },
+  { id: 'top_clients',  label: 'Top clients',          desc: 'Clients with at least N visits' },
+  { id: 'no_review',    label: 'Never reviewed',       desc: 'Clients who have never left a review' },
+  { id: 'birthday',     label: 'Birthday this month',  desc: "Clients whose birthday falls this month" },
+  { id: 'tech',         label: "Tech's clients",       desc: 'Clients who visited a specific nail tech' },
+  { id: 'service',      label: 'Clients by service',   desc: 'Clients who received a specific service' },
 ];
 
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
@@ -432,6 +433,7 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
       ? clients.filter(c => c.phone && !c.marketingOptOut)
       : clients.filter(c => c.email && !c.marketingOptOut);
     if (segType === 'all') return withContact;
+    if (segType === 'test_subjects') return withContact.filter(c => c.testSubject);
     if (segType === 'birthday') {
       const mm = new Date().toISOString().slice(5, 7);
       return withContact.filter(c => c.birthday && c.birthday.slice(5, 7) === mm);

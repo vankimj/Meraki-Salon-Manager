@@ -15,6 +15,7 @@ function blankClient() {
     googleReviews: [],
     visits: [],
     banned: false,
+    testSubject: false,
   };
 }
 
@@ -499,6 +500,15 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
                   : <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#333' }}>
                       <input type="checkbox" checked={!!client.banned} onChange={e => onChange({ banned: e.target.checked })} />
                       Do not accept bookings from this client
+                    </label>
+                }
+              </Field>
+              <Field label="Test subject">
+                {isView
+                  ? <ViewVal style={{ color: client.testSubject ? '#1d4ed8' : undefined, fontWeight: client.testSubject ? 600 : undefined }}>{client.testSubject ? '🧪 Test subject (marketing)' : '—'}</ViewVal>
+                  : <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#333' }}>
+                      <input type="checkbox" checked={!!client.testSubject} onChange={e => onChange({ testSubject: e.target.checked })} />
+                      Include in "Test subjects" marketing audience
                     </label>
                 }
               </Field>
