@@ -1342,6 +1342,13 @@ export async function fetchCampaigns() {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
+// Real-time subscription so the UI sees status='pending' → 'sent' updates
+// from sendSMSCampaign without a manual reload. Returns unsubscribe.
+export function subscribeToCampaigns(cb) {
+  const q = query(CAMPAIGNS_COL, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+}
+
 export async function createCampaign(data) {
   await addDoc(CAMPAIGNS_COL, { ...data, createdAt: new Date().toISOString() });
 }

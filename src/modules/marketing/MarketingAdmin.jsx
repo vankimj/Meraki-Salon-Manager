@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { fetchClients, fetchAppointmentsByRange, fetchCampaigns, createCampaign, deleteCampaign,
+import { fetchClients, fetchAppointmentsByRange, subscribeToCampaigns, createCampaign, deleteCampaign,
          fetchEmployees, fetchServices, fetchPromoCodes,
          fetchCampaignTemplates, saveCampaignTemplate, deleteCampaignTemplate,
          fetchReviewReceived } from '../../lib/firestore';
@@ -114,12 +114,13 @@ export default function MarketingAdmin() {
   const [modal,     setModal]     = useState(false);  // false | true | campaign-object (clone)
   const [tab,       setTab]       = useState('campaigns');
 
-  useEffect(() => { load(); }, []); // eslint-disable-line
-
-  async function load() {
-    try { setCampaigns(await fetchCampaigns()); }
-    catch { setCampaigns([]); }
-  }
+  // Live subscription — when sendSMSCampaign updates status pending → sent
+  // and writes sentCount/failCount/failures, the list reflects it without
+  // a manual reload.
+  useEffect(() => {
+    const unsub = subscribeToCampaigns(setCampaigns);
+    return unsub;
+  }, []);
 
   async function handleSend(data) {
     try {
@@ -127,7 +128,6 @@ export default function MarketingAdmin() {
       logActivity('marketing_campaign_sent', `${data.name} — ${data.recipientCount} recipients`);
       showToast(`Campaign queued — sending to ${data.recipientCount} clients`);
       setModal(false);
-      load();
     } catch (e) { showToast('Failed: ' + e.message, 3000); }
   }
 
@@ -135,7 +135,6 @@ export default function MarketingAdmin() {
     if (!confirm('Delete this campaign? This cannot be undone.')) return;
     try {
       await deleteCampaign(id);
-      setCampaigns(cs => cs.filter(c => c.id !== id));
       logActivity('marketing_campaign_deleted', id);
       showToast('Campaign deleted');
     } catch (e) { showToast('Delete failed: ' + e.message, 3000); }
