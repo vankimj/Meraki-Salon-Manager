@@ -1495,11 +1495,16 @@ const gustoClientSecret = defineString('GUSTO_CLIENT_SECRET', { default: '' });
 const gustoRedirectUri  = defineString('GUSTO_REDIRECT_URI',  { default: '' });
 
 // ── SMS Campaigns (Twilio) ────────────────────────────────────────────────────
+// Sends to the recipients list the Marketing UI resolved at "Send" time
+// (data.recipients). The UI is the single source of truth for audience
+// resolution — it knows about every segment type and applies marketingOptOut
+// + channel-required-contact filters there. Re-querying here would silently
+// send to all clients for any segment the function hadn't been updated to
+// recognize.
 exports.sendSMSCampaign = onDocumentCreated(
   `tenants/{tenantId}/campaigns/{campaignId}`,
   async (event) => {
-    const data     = event.data.data();
-    const tenantId = event.params.tenantId;
+    const data = event.data.data();
     if (data.channel !== 'sms') return;
     if (data.status !== 'pending') return;
 
@@ -1511,39 +1516,22 @@ exports.sendSMSCampaign = onDocumentCreated(
       return;
     }
 
-    const db     = getFirestore();
-    const client = require('twilio')(sid, token);
-
-    // Fetch clients matching the segment filter
-    const clientsSnap = await db.collection(`tenants/${tenantId}/clients`).get();
-    let clients = clientsSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(c => c.phone);
-
-    // Apply segment filter
-    if (data.segmentType === 'lapsed') {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - (data.segmentParams?.days || 60));
-      const cutoffStr = cutoff.toISOString().slice(0, 10);
-      clients = clients.filter(c => !c.lastVisit || c.lastVisit < cutoffStr);
-    } else if (data.segmentType === 'tech') {
-      clients = clients.filter(c => c.preferredTech === data.segmentParams?.techName);
-    } else if (data.segmentType === 'birthday') {
-      const today = new Date();
-      const mm = String(today.getMonth() + 1).padStart(2, '0');
-      const dd = String(today.getDate()).padStart(2, '0');
-      clients = clients.filter(c => c.birthday && c.birthday.slice(5, 10) === `${mm}-${dd}`);
+    const recipients = Array.isArray(data.recipients) ? data.recipients : [];
+    if (recipients.length === 0) {
+      await event.data.ref.update({ status: 'failed', error: 'no_recipients' });
+      return;
     }
 
+    const client = require('twilio')(sid, token);
     let sentCount = 0;
     let failCount = 0;
 
-    for (const c of clients) {
-      const phone = normalizePhone(c.phone);
+    for (const r of recipients) {
+      const phone = normalizePhone(r.phone);
       if (!phone) { failCount++; continue; }
       const body = (data.smsBody || '')
-        .replace(/\{firstName\}/g, c.name?.split(' ')[0] || 'there')
-        .replace(/\{lastName\}/g,  c.name?.split(' ').slice(1).join(' ') || '');
+        .replace(/\{firstName\}/g, r.name?.split(' ')[0] || 'there')
+        .replace(/\{lastName\}/g,  r.name?.split(' ').slice(1).join(' ') || '');
       try {
         await client.messages.create({ body, from, to: phone });
         sentCount++;
