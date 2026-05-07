@@ -1534,38 +1534,80 @@ exports.sendSMSCampaign = onDocumentCreated(
     const client = apiKeySid
       ? twilioSDK(apiKeySid, token, { accountSid: sid })
       : twilioSDK(sid, token);
+
+    // Flip to 'sending' immediately so the UI knows the function picked it up.
+    await event.data.ref.update({
+      status: 'sending',
+      startedAt: new Date().toISOString(),
+      sentCount: 0,
+      failCount: 0,
+      attemptedCount: 0,
+      attempts: [],
+    });
+
     let sentCount = 0;
     let failCount = 0;
-    const failures = []; // capped + written back so the UI can display per-recipient reasons
+    const attempts = []; // full chronological log: { name, phone, status, code?, reason?, at }
+    let lastFlushAt = Date.now();
+    const FLUSH_EVERY_N = 5;
+    const FLUSH_EVERY_MS = 1500;
+    const ATTEMPTS_CAP = 2000; // doc-size safety cap
+
+    async function flushProgress() {
+      // Cap stored array; counters always reflect the true total.
+      const stored = attempts.length > ATTEMPTS_CAP ? attempts.slice(0, ATTEMPTS_CAP) : attempts;
+      await event.data.ref.update({
+        sentCount,
+        failCount,
+        attemptedCount: attempts.length,
+        attempts: stored,
+        attemptsTruncated: attempts.length > ATTEMPTS_CAP,
+        lastUpdateAt: new Date().toISOString(),
+      });
+      lastFlushAt = Date.now();
+    }
 
     for (const r of recipients) {
+      const at = new Date().toISOString();
       const phone = normalizePhone(r.phone);
       if (!phone) {
         failCount++;
-        failures.push({ name: r.name || '(unknown)', phone: r.phone || '', code: 'INVALID_PHONE_FORMAT', reason: `Could not normalize phone "${r.phone || ''}" to E.164` });
-        continue;
+        attempts.push({ name: r.name || '(unknown)', phone: r.phone || '', status: 'failed', code: 'INVALID_PHONE_FORMAT', reason: `Could not normalize phone "${r.phone || ''}" to E.164`, at });
+      } else {
+        const body = (data.smsBody || '')
+          .replace(/\{firstName\}/g, r.name?.split(' ')[0] || 'there')
+          .replace(/\{lastName\}/g,  r.name?.split(' ').slice(1).join(' ') || '');
+        try {
+          await client.messages.create({ body, from, to: phone });
+          sentCount++;
+          attempts.push({ name: r.name || '(unknown)', phone, status: 'sent', at });
+        } catch (err) {
+          failCount++;
+          const code = err?.code != null ? String(err.code) : 'UNKNOWN';
+          const reason = err?.message || 'Unknown Twilio error';
+          console.error(`[sendSMSCampaign] ${r.name} ${phone} failed code=${code} reason=${reason}`);
+          attempts.push({ name: r.name || '(unknown)', phone, status: 'failed', code, reason, at });
+        }
       }
-      const body = (data.smsBody || '')
-        .replace(/\{firstName\}/g, r.name?.split(' ')[0] || 'there')
-        .replace(/\{lastName\}/g,  r.name?.split(' ').slice(1).join(' ') || '');
-      try {
-        await client.messages.create({ body, from, to: phone });
-        sentCount++;
-      } catch (err) {
-        failCount++;
-        const code = err?.code != null ? String(err.code) : 'UNKNOWN';
-        const reason = err?.message || 'Unknown Twilio error';
-        // Top-level Functions log so `firebase functions:log` surfaces it.
-        console.error(`[sendSMSCampaign] ${r.name} ${phone} failed code=${code} reason=${reason}`);
-        if (failures.length < 200) failures.push({ name: r.name || '(unknown)', phone, code, reason });
+
+      // Periodic flush so the UI subscription sees progress live.
+      const now = Date.now();
+      if (attempts.length % FLUSH_EVERY_N === 0 || now - lastFlushAt >= FLUSH_EVERY_MS) {
+        try { await flushProgress(); } catch (e) { console.error('[sendSMSCampaign] progress flush failed:', e); }
       }
     }
 
+    // Final write — failures kept for backward compat with anything reading
+    // the old field; new UI consumes attempts directly.
+    const failures = attempts.filter(a => a.status === 'failed').slice(0, 200);
     await event.data.ref.update({
-      status: 'sent',
+      status: 'done',
       sentCount,
       failCount,
-      failures, // up to 200 per-recipient error records
+      attemptedCount: attempts.length,
+      attempts: attempts.length > ATTEMPTS_CAP ? attempts.slice(0, ATTEMPTS_CAP) : attempts,
+      attemptsTruncated: attempts.length > ATTEMPTS_CAP,
+      failures,
       sentAt: new Date().toISOString(),
     });
   }

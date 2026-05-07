@@ -329,9 +329,20 @@ function CampaignRow({ campaign: c, last, onDelete, onClone }) {
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: s.bg, color: s.fg, letterSpacing: '.04em', textTransform: 'uppercase' }}>{s.label}</span>
-          {c.status === 'done' && (
+          {(c.status === 'sending' || c.status === 'done') && (
             <div style={{ fontSize: 10, color: '#aaa', marginTop: 3 }}>
-              ✓ {c.sentCount || 0} sent{c.failCount > 0 ? ` · ${c.failCount} failed` : ''}
+              {c.status === 'done' ? '✓' : '📨'} {c.sentCount || 0} sent{c.failCount > 0 ? ` · ${c.failCount} failed` : ''}
+              {c.status === 'sending' && c.recipientCount ? ` · ${(c.recipientCount - (c.attemptedCount || 0))} queued` : ''}
+            </div>
+          )}
+          {c.status === 'pending' && (
+            <div style={{ fontSize: 10, color: '#92400e', marginTop: 3 }}>
+              waiting for function…
+            </div>
+          )}
+          {c.status === 'failed' && c.error && (
+            <div style={{ fontSize: 10, color: '#ef4444', marginTop: 3, fontWeight: 600 }}>
+              {c.error}
             </div>
           )}
           <div style={{ fontSize: 10, color: '#bbb', marginTop: 2 }}>{date}</div>
@@ -342,7 +353,12 @@ function CampaignRow({ campaign: c, last, onDelete, onClone }) {
         <div style={{ padding: '0 16px 14px 64px', borderTop: '1px solid #f8f8f8' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: '#555', marginBottom: 6 }}>{c.subject}</div>
           <div style={{ fontSize: 12, color: '#888', whiteSpace: 'pre-wrap', lineHeight: 1.6, maxHeight: 120, overflowY: 'auto', background: '#f8f9fa', borderRadius: 6, padding: '8px 10px', marginBottom: 10 }}>{c.body}</div>
-          {Array.isArray(c.failures) && c.failures.length > 0 && (
+
+          <CampaignDiagnostics c={c} />
+
+          {/* Legacy failures panel — only for campaigns from before the
+              activity-log change (no attempts array). */}
+          {!Array.isArray(c.attempts) && Array.isArray(c.failures) && c.failures.length > 0 && (
             <div style={{ marginBottom: 10, background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, padding: '8px 10px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#7f1d1d', marginBottom: 6 }}>
                 ⚠ {c.failures.length} delivery {c.failures.length === 1 ? 'failure' : 'failures'}{c.failCount > c.failures.length ? ` (showing first ${c.failures.length} of ${c.failCount})` : ''}
@@ -369,6 +385,134 @@ function CampaignRow({ campaign: c, last, onDelete, onClone }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Campaign diagnostics: live progress + per-recipient attempt log ────────
+function fmtElapsed(ms) {
+  if (ms < 1000) return '<1s';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return `${m}m ${rem}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function CampaignDiagnostics({ c }) {
+  const [now, setNow] = useState(() => Date.now());
+  const isActive = c.status === 'pending' || c.status === 'sending';
+  // Live ticker so elapsed/last-update times stay accurate while a campaign is in flight.
+  useEffect(() => {
+    if (!isActive) return;
+    const id = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(id);
+  }, [isActive]);
+
+  const startedAt = c.startedAt ? new Date(c.startedAt).getTime() : null;
+  const createdAt = c.createdAt ? new Date(c.createdAt).getTime() : null;
+  const lastUpdateAt = c.lastUpdateAt ? new Date(c.lastUpdateAt).getTime() : null;
+  const sentAt = c.sentAt ? new Date(c.sentAt).getTime() : null;
+
+  const queuedFor = createdAt && startedAt ? startedAt - createdAt : (createdAt && c.status === 'pending' ? now - createdAt : null);
+  const sendingFor = startedAt ? (sentAt || now) - startedAt : null;
+  const sinceLastUpdate = lastUpdateAt && c.status === 'sending' ? now - lastUpdateAt : null;
+  const stuck = c.status === 'pending' && queuedFor && queuedFor > 30000;
+  const stalled = c.status === 'sending' && sinceLastUpdate && sinceLastUpdate > 30000;
+
+  const total = c.recipientCount || (Array.isArray(c.attempts) ? c.attempts.length : 0) || 0;
+  const sent = c.sentCount || 0;
+  const failed = c.failCount || 0;
+  const attempted = c.attemptedCount ?? (sent + failed);
+  const queued = Math.max(0, total - attempted);
+  const pct = total > 0 ? Math.min(100, Math.round((attempted / total) * 100)) : 0;
+
+  const attempts = Array.isArray(c.attempts) ? c.attempts : null;
+  // Render newest-first so live activity is at the top.
+  const orderedAttempts = attempts ? [...attempts].reverse() : null;
+
+  // Nothing useful to show for legacy campaigns (no attempts) that already finished.
+  if (!attempts && !isActive) return null;
+
+  return (
+    <div style={{ marginBottom: 10, background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#333', textTransform: 'uppercase', letterSpacing: '.04em' }}>Activity log</div>
+        <div style={{ fontSize: 10, color: '#888' }}>
+          {c.status === 'pending' && queuedFor != null && <>queued {fmtElapsed(queuedFor)}</>}
+          {c.status === 'sending' && sendingFor != null && <>sending {fmtElapsed(sendingFor)}{sinceLastUpdate != null ? ` · last update ${fmtElapsed(sinceLastUpdate)} ago` : ''}</>}
+          {c.status === 'done' && sendingFor != null && <>completed in {fmtElapsed(sendingFor)}</>}
+        </div>
+      </div>
+
+      {(stuck || stalled) && (
+        <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 6, padding: '6px 10px', marginBottom: 8, fontSize: 11, color: '#78350f' }}>
+          ⚠ {stuck ? "Campaign hasn't started after 30s — Cloud Function may not be picking it up. Check `firebase functions:log --only sendSMSCampaign`."
+                    : "No progress in 30s — function may be slow, throttled by Twilio, or about to hit its 60s timeout."}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 8 }}>
+        <Stat label="Sent"    value={sent}      color="#16a34a" />
+        <Stat label="Failed"  value={failed}    color={failed > 0 ? '#ef4444' : '#9ca3af'} />
+        <Stat label="Queued"  value={queued}    color="#92400e" />
+        <Stat label="Total"   value={total}     color="#333" />
+      </div>
+
+      {total > 0 && (
+        <div style={{ height: 6, background: '#eee', borderRadius: 3, overflow: 'hidden', marginBottom: 8 }}>
+          <div style={{ display: 'flex', height: '100%' }}>
+            <div style={{ width: `${total > 0 ? (sent / total * 100) : 0}%`, background: '#16a34a' }} />
+            <div style={{ width: `${total > 0 ? (failed / total * 100) : 0}%`, background: '#ef4444' }} />
+          </div>
+        </div>
+      )}
+
+      {orderedAttempts && orderedAttempts.length > 0 ? (
+        <div style={{ background: '#fff', border: '1px solid #ececec', borderRadius: 6, maxHeight: 240, overflowY: 'auto', fontSize: 11 }}>
+          {orderedAttempts.map((a, i) => {
+            const isFail = a.status === 'failed';
+            const time = a.at ? new Date(a.at).toLocaleTimeString('en-US', { hour12: false }) : '';
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 10px', borderBottom: i < orderedAttempts.length - 1 ? '1px solid #f5f5f5' : 'none' }}>
+                <span style={{ fontSize: 12, lineHeight: '14px', color: isFail ? '#ef4444' : '#16a34a', flexShrink: 0 }}>{isFail ? '✗' : '✓'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name || '(unknown)'}</span>
+                    <span style={{ fontSize: 10, color: '#999', flexShrink: 0 }}>{time}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: isFail ? '#9a3412' : '#888', marginTop: 1 }}>
+                    {a.phone || '—'}
+                    {isFail && a.code && <> · <code style={{ background: '#fee2e2', padding: '0 4px', borderRadius: 3, color: '#7f1d1d' }}>{a.code}</code></>}
+                    {isFail && a.reason && <> — {a.reason}</>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : isActive ? (
+        <div style={{ fontSize: 11, color: '#888', padding: '8px 10px', textAlign: 'center', background: '#fff', border: '1px dashed #ddd', borderRadius: 6 }}>
+          {c.status === 'pending' ? 'Waiting for the Cloud Function to pick this up…' : 'Reaching the first recipient…'}
+        </div>
+      ) : null}
+
+      {c.attemptsTruncated && (
+        <div style={{ fontSize: 10, color: '#888', marginTop: 6, fontStyle: 'italic' }}>
+          Log truncated to first 2,000 entries (full counters above are accurate).
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value, color }) {
+  return (
+    <div style={{ background: '#fff', borderRadius: 6, padding: '6px 8px', textAlign: 'center', border: '1px solid #ececec' }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color, lineHeight: 1.2 }}>{value}</div>
+      <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: 1 }}>{label}</div>
     </div>
   );
 }
