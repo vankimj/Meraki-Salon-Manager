@@ -85,15 +85,17 @@ function smsSegmentInfo(text) {
 }
 
 const SEGMENTS = [
-  { id: 'all',          label: 'All clients',          desc: 'Everyone with an email address' },
-  { id: 'test_subjects',label: 'Test subjects',        desc: 'Clients flagged as test subjects on their profile' },
-  { id: 'lapsed',       label: 'Lapsed clients',       desc: 'No appointment in the last N days' },
-  { id: 'new_clients',  label: 'New clients',          desc: 'First visit within the last N days' },
-  { id: 'top_clients',  label: 'Top clients',          desc: 'Clients with at least N visits' },
-  { id: 'no_review',    label: 'Never reviewed',       desc: 'Clients who have never left a review' },
-  { id: 'birthday',     label: 'Birthday this month',  desc: "Clients whose birthday falls this month" },
-  { id: 'tech',         label: "Tech's clients",       desc: 'Clients who visited a specific nail tech' },
-  { id: 'service',      label: 'Clients by service',   desc: 'Clients who received a specific service' },
+  { id: 'all',                   label: 'All clients',           desc: 'Everyone with an email address' },
+  { id: 'test_subjects',         label: 'Test subjects',         desc: 'Clients flagged as test subjects on their profile' },
+  { id: 'appts_today_remaining', label: "Today's remaining",     desc: 'Clients with appointments still ahead today (current time onward) — for "running 15 min behind" or "closing early"' },
+  { id: 'appts_on_date',         label: 'Appointments on a date', desc: 'Clients with bookings on a specific date — for day-before reminders, day-of nudges' },
+  { id: 'lapsed',                label: 'Lapsed clients',        desc: 'No appointment in the last N days' },
+  { id: 'new_clients',           label: 'New clients',           desc: 'First visit within the last N days' },
+  { id: 'top_clients',           label: 'Top clients',           desc: 'Clients with at least N visits' },
+  { id: 'no_review',             label: 'Never reviewed',        desc: 'Clients who have never left a review' },
+  { id: 'birthday',              label: 'Birthday this month',   desc: "Clients whose birthday falls this month" },
+  { id: 'tech',                  label: "Tech's clients",        desc: 'Clients who visited a specific nail tech' },
+  { id: 'service',               label: 'Clients by service',    desc: 'Clients who received a specific service' },
 ];
 
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
@@ -414,6 +416,7 @@ function CampaignRow({ campaign: c, last, onDelete, onCancel, onClone, onRetry }
             {c.segmentParams?.techName    ? ` · ${c.segmentParams.techName}`    : ''}
             {c.segmentParams?.serviceName ? ` · ${c.segmentParams.serviceName}` : ''}
             {c.segmentParams?.days        ? ` (${c.segmentParams.days}d lapse)` : ''}
+            {c.segmentParams?.date        ? ` · ${c.segmentParams.date}`        : ''}
             {' · '}{c.recipientCount || 0} recipients
           </div>
         </div>
@@ -635,6 +638,15 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
   const [segType,     setSegType]     = useState(prefill?.segmentType || 'test_subjects');
   const [lapDays,     setLapDays]     = useState(prefill?.segmentParams?.days || 60);
   const [techSel,     setTechSel]     = useState(prefill?.segmentParams?.techName || '');
+  // For "Appointments on a date": YYYY-MM-DD picker, defaulting to today.
+  // For "Today's remaining": no input — date is locked to today, time
+  // cutoff is computed at recipient-resolution time.
+  const apptDateDefault = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
+  const [apptDate,    setApptDate]    = useState(prefill?.segmentParams?.date || apptDateDefault);
+  const [dateAppts,   setDateAppts]   = useState(null);
   const [serviceSel,  setServiceSel]  = useState(prefill?.segmentParams?.serviceName || '');
   const [promoSel,    setPromoSel]    = useState('');
   // Personalized promo codes: when on, one unique code is generated per
@@ -716,6 +728,19 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
       .catch(() => setAllAppts([]));
   }, [segType]); // eslint-disable-line
 
+  // Single-day appointment fetch for the appts_on_date / appts_today_remaining
+  // segments. Today's-remaining always queries today; the date-picker variant
+  // queries whatever date the user picked. Single-day range = cheap.
+  useEffect(() => {
+    if (segType !== 'appts_on_date' && segType !== 'appts_today_remaining') { setDateAppts(null); return; }
+    const date = segType === 'appts_today_remaining' ? apptDateDefault : apptDate;
+    if (!date) { setDateAppts([]); return; }
+    setDateAppts(null);
+    fetchAppointmentsByRange(date, date)
+      .then(appts => setDateAppts(appts.filter(a => a.status !== 'cancelled' && a.status !== 'no_show')))
+      .catch(() => setDateAppts([]));
+  }, [segType, apptDate, apptDateDefault]); // eslint-disable-line
+
   useEffect(() => {
     if (segType !== 'no_review') { setReviewedIds(null); return; }
     setReviewedIds(null);
@@ -729,6 +754,23 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
       : clients.filter(c => c.email && !c.marketingOptOut);
     if (segType === 'all') return withContact;
     if (segType === 'test_subjects') return withContact.filter(c => c.testSubject);
+    if (segType === 'appts_on_date') {
+      if (dateAppts === null) return null;
+      const ids = new Set(dateAppts.map(a => a.clientId).filter(Boolean));
+      return withContact.filter(c => ids.has(c.id));
+    }
+    if (segType === 'appts_today_remaining') {
+      if (dateAppts === null) return null;
+      // Cutoff = HH:MM right now. startTime is stored as "HH:MM" so a
+      // string compare gives correct ordering.
+      const now = new Date();
+      const cutoff = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const ids = new Set(dateAppts
+        .filter(a => (a.startTime || '00:00') >= cutoff)
+        .map(a => a.clientId)
+        .filter(Boolean));
+      return withContact.filter(c => ids.has(c.id));
+    }
     if (segType === 'birthday') {
       const mm = new Date().toISOString().slice(5, 7);
       return withContact.filter(c => c.birthday && c.birthday.slice(5, 7) === mm);
@@ -771,7 +813,7 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
       return withContact.filter(c => !reviewedIds.has(c.id));
     }
     return withContact;
-  }, [clients, channel, segType, lapDays, recentAppts, techSel, serviceSel, allAppts, newDays, minVisits, reviewedIds]);
+  }, [clients, channel, segType, lapDays, recentAppts, techSel, serviceSel, allAppts, newDays, minVisits, reviewedIds, dateAppts]);
 
   function applyTemplate(tpl) {
     // Resolve {bookingLink} to whichever URL the user has configured for the
@@ -828,11 +870,12 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
     ? (selectedPromo.type === 'percent' ? `${selectedPromo.value}% off` : `$${selectedPromo.value} off`)
     : null;
 
-  const needsSelection = (segType === 'tech' && !techSel) || (segType === 'service' && !serviceSel);
+  const needsSelection = (segType === 'tech' && !techSel) || (segType === 'service' && !serviceSel) || (segType === 'appts_on_date' && !apptDate);
   const loading        = !clients ||
     (segType === 'lapsed'      && recentAppts === null) ||
     (['tech','service','new_clients','top_clients'].includes(segType) && allAppts === null) ||
-    (segType === 'no_review'   && reviewedIds === null);
+    (segType === 'no_review'   && reviewedIds === null) ||
+    (['appts_on_date','appts_today_remaining'].includes(segType) && dateAppts === null);
 
   // Compute the schedule's ISO timestamp. Treat the date+time as local
   // (matches what the user typed in the inputs); convert to UTC ISO for
@@ -877,6 +920,7 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
     if (segType === 'service')      segmentParams.serviceName = serviceSel;
     if (segType === 'new_clients')  segmentParams.days        = newDays;
     if (segType === 'top_clients')  segmentParams.minVisits   = minVisits;
+    if (segType === 'appts_on_date') segmentParams.date       = apptDate;
     await onSend({
       name: name.trim(), channel,
       subject:    channel === 'email' ? subject.trim() : null,
@@ -1034,6 +1078,23 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
                 <option value="">Select a service…</option>
                 {services.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
               </select>
+            </F>
+          )}
+
+          {segType === 'appts_on_date' && (
+            <F label="Date">
+              <input type="date" value={apptDate} onChange={e => setApptDate(e.target.value)} style={inp} />
+              <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+                Cancelled and no-show appointments are excluded.
+              </div>
+            </F>
+          )}
+
+          {segType === 'appts_today_remaining' && (
+            <F label="Today's remaining">
+              <div style={{ fontSize: 12, color: '#555', padding: '8px 12px', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, lineHeight: 1.55 }}>
+                Resolves at send time: clients with appointments today (<strong>{apptDateDefault}</strong>) starting at the current time or later. Useful for "running 15 min behind" or "we're closing early today" alerts.
+              </div>
             </F>
           )}
 
