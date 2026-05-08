@@ -368,7 +368,9 @@ async function processEmailCampaign(tenantId, docRef, data) {
         }
       }
 
-      const personalizedBody = substitutePlaceholders(body, { firstName, lastName, promoCode: promoCode || '' });
+      const placeholders = { firstName, lastName, promoCode: promoCode || '' };
+      const personalizedSubject = substitutePlaceholders(subject, placeholders);
+      const personalizedBody    = substitutePlaceholders(body,    placeholders);
       const bodyHtml = personalizedBody
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/\n/g, '<br>');
@@ -377,7 +379,7 @@ async function processEmailCampaign(tenantId, docRef, data) {
         const result = await resend.emails.send({
           from:    fromAddr,
           to:      email,
-          subject,
+          subject: personalizedSubject,
           html:    buildMarketingHtml(bodyHtml, promoCode, promoLabel, data.ctaText || null, data.ctaUrl || null),
         });
         if (result?.error) {
