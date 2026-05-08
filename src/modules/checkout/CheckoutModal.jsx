@@ -1106,7 +1106,7 @@ function GiftCardSaleModal({ onClose, onAdd }) {
         <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Recipient email *" inputMode="email"
           style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: `1px solid ${email && !validEmail ? '#ef4444' : '#d8d8d8'}`, fontSize: 13, fontFamily: 'inherit', marginBottom: 4, background: '#fafafa' }} />
         {email && !validEmail && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 8 }}>Enter a valid email — we'll send the code here.</div>}
-        {(!email || validEmail) && <div style={{ height: 10 }} />
+        {(!email || validEmail) && <div style={{ height: 10 }} />}
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #d8d8d8', background: '#fff', color: '#555', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button onClick={add} disabled={!valid}
