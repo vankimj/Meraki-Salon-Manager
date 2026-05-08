@@ -6,8 +6,8 @@ Switching Meraki Nail Studio off GlossGenius and onto this app. Items grouped by
 
 ## T-7 to T-3 days — Data migration
 
-- [ ] **Import GG Clients CSV** (Admin → Settings → Import from GlossGenius). This is the missing piece for Top Clients / per-tech client counts.
-- [ ] Run **Link GG receipts to clients** backfill. Re-run **Diagnose mismatches** afterward to verify residual no-match count is just walk-ins.
+- [x] **Import GG Clients CSV** (Admin → Settings → Import from GlossGenius). This is the missing piece for Top Clients / per-tech client counts.
+- [x] Run **Link GG receipts to clients** backfill. Re-run **Diagnose mismatches** afterward to verify residual no-match count is just walk-ins.
 - [ ] Spot-check 5–10 imported receipts on Reports → Transactions: do dates, totals, techs, and client names match what you remember from GG?
 - [ ] Verify **Top Clients** now shows real visit counts for known repeat clients.
 - [ ] Decide what to do about the ~8,200 walk-in receipts (mostly OK to leave; flag if it bothers you).
@@ -34,8 +34,8 @@ Switching Meraki Nail Studio off GlossGenius and onto this app. Items grouped by
 
 ## T-3 days — Staff prep
 
-- [ ] All 10 techs have **user records** with the right role (`tech`, not `admin` or `pending`).
-- [ ] Each tech has signed in once (Google or magic link) and lands on the right view.
+- [x] All 10 techs have **user records** with the right role (`tech`, not `admin` or `pending`).
+- [x] Each tech has signed in once (Google or magic link) and lands on the right view.
 - [ ] **HR / Reports PIN** set if you want those gated.
 - [ ] **Employee handbook** assigned + acknowledged by each tech.
 - [ ] **Compensation** info entered for payroll runs.
