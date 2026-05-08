@@ -1071,7 +1071,11 @@ function GiftCardSaleModal({ onClose, onAdd }) {
   const [amount, setAmount] = useState('');
   const [name,   setName]   = useState('');
   const [email,  setEmail]  = useState('');
-  const valid = Number(amount) > 0;
+  // Email is required because gift cards auto-email the recipient with
+  // their code on issuance. Without an email the recipient never gets
+  // the code (it'd only live on the receipt). Basic email-format check.
+  const validEmail = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(email.trim());
+  const valid = Number(amount) > 0 && validEmail;
 
   function add() {
     if (!valid) return;
@@ -1089,7 +1093,7 @@ function GiftCardSaleModal({ onClose, onAdd }) {
          onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ background: '#fff', borderRadius: 16, padding: '20px 22px', width: '92%', maxWidth: 380, boxShadow: '0 20px 60px rgba(0,0,0,.3)' }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1a1a', marginBottom: 4 }}>🎁 Sell gift card</div>
-        <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>A unique code is generated automatically. Recipient details are optional.</div>
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>A unique code is generated automatically. The recipient email is required — we email the gift card code to them on purchase.</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
           <span style={{ fontSize: 14, color: '#aaa' }}>$</span>
           <input type="number" min={1} value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount" autoFocus
@@ -1099,8 +1103,10 @@ function GiftCardSaleModal({ onClose, onAdd }) {
         </div>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Recipient name (optional)"
           style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: '1px solid #d8d8d8', fontSize: 13, fontFamily: 'inherit', marginBottom: 8, background: '#fafafa' }} />
-        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Recipient email (optional)" inputMode="email"
-          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: '1px solid #d8d8d8', fontSize: 13, fontFamily: 'inherit', marginBottom: 14, background: '#fafafa' }} />
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Recipient email *" inputMode="email"
+          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 8, border: `1px solid ${email && !validEmail ? '#ef4444' : '#d8d8d8'}`, fontSize: 13, fontFamily: 'inherit', marginBottom: 4, background: '#fafafa' }} />
+        {email && !validEmail && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 8 }}>Enter a valid email — we'll send the code here.</div>}
+        {(!email || validEmail) && <div style={{ height: 10 }} />
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #d8d8d8', background: '#fff', color: '#555', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
           <button onClick={add} disabled={!valid}

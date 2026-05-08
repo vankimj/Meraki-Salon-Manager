@@ -1560,6 +1560,20 @@ export async function sendEmailToClient(clientId, subject, body) {
   return res?.data || { ok: true };
 }
 
+// Live subscription on a single gift card doc — used by GiftCardsAdmin
+// to show emailStatus updates in real time as the Cloud Function works.
+export function subscribeToGiftCard(cardId, cb) {
+  return onSnapshot(doc(GIFT_CARDS_COL, cardId), s => cb(s.exists() ? { id: s.id, ...s.data() } : null));
+}
+
+// Manual retry of the gift card email. Calls the retryGiftCardEmail
+// callable which resets the status and re-runs the send.
+export async function retryGiftCardEmail(cardId) {
+  const fn = callFn('retryGiftCardEmail');
+  const res = await fn({ tenantId: TENANT_ID, cardId });
+  return res?.data || { ok: true };
+}
+
 // ── Review received tracking ───────────────────────────
 const REVIEW_RECEIVED_COL = tenantCol('reviewReceived');
 

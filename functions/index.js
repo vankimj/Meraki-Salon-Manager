@@ -2679,3 +2679,121 @@ ${SALON_ADDRESS_HTML || 'Columbus, OH'}
 
 // Optional constant; some installs may want a more elaborate footer block.
 const SALON_ADDRESS_HTML = 'Meraki Nail Studio · Columbus, OH';
+
+// Gift card email — fires on giftCard doc creation. Marks emailStatus
+// pending → sending → sent (or failed), captures resendId / errorCode
+// / errorReason on the doc itself so the GiftCardsAdmin UI can show
+// delivery state in real time and offer a retry button on failures.
+// Skipped silently when there's no recipientEmail (e.g. walk-in gift
+// where buyer takes the printed card).
+async function processGiftCardEmail(tenantId, docRef, data) {
+  const apiKey = resendKey.value();
+  if (!apiKey) {
+    await docRef.update({ emailStatus: 'failed', emailErrorCode: 'RESEND_NOT_CONFIGURED', emailErrorReason: 'Resend API key missing' });
+    return;
+  }
+  const recipientEmail = (data.recipientEmail || '').trim();
+  if (!recipientEmail) {
+    await docRef.update({ emailStatus: 'skipped', emailErrorReason: 'No recipient email on file' });
+    return;
+  }
+
+  await docRef.update({ emailStatus: 'sending', emailStartedAt: new Date().toISOString() });
+
+  const resend = new Resend(apiKey);
+  const recipientName = (data.recipientName || '').trim() || 'there';
+  const code = data.code || '';
+  const amount = Number(data.balance) || Number(data.originalAmount) || 0;
+
+  const html = `<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
+    <div style="background:linear-gradient(135deg,#7c3aed,#3D95CE);padding:24px;text-align:center;color:#fff;">
+      <div style="font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.9;">Meraki Nail Studio</div>
+      <div style="font-size:22px;font-weight:700;margin-top:8px;">🎁 You've received a gift card!</div>
+    </div>
+    <div style="padding:24px;">
+      <p style="font-size:15px;color:#222;margin:0 0 14px;">Hi ${esc(recipientName)},</p>
+      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 18px;">Someone has gifted you a Meraki Nail Studio gift card. Use the code below at checkout next time you visit us.</p>
+      <div style="background:#f0faf6;border:2px dashed #7c3aed;border-radius:12px;padding:20px;text-align:center;margin:18px 0;">
+        <div style="font-size:11px;color:#7c3aed;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px;">Your gift card code</div>
+        <div style="font-size:26px;font-weight:800;color:#1a1a1a;letter-spacing:.16em;font-family:monospace,sans-serif;">${esc(code)}</div>
+        <div style="font-size:14px;color:#7c3aed;font-weight:600;margin-top:10px;">$${amount.toFixed(2)} balance</div>
+      </div>
+      <p style="font-size:13px;line-height:1.6;color:#666;margin:0 0 8px;">Save this code — you'll need it at your next visit. Mention it to the front desk or enter it at checkout.</p>
+      <p style="font-size:13px;line-height:1.6;color:#666;margin:0;">Book your appointment any time at <a href="${esc(publicAppUrl.value() || '')}/?book=1" style="color:#2D7A5F;">our online booking page</a>.</p>
+    </div>
+    <div style="padding:14px 24px;text-align:center;border-top:1px solid #f0f0f0;">
+      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+    </div>
+  </div>
+</body></html>`;
+
+  let resendId = null, errorCode = null, errorReason = null;
+  try {
+    const result = await resend.emails.send({
+      from: resendFrom.value(),
+      to:   recipientEmail,
+      subject: `🎁 You've received a $${amount.toFixed(2)} gift card from Meraki Nail Studio`,
+      html,
+    });
+    if (result?.error) {
+      errorCode   = result.error.name || result.error.statusCode || 'RESEND_ERROR';
+      errorReason = result.error.message || JSON.stringify(result.error);
+    } else {
+      resendId = result?.data?.id || null;
+    }
+  } catch (e) {
+    errorCode   = e?.name || 'UNKNOWN';
+    errorReason = e?.message || 'send threw';
+  }
+
+  if (errorCode) {
+    console.error(`[giftCardEmail] failed for ${recipientEmail}: ${errorCode} ${errorReason}`);
+    await docRef.update({
+      emailStatus:     'failed',
+      emailErrorCode:  String(errorCode),
+      emailErrorReason: errorReason,
+      emailLastTriedAt: new Date().toISOString(),
+    });
+  } else {
+    await docRef.update({
+      emailStatus:    'sent',
+      emailResendId:  resendId,
+      emailSentAt:    new Date().toISOString(),
+      emailErrorCode: null,
+      emailErrorReason: null,
+    });
+  }
+}
+
+exports.sendGiftCardEmail = onDocumentCreated(
+  `tenants/{tenantId}/giftCards/{cardId}`,
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    // Only auto-email on creation when emailStatus hasn't been set yet
+    // (allows manual creation paths to opt out by pre-stamping the field).
+    if (!data || data.emailStatus) return;
+    await processGiftCardEmail(event.params.tenantId, snap.ref, data);
+  }
+);
+
+// Manual retry: callable from the GiftCardsAdmin UI on a card whose
+// initial send failed. Resets emailStatus + re-runs the send.
+exports.retryGiftCardEmail = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const { tenantId: tid, cardId } = request.data || {};
+  const tenantId = tid || TENANT_ID;
+  if (!cardId) throw new HttpsError('invalid-argument', 'Missing cardId');
+  const db = getFirestore();
+  const ref = db.doc(`tenants/${tenantId}/giftCards/${cardId}`);
+  const cur = await ref.get();
+  if (!cur.exists) throw new HttpsError('not-found', 'Gift card not found');
+  // Clear status so processGiftCardEmail will operate, then run it.
+  await ref.update({ emailStatus: null, emailErrorCode: null, emailErrorReason: null });
+  await processGiftCardEmail(tenantId, ref, cur.data());
+  const after = await ref.get();
+  return { ok: true, emailStatus: after.data()?.emailStatus, emailErrorReason: after.data()?.emailErrorReason };
+});

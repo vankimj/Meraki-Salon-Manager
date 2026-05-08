@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   fetchGiftCards, createGiftCard, updateGiftCard,
   fetchPromoCodes, createPromoCode, savePromoCode, deletePromoCode,
+  subscribeToGiftCard, retryGiftCardEmail,
 } from '../../lib/firestore';
 import { useApp } from '../../context/AppContext';
 import { logActivity } from '../../lib/logger';
@@ -262,12 +263,14 @@ function GiftCardRow({ gc, onClick }) {
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', fontFamily: 'monospace', letterSpacing: '.03em' }}>{gc.code}</span>
             <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 10, background: status === 'active' ? '#e8f4ee' : status === 'voided' ? '#fef2f2' : '#f5f5f5', color: statusColor, textTransform: 'uppercase', letterSpacing: '.05em' }}>
               {status}
             </span>
+            <EmailStatusBadge gc={gc} />
           </div>
+          {gc.recipientName && <div style={{ fontSize: 11, color: '#888' }}>To: {gc.recipientName}{gc.recipientEmail ? ` · ${gc.recipientEmail}` : ''}</div>}
           {gc.issuedTo && <div style={{ fontSize: 11, color: '#888' }}>Issued to: {gc.issuedTo}</div>}
           {gc.note     && <div style={{ fontSize: 11, color: '#aaa', marginTop: 1 }}>{gc.note}</div>}
           {status === 'active' && gc.initialBalance && (
@@ -785,3 +788,49 @@ const inputStyle = {
   border: '1px solid #d8d8d8', borderRadius: 8, padding: '9px 12px',
   fontSize: 13, background: '#fafafa', outline: 'none',
 };
+
+// Live-status badge for gift card recipient emails. Subscribes to the
+// individual card doc so status flips (sending → sent / failed) in real
+// time. Failed cards get a Retry button that re-runs the Cloud Function;
+// hover shows the underlying error code/reason.
+function EmailStatusBadge({ gc }) {
+  const [live, setLive] = useState(gc);
+  const [retrying, setRetrying] = useState(false);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!gc?.id) return;
+    return subscribeToGiftCard(gc.id, doc => doc && setLive(doc));
+  }, [gc?.id]);
+
+  const status = live?.emailStatus;
+  if (!status && !live?.recipientEmail) return null; // no email on file → nothing to show
+  if (!status) return <Pill bg="#fffbeb" fg="#92400e" border="#fde68a">📧 Email queued</Pill>;
+  if (status === 'sending') return <Pill bg="#eff6ff" fg="#1d4ed8" border="#bfdbfe">📧 Emailing…</Pill>;
+  if (status === 'sent')    return <Pill bg="#f0fdf4" fg="#16a34a" border="#86efac" title={live.emailSentAt ? `Sent ${new Date(live.emailSentAt).toLocaleString()}` : ''}>📧 Email sent</Pill>;
+  if (status === 'skipped') return <Pill bg="#f5f5f5" fg="#6b7280" border="#e5e7eb" title={live.emailErrorReason || 'No email on file'}>📧 No email</Pill>;
+  if (status === 'failed') {
+    return (
+      <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+        <Pill bg="#fef2f2" fg="#b91c1c" border="#fca5a5" title={`${live.emailErrorCode || 'ERROR'}: ${live.emailErrorReason || 'Send failed'}`}>📧 Email failed</Pill>
+        <button onClick={async (e) => {
+          e.stopPropagation();
+          setRetrying(true); setErr('');
+          try { await retryGiftCardEmail(gc.id); }
+          catch (ex) { setErr(ex?.message || 'Retry failed'); }
+          finally { setRetrying(false); }
+        }} disabled={retrying}
+          style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, border: '1px solid #2D7A5F', background: '#f0faf6', color: '#2D7A5F', cursor: retrying ? 'default' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
+          {retrying ? '…' : '🔄 Retry'}
+        </button>
+        {err && <span title={err} style={{ fontSize: 10, color: '#ef4444' }}>!</span>}
+      </span>
+    );
+  }
+  return null;
+}
+
+function Pill({ bg, fg, border, title, children }) {
+  return (
+    <span title={title} style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 10, background: bg, color: fg, border: `1px solid ${border}` }}>{children}</span>
+  );
+}
