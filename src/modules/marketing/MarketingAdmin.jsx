@@ -65,6 +65,35 @@ const BUILTIN_TEMPLATES = [
     body: "Hi {firstName},\n\nWe just wanted to take a moment to say thank you. Your loyalty means everything to us and we're so grateful to have you as part of the Meraki family.\n\nAs a small token of our appreciation, we have something special for you.\n\nWith gratitude,\n— The Meraki Team",
     smsBody: "Thank you, {firstName} 🙏 Your loyalty means everything. A little something is waiting for you at Meraki: {bookingLink} Reply STOP to opt out.",
   },
+  // Operational / time-sensitive templates. Pair with the "Today's remaining"
+  // or "Appointments on a date" audiences for tactical day-of messaging.
+  // These are SMS-only by design — the email/body pair is empty so the email
+  // template picker filters them out (channelTemplates filter requires both
+  // subject+body for email, smsBody for SMS).
+  {
+    id: '_closing_early',
+    name: 'Closing early',
+    icon: '⏰',
+    subject: '',
+    body: '',
+    smsBody: "Hi {firstName}, we unfortunately have to close early today and won't be able to keep your appointment. So sorry for the trouble — please reply or call us to find a new time that works. Reply STOP to opt out.",
+  },
+  {
+    id: '_running_behind',
+    name: 'Running behind',
+    icon: '⏰',
+    subject: '',
+    body: '',
+    smsBody: "Hi {firstName}, just a quick heads-up — we're running about 15 minutes behind today. We'll get you in as close to your appointment time as possible. Thanks for your patience! Reply STOP to opt out.",
+  },
+  {
+    id: '_day_before',
+    name: 'Day-before reminder',
+    icon: '📅',
+    subject: "See you tomorrow at Meraki, {firstName}!",
+    body: "Hi {firstName},\n\nJust a friendly reminder that you have an appointment with us at Meraki tomorrow. We're looking forward to seeing you!\n\nIf anything's changed, please let us know as soon as you can so we can free up the slot.\n\nSee you then,\n— The Meraki Team",
+    smsBody: "Hi {firstName}, friendly reminder you have an appointment at Meraki tomorrow! Reply Y to confirm or call us if anything's changed. See you then! Reply STOP to opt out.",
+  },
 ];
 
 // SMS pricing (US, Twilio standard rate). Used for cost estimate in the modal.
