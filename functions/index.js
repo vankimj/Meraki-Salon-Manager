@@ -2598,3 +2598,84 @@ exports.sendDirectSms = onCall({ cors: true }, async (request) => {
   await appendChatMessage(tenantId, clientId, client, message);
   return { ok: true, twilioStatus, twilioError };
 });
+
+// Staff-side outbound email. Sends a plain-text-style email to the client
+// via Resend and appends to chats/{clientId} with channel='email' so the
+// thread shows it inline with SMS + in-app messages. Inbound email
+// threading (Phase 2B) requires Resend Inbound webhook + MX records on
+// the verified domain — deferred until that infra is set up.
+exports.sendDirectEmail = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const { tenantId: tid, clientId, subject, body } = request.data || {};
+  const tenantId = tid || TENANT_ID;
+  if (!clientId || !subject || !body) throw new HttpsError('invalid-argument', 'Missing clientId, subject, or body');
+
+  const apiKey = resendKey.value();
+  if (!apiKey) throw new HttpsError('failed-precondition', 'Resend not configured');
+
+  const db = getFirestore();
+  const cDoc = await db.doc(`tenants/${tenantId}/clients/${clientId}`).get();
+  if (!cDoc.exists) throw new HttpsError('not-found', 'Client not found');
+  const client = { id: cDoc.id, ...cDoc.data() };
+  const email = (client.email || '').trim();
+  if (!email) throw new HttpsError('failed-precondition', 'Client has no email on file');
+
+  const senderName = request.auth.token?.name || request.auth.token?.email?.split('@')[0] || 'Meraki';
+  // Plain-text body wrapped in light HTML so line breaks render. Different
+  // shape from marketing emails — this is meant to look like a real one-to-one
+  // email from a staff member, not a campaign card.
+  const escaped = (body || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+  const html = `<!DOCTYPE html>
+<html><body style="margin:0;padding:24px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#222;font-size:14px;line-height:1.6;">
+<div style="max-width:560px;margin:0 auto;">
+<p style="margin:0 0 14px;">${escaped}</p>
+<p style="margin:24px 0 0;font-size:12px;color:#888;border-top:1px solid #eee;padding-top:12px;">
+— ${esc(senderName)}, Meraki Nail Studio<br>
+${SALON_ADDRESS_HTML || 'Columbus, OH'}
+</p>
+</div></body></html>`;
+
+  const resend = new Resend(apiKey);
+  let resendId = null, resendError = null;
+  try {
+    const result = await resend.emails.send({
+      from: resendFrom.value(),
+      to: email,
+      subject,
+      html,
+      replyTo: resendFrom.value(), // future: per-staff inbox; for now just the salon's address
+    });
+    if (result?.error) {
+      resendError = `${result.error.name || 'RESEND_ERROR'}: ${result.error.message || JSON.stringify(result.error)}`;
+      console.error('[sendDirectEmail]', resendError);
+      throw new HttpsError('internal', resendError);
+    }
+    resendId = result?.data?.id || null;
+  } catch (e) {
+    if (!resendError) {
+      resendError = `${e?.name || 'UNKNOWN'}: ${e?.message || 'send threw'}`;
+      console.error('[sendDirectEmail] threw:', resendError);
+    }
+    throw new HttpsError('internal', resendError);
+  }
+
+  const message = {
+    text:       body,
+    subject,
+    channel:    'email',
+    from:       'staff',
+    at:         new Date().toISOString(),
+    staffEmail: request.auth.token?.email || null,
+    senderName,
+    resendId,
+    resendError,
+    email,
+  };
+  await appendChatMessage(tenantId, clientId, client, message);
+  return { ok: true, resendId };
+});
+
+// Optional constant; some installs may want a more elaborate footer block.
+const SALON_ADDRESS_HTML = 'Meraki Nail Studio · Columbus, OH';

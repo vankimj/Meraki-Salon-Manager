@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { subscribeToChats, subscribeToChat, sendChatMessage, sendSmsToClient, markChatRead } from '../../lib/firestore';
+import { subscribeToChats, subscribeToChat, sendChatMessage, sendSmsToClient, sendEmailToClient, markChatRead, fetchClients } from '../../lib/firestore';
 
 function fmtTime(iso) {
   if (!iso) return '';
@@ -22,10 +22,12 @@ export default function ChatAdmin() {
   const { gUser } = useApp();
   const [threads, setThreads] = useState(null);
   const [active,  setActive]  = useState(null);
+  const [composing, setComposing] = useState(false);
 
   useEffect(() => subscribeToChats(setThreads), []);
 
   const totalUnread = (threads || []).reduce((s, t) => s + (t.unreadStaff || 0), 0);
+  const senderName = gUser?.displayName?.split(' ')[0] || gUser?.email?.split('@')[0] || 'Staff';
 
   if (active) {
     const thread = threads?.find(t => t.clientId === active);
@@ -33,7 +35,7 @@ export default function ChatAdmin() {
       <ThreadView
         thread={thread}
         clientId={active}
-        senderName={gUser?.displayName?.split(' ')[0] || gUser?.email?.split('@')[0] || 'Staff'}
+        senderName={senderName}
         onBack={() => setActive(null)}
       />
     );
@@ -50,7 +52,20 @@ export default function ChatAdmin() {
             {totalUnread}
           </span>
         )}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setComposing(true)}
+          style={{ fontSize: 12, padding: '6px 12px', borderRadius: 8, border: 'none', background: '#2D7A5F', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
+          + New conversation
+        </button>
       </div>
+
+      {composing && (
+        <ComposeModal
+          senderName={senderName}
+          onClose={() => setComposing(false)}
+          onSent={(clientId) => { setComposing(false); setActive(clientId); }}
+        />
+      )}
 
       {threads === null ? (
         <div style={{ textAlign: 'center', padding: 48, color: '#bbb', fontSize: 13 }}>Loading…</div>
@@ -112,8 +127,10 @@ function ThreadRow({ thread, onClick }) {
 function ThreadView({ thread: initialThread, clientId, senderName, onBack }) {
   const [thread,  setThread]  = useState(initialThread || null);
   const [text,    setText]    = useState('');
+  const [subject, setSubject] = useState('');
   const [sending, setSending] = useState(false);
-  // Channel selector — defaults to 'sms' if the client has a phone, else 'app'.
+  // Channel selector — in-app | sms | email. We don't auto-default to a channel
+  // because each has different fields visible (email needs subject, etc.).
   const [channel, setChannel] = useState('app');
   const [sendError, setSendError] = useState('');
   const bottomRef = useRef(null);
@@ -133,6 +150,10 @@ function ThreadView({ thread: initialThread, clientId, senderName, onBack }) {
   async function handleSend() {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
+    if (channel === 'email' && !subject.trim()) {
+      setSendError('Subject is required for email.');
+      return;
+    }
     setSending(true);
     setSendError('');
     const previous = text;
@@ -140,6 +161,9 @@ function ThreadView({ thread: initialThread, clientId, senderName, onBack }) {
     try {
       if (channel === 'sms') {
         await sendSmsToClient(clientId, trimmed);
+      } else if (channel === 'email') {
+        await sendEmailToClient(clientId, subject.trim(), trimmed);
+        setSubject(''); // reset for next email
       } else {
         const msg = {
           text:       trimmed,
@@ -192,18 +216,31 @@ function ThreadView({ thread: initialThread, clientId, senderName, onBack }) {
 
       {/* Input */}
       <div style={{ paddingTop: 10, borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
-        {/* Channel selector — only show SMS option when client has a phone */}
-        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+        {/* Channel selector — buttons disable when contact info isn't on file */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
           <button onClick={() => setChannel('app')}
             style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'app' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'app' ? '#f0faf6' : '#fafafa', color: channel === 'app' ? '#2D7A5F' : '#666', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
             💬 In-app chat
           </button>
-          <button onClick={() => setChannel('sms')} disabled={!thread?.clientPhone && !thread?.clientPhone}
+          <button onClick={() => setChannel('sms')} disabled={!thread?.clientPhone}
             title={thread?.clientPhone ? `Sends an SMS to ${thread.clientPhone}` : 'No phone on file'}
-            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'sms' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'sms' ? '#f0faf6' : '#fafafa', color: channel === 'sms' ? '#2D7A5F' : '#666', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
+            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'sms' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'sms' ? '#f0faf6' : '#fafafa', color: channel === 'sms' ? '#2D7A5F' : (thread?.clientPhone ? '#666' : '#bbb'), cursor: thread?.clientPhone ? 'pointer' : 'not-allowed', fontFamily: 'inherit', fontWeight: 600 }}>
             📱 SMS
           </button>
+          <button onClick={() => setChannel('email')} disabled={!thread?.clientEmail}
+            title={thread?.clientEmail ? `Sends an email to ${thread.clientEmail}` : 'No email on file'}
+            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'email' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'email' ? '#f0faf6' : '#fafafa', color: channel === 'email' ? '#2D7A5F' : (thread?.clientEmail ? '#666' : '#bbb'), cursor: thread?.clientEmail ? 'pointer' : 'not-allowed', fontFamily: 'inherit', fontWeight: 600 }}>
+            ✉️ Email
+          </button>
         </div>
+        {channel === 'email' && (
+          <input
+            value={subject}
+            onChange={e => setSubject(e.target.value)}
+            placeholder="Subject"
+            style={{ width: '100%', fontFamily: 'inherit', border: '1.5px solid #e0e0e0', borderRadius: 10, padding: '8px 12px', fontSize: 13, outline: 'none', background: '#fff', marginBottom: 6, boxSizing: 'border-box' }}
+          />
+        )}
         {sendError && (
           <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 6, padding: '4px 8px', background: '#fef2f2', borderRadius: 6, border: '1px solid #fca5a5' }}>{sendError}</div>
         )}
@@ -212,7 +249,7 @@ function ThreadView({ thread: initialThread, clientId, senderName, onBack }) {
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
-            placeholder={channel === 'sms' ? 'Send SMS to client…' : 'Reply to client…'}
+            placeholder={channel === 'sms' ? 'Send SMS to client…' : channel === 'email' ? 'Email body…' : 'Reply to client…'}
             style={{ flex: 1, fontFamily: 'inherit', border: '1.5px solid #e0e0e0', borderRadius: 22, padding: '9px 16px', fontSize: 13, outline: 'none', background: '#fafafa' }}
           />
           <button onClick={handleSend} disabled={!text.trim() || sending}
@@ -228,12 +265,14 @@ function ThreadView({ thread: initialThread, clientId, senderName, onBack }) {
 function MessageBubble({ msg, isStaff }) {
   const channel = msg.channel || 'app';
   const isSms = channel === 'sms';
-  const channelBadge = isSms ? '📱 SMS' : channel === 'email' ? '✉️ Email' : null;
-  // SMS bubbles get a slightly different look (dotted border) to make the
-  // channel obvious at a glance even without reading the badge.
+  const isEmail = channel === 'email';
+  const channelBadge = isSms ? '📱 SMS' : isEmail ? '✉️ Email' : null;
+  // Color-code the staff-side bubble per channel so the medium is obvious
+  // at a glance: green = in-app, blue = SMS, purple = email.
+  const staffBg = isSms ? '#1d4ed8' : isEmail ? '#7c3aed' : '#2D7A5F';
   const bubbleStyle = {
     maxWidth: '75%',
-    background: isStaff ? (isSms ? '#1d4ed8' : '#2D7A5F') : '#f0f0f0',
+    background: isStaff ? staffBg : '#f0f0f0',
     color:      isStaff ? '#fff' : '#1a1a1a',
     borderRadius: isStaff ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
     padding: '9px 14px',
@@ -247,6 +286,9 @@ function MessageBubble({ msg, isStaff }) {
             {channelBadge && <span>{channelBadge}</span>}
           </div>
         )}
+        {isEmail && msg.subject && (
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, opacity: .9 }}>{msg.subject}</div>
+        )}
         <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.text}</div>
         <div style={{ fontSize: 10, color: isStaff ? 'rgba(255,255,255,.6)' : '#bbb', marginTop: 4, textAlign: isStaff ? 'right' : 'left', display: 'flex', justifyContent: isStaff ? 'flex-end' : 'flex-start', gap: 6 }}>
           <span>{fmtTime(msg.sentAt || msg.at)}</span>
@@ -256,7 +298,147 @@ function MessageBubble({ msg, isStaff }) {
           {isSms && msg.twilioError && (
             <span style={{ color: '#fca5a5' }}>· error</span>
           )}
+          {isEmail && msg.resendError && (
+            <span style={{ color: '#fca5a5' }}>· error</span>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Compose new conversation ──────────────────────────────────────────────
+// Modal for staff-initiated outreach. Pick a client (search), pick a channel
+// (the buttons disable when contact info is missing for that channel), type
+// + send. After successful send, parent navigates into the freshly-created
+// thread so staff can keep going.
+function ComposeModal({ senderName, onClose, onSent }) {
+  const [allClients, setAllClients] = useState(null);
+  const [search, setSearch] = useState('');
+  const [picked, setPicked] = useState(null);
+  const [channel, setChannel] = useState('sms');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => { fetchClients().then(setAllClients).catch(() => setAllClients([])); }, []);
+
+  // Default channel based on what the picked client has on file: prefer SMS
+  // when both phone + email exist, fall back to whichever is available.
+  useEffect(() => {
+    if (!picked) return;
+    if (picked.phone && (channel === 'app' || (channel === 'email' && !picked.email))) setChannel('sms');
+    else if (!picked.phone && picked.email) setChannel('email');
+  }, [picked]); // eslint-disable-line
+
+  const filtered = !allClients ? [] : (search.trim()
+    ? allClients.filter(c => {
+        const q = search.toLowerCase();
+        return (c.name || '').toLowerCase().includes(q)
+            || (c.phone || '').toLowerCase().includes(q)
+            || (c.email || '').toLowerCase().includes(q);
+      }).slice(0, 30)
+    : allClients.slice(0, 30));
+
+  const canSend = !!picked && !!body.trim() && !sending && (channel !== 'email' || subject.trim()) &&
+    (channel === 'sms' ? !!picked.phone : channel === 'email' ? !!picked.email : true);
+
+  async function send() {
+    if (!canSend) return;
+    setSending(true); setError('');
+    try {
+      if (channel === 'sms') {
+        await sendSmsToClient(picked.id, body.trim());
+      } else if (channel === 'email') {
+        await sendEmailToClient(picked.id, subject.trim(), body.trim());
+      } else {
+        await sendChatMessage(picked.id, { name: picked.name, email: picked.email || '' }, {
+          text: body.trim(), from: 'staff', channel: 'app',
+          senderName, sentAt: new Date().toISOString(),
+        });
+      }
+      onSent && onSent(picked.id);
+    } catch (e) {
+      setError(e?.message || 'Send failed');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div style={{ background: '#fff', borderRadius: 14, padding: 18, width: '100%', maxWidth: 480, maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>New conversation</div>
+          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #e0e0e0', background: '#fff', cursor: 'pointer', fontSize: 14 }}>×</button>
+        </div>
+
+        {!picked ? (
+          <>
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search clients by name, phone, or email…" autoFocus
+              style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', border: '1.5px solid #e0e0e0', borderRadius: 10, padding: '10px 14px', fontSize: 13, outline: 'none', marginBottom: 10 }} />
+            <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #ececec', borderRadius: 10 }}>
+              {allClients === null ? (
+                <div style={{ padding: 20, textAlign: 'center', color: '#aaa', fontSize: 12 }}>Loading…</div>
+              ) : filtered.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: '#aaa', fontSize: 12 }}>No clients match "{search}"</div>
+              ) : filtered.map(c => (
+                <div key={c.id} onClick={() => setPicked(c)}
+                  style={{ padding: '10px 12px', borderBottom: '1px solid #f5f5f5', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 1 }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
+                  onMouseLeave={e => e.currentTarget.style.background = ''}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{c.name || '(no name)'}</div>
+                  <div style={{ fontSize: 11, color: '#888', display: 'flex', gap: 10 }}>
+                    {c.phone && <span>📱 {c.phone}</span>}
+                    {c.email && <span>✉️ {c.email}</span>}
+                    {!c.phone && !c.email && <span style={{ color: '#bbb' }}>no contact info</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ background: '#fafafa', borderRadius: 10, padding: '8px 12px', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{picked.name}</div>
+                <div style={{ fontSize: 11, color: '#888' }}>
+                  {channel === 'sms' && picked.phone}
+                  {channel === 'email' && picked.email}
+                  {channel === 'app' && 'In-app chat'}
+                </div>
+              </div>
+              <button onClick={() => setPicked(null)} style={{ fontSize: 11, color: '#3D95CE', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Change</button>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+              <button onClick={() => setChannel('sms')} disabled={!picked.phone}
+                style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'sms' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'sms' ? '#f0faf6' : '#fafafa', color: channel === 'sms' ? '#2D7A5F' : (picked.phone ? '#666' : '#bbb'), cursor: picked.phone ? 'pointer' : 'not-allowed', fontFamily: 'inherit', fontWeight: 600 }}>📱 SMS</button>
+              <button onClick={() => setChannel('email')} disabled={!picked.email}
+                style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'email' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'email' ? '#f0faf6' : '#fafafa', color: channel === 'email' ? '#2D7A5F' : (picked.email ? '#666' : '#bbb'), cursor: picked.email ? 'pointer' : 'not-allowed', fontFamily: 'inherit', fontWeight: 600 }}>✉️ Email</button>
+              <button onClick={() => setChannel('app')}
+                style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: `1px solid ${channel === 'app' ? '#2D7A5F' : '#d8d8d8'}`, background: channel === 'app' ? '#f0faf6' : '#fafafa', color: channel === 'app' ? '#2D7A5F' : '#666', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>💬 In-app</button>
+            </div>
+            {channel === 'email' && (
+              <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Subject"
+                style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', border: '1.5px solid #e0e0e0', borderRadius: 10, padding: '8px 12px', fontSize: 13, outline: 'none', marginBottom: 8 }} />
+            )}
+            <textarea value={body} onChange={e => setBody(e.target.value)}
+              placeholder={channel === 'sms' ? `Send an SMS to ${picked.name}…` : channel === 'email' ? `Email body…` : `Message ${picked.name}…`}
+              rows={5}
+              style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', border: '1.5px solid #e0e0e0', borderRadius: 10, padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'vertical', lineHeight: 1.5 }} />
+            {error && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 6, padding: '4px 8px', background: '#fef2f2', borderRadius: 6 }}>{error}</div>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 10, border: '1px solid #d8d8d8', background: '#fff', color: '#555', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={send} disabled={!canSend}
+                style={{ flex: 2, padding: '10px', borderRadius: 10, border: 'none', background: canSend ? '#2D7A5F' : '#d0d0d0', color: '#fff', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, cursor: canSend ? 'pointer' : 'default' }}>
+                {sending ? 'Sending…' : `Send ${channel === 'sms' ? 'SMS' : channel === 'email' ? 'email' : 'message'}`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
