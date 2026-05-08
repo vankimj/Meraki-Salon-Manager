@@ -282,7 +282,11 @@ export default function ServicesAdmin() {
             <span style={{ fontSize: 11, fontWeight: 500, color: '#bbb', letterSpacing: 0, textTransform: 'none' }}>{svcs.length}</span>
           </div>
           {svcs.map(svc => (
-            <div key={svc.id} style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 12, opacity: svc.active ? 1 : .45 }}>
+            <div key={svc.id}
+              onClick={() => { setEditing({ ...svc }); setErrors({}); }}
+              style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 12, opacity: svc.active ? 1 : .45, cursor: 'pointer', transition: 'background .12s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#fafafa'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = ''; }}>
               <ServiceThumb image={svc.image} name={svc.name} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{svc.name}</div>
@@ -293,7 +297,7 @@ export default function ServicesAdmin() {
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{svc.description}</div>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                 {!isTech && <Toggle active={svc.active} onChange={() => toggleActive(svc)} />}
                 {!isTech && <Btn onClick={() => { setEditing({ ...svc }); setErrors({}); }}>Edit</Btn>}
                 {!isTech && <Btn color="#ef4444" onClick={() => handleDelete(svc)}>Del</Btn>}
