@@ -15,7 +15,7 @@ const BUILTIN_TEMPLATES = [
     icon: '💅',
     subject: "We miss you, {firstName}! Come see us 💅",
     body: "Hi {firstName},\n\nIt's been a while since your last visit, and we'd love to see you again!\n\nWe have exciting new styles and services to share. Book your appointment today and let us pamper you.\n\nWe hope to see you soon!\n— The Meraki Team",
-    smsBody: "Hey {firstName} — it's been a while! We'd love to see you back at Meraki. Book your next visit anytime. Reply STOP to opt out.",
+    smsBody: "Hey {firstName} — it's been a while! Come back to Meraki: {bookingLink} Reply STOP to opt out.",
   },
   {
     id: '_birthday',
@@ -23,7 +23,7 @@ const BUILTIN_TEMPLATES = [
     icon: '🎂',
     subject: "Happy Birthday, {firstName}! 🎂 A gift from Meraki",
     body: "Hi {firstName},\n\nHappy Birthday! 🎉 We hope your special day is as fabulous as you are.\n\nAs a birthday gift from us to you, we'd love to treat you to something special. Come celebrate with us this month!\n\nWith love,\n— The Meraki Team",
-    smsBody: "Happy birthday, {firstName}! 🎂 A little treat is waiting for you at Meraki — come in this month to claim it. Reply STOP to opt out.",
+    smsBody: "Happy birthday, {firstName}! 🎂 A little treat is waiting for you at Meraki — book this month: {bookingLink} Reply STOP to opt out.",
   },
   {
     id: '_referral',
@@ -31,7 +31,7 @@ const BUILTIN_TEMPLATES = [
     icon: '💕',
     subject: "Love your nails? Share the love, {firstName}! 💕",
     body: "Hi {firstName},\n\nWe're so grateful to have amazing clients like you! If you've been happy with your experience at Meraki, we'd love for you to spread the word.\n\nRefer a friend to Meraki and help us grow our family. Your support means the world to us!\n\nThank you for being amazing,\n— The Meraki Team",
-    smsBody: "{firstName}, refer a friend to Meraki and we'll thank you both with a little something. We appreciate you 💕 Reply STOP to opt out.",
+    smsBody: "{firstName}, refer a friend to Meraki and we'll thank you both with a little something 💕 Send them: {bookingLink} Reply STOP to opt out.",
   },
   {
     id: '_flash',
@@ -39,7 +39,7 @@ const BUILTIN_TEMPLATES = [
     icon: '⚡',
     subject: "⚡ Limited time offer just for you, {firstName}!",
     body: "Hi {firstName},\n\nFor a limited time only, we have a special offer just for you!\n\nSpots are filling up fast — book now before this deal is gone.\n\nDon't miss out!\n— The Meraki Team",
-    smsBody: "{firstName}, ⚡ flash deal at Meraki today — limited spots. Book now before they're gone. Reply STOP to opt out.",
+    smsBody: "{firstName}, ⚡ flash deal at Meraki today — limited spots. Book now: {bookingLink} Reply STOP to opt out.",
   },
   {
     id: '_newservice',
@@ -47,7 +47,7 @@ const BUILTIN_TEMPLATES = [
     icon: '🌟',
     subject: "🌟 Exciting news from Meraki, {firstName}!",
     body: "Hi {firstName},\n\nWe have exciting news — we've just added new services to our menu and we think you're going to love them!\n\nBe among the first to try something new. Book your appointment now.\n\nCan't wait to see you!\n— The Meraki Team",
-    smsBody: "{firstName}, we just added new services at Meraki 🌟 Be one of the first to try them — book your visit. Reply STOP to opt out.",
+    smsBody: "{firstName}, we just added new services at Meraki 🌟 Be one of the first to try: {bookingLink} Reply STOP to opt out.",
   },
   {
     id: '_seasonal',
@@ -55,7 +55,7 @@ const BUILTIN_TEMPLATES = [
     icon: '✨',
     subject: "✨ Treat yourself this season, {firstName}!",
     body: "Hi {firstName},\n\nThe season is here, and there's no better time to treat yourself!\n\nCome visit us at Meraki and let us take care of you. Book your appointment today — our schedule fills up fast!\n\nSee you soon,\n— The Meraki Team",
-    smsBody: "{firstName}, treat yourself this season ✨ Our schedule's filling fast — book your spot at Meraki. Reply STOP to opt out.",
+    smsBody: "{firstName}, treat yourself this season ✨ Our schedule's filling fast — book at Meraki: {bookingLink} Reply STOP to opt out.",
   },
   {
     id: '_loyalty',
@@ -63,7 +63,7 @@ const BUILTIN_TEMPLATES = [
     icon: '🙏',
     subject: "A heartfelt thank you, {firstName} 🙏",
     body: "Hi {firstName},\n\nWe just wanted to take a moment to say thank you. Your loyalty means everything to us and we're so grateful to have you as part of the Meraki family.\n\nAs a small token of our appreciation, we have something special for you.\n\nWith gratitude,\n— The Meraki Team",
-    smsBody: "Thank you, {firstName} 🙏 Your loyalty means everything to us. We have a little something waiting for you at Meraki. Reply STOP to opt out.",
+    smsBody: "Thank you, {firstName} 🙏 Your loyalty means everything. A little something is waiting for you at Meraki: {bookingLink} Reply STOP to opt out.",
   },
 ];
 
@@ -774,9 +774,14 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
   }, [clients, channel, segType, lapDays, recentAppts, techSel, serviceSel, allAppts, newDays, minVisits, reviewedIds]);
 
   function applyTemplate(tpl) {
-    if (tpl.subject) setSubject(tpl.subject);
-    if (tpl.body)    setBody(tpl.body);
-    if (tpl.smsBody) setSmsBody(tpl.smsBody);
+    // Resolve {bookingLink} to whichever URL the user has configured for the
+    // CTA (or the tenant default). Doing it at apply time means the textarea
+    // shows the actual link — WYSIWYG — and lets the user edit if needed.
+    const link = (ctaUrl && ctaUrl.trim()) || defaultBookingUrl;
+    const resolveLinks = (s) => (s || '').replace(/\{bookingLink\}/g, link);
+    if (tpl.subject) setSubject(resolveLinks(tpl.subject));
+    if (tpl.body)    setBody(resolveLinks(tpl.body));
+    if (tpl.smsBody) setSmsBody(resolveLinks(tpl.smsBody));
     setActiveTemplate(tpl.id);
     setSavingTpl(false);
   }
@@ -1193,6 +1198,7 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
                   <span style={{ fontSize: 10, color: '#aaa', marginRight: 4 }}>Insert:</span>
                   <button type="button" onClick={() => insertVariable('{firstName}')} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #d8d8d8', background: '#fafafa', color: '#555', cursor: 'pointer', fontFamily: 'inherit' }}>{'{firstName}'}</button>
                   <button type="button" onClick={() => insertVariable('{lastName}')} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #d8d8d8', background: '#fafafa', color: '#555', cursor: 'pointer', fontFamily: 'inherit' }}>{'{lastName}'}</button>
+                  <button type="button" onClick={() => { const link = (ctaUrl && ctaUrl.trim()) || defaultBookingUrl; setSmsBody(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + link); setActiveTemplate(null); }} title="Insert booking link" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #d8d8d8', background: '#fafafa', color: '#555', cursor: 'pointer', fontFamily: 'inherit' }}>🔗 Booking link</button>
                   {persPromo && (
                     <button type="button" onClick={() => insertVariable('{promoCode}')} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #2D7A5F', background: '#f0faf6', color: '#2D7A5F', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>{'{promoCode}'}</button>
                   )}
