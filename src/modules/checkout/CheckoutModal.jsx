@@ -202,6 +202,12 @@ function CheckoutInner({ appts: apptsProp, appt, walkInClient = null, initialPro
       if (p.endDate   && today > p.endDate)   { setPromoErr('Code has expired.'); return; }
       if (p.maxUses   && (p.usedCount || 0) >= p.maxUses) { setPromoErr('Code has reached its maximum uses.'); return; }
       if (p.singleUse && p.usedAt)    { setPromoErr('Code has already been used.'); return; }
+      // Personalized codes are bound to a specific client. Block anyone
+      // else from redeeming, even if the code is otherwise valid.
+      if (p.clientId && p.clientId !== primaryClient?.id) {
+        setPromoErr('This code is reserved for a different client.');
+        return;
+      }
       setPromo(p);
     } catch { setPromoErr('Lookup failed.'); }
     finally  { setPromoLoading(false); }

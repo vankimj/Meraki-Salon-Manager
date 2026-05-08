@@ -284,11 +284,40 @@ exports.sendMarketingCampaign = onDocumentCreated(
     let sentCount = 0, failCount = 0;
 
     for (const recipient of recipients) {
-      const { name, email } = recipient;
+      const { name, email, clientId } = recipient;
       if (!email) { failCount++; continue; }
 
-      const firstName        = (name || 'there').split(' ')[0];
-      const personalizedBody = (body || '').replace(/\{firstName\}/gi, firstName);
+      const firstName = (name || 'there').split(' ')[0];
+      const lastName  = (name || '').split(' ').slice(1).join(' ');
+
+      // Personalized promo: mint a unique single-use code bound to this
+      // client. {promoCode} substitutes into the body; the code is also
+      // surfaced in the email's promo block. Falls through silently if
+      // mint fails — the user still gets the message.
+      let promoCode = data.promoCode || null;
+      let promoLabel = data.promoLabel || null;
+      if (data.promoPersonalize && clientId) {
+        try {
+          const minted = await createPersonalizedPromo(snap.ref.parent.parent.id, {
+            prefix:      data.promoPersonalize.prefix,
+            type:        data.promoPersonalize.type,
+            value:       data.promoPersonalize.value,
+            expiresDays: data.promoPersonalize.expiresDays,
+            clientId,
+            campaignId:  snap.id,
+          });
+          if (minted) {
+            promoCode = minted.code;
+            promoLabel = data.promoPersonalize.type === 'amount'
+              ? `$${data.promoPersonalize.value} off — single use, expires in ${data.promoPersonalize.expiresDays} days`
+              : `${data.promoPersonalize.value}% off — single use, expires in ${data.promoPersonalize.expiresDays} days`;
+          }
+        } catch (e) {
+          console.error(`[Marketing] promo mint failed for ${email}:`, e.message);
+        }
+      }
+
+      const personalizedBody = substitutePlaceholders(body, { firstName, lastName, promoCode: promoCode || '' });
       const bodyHtml         = personalizedBody
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/\n/g, '<br>');
@@ -298,7 +327,7 @@ exports.sendMarketingCampaign = onDocumentCreated(
           from:    resendFrom.value(),
           to:      email,
           subject,
-          html:    buildMarketingHtml(bodyHtml, data.promoCode || null, data.promoLabel || null, data.ctaText || null, data.ctaUrl || null),
+          html:    buildMarketingHtml(bodyHtml, promoCode, promoLabel, data.ctaText || null, data.ctaUrl || null),
         });
         if (error) throw new Error(error.message || JSON.stringify(error));
         sentCount++;
@@ -307,7 +336,6 @@ exports.sendMarketingCampaign = onDocumentCreated(
         failCount++;
       }
 
-      // ~20 emails/second — stays within Resend rate limits
       await new Promise(r => setTimeout(r, 50));
     }
 
@@ -1514,7 +1542,7 @@ const gustoRedirectUri  = defineString('GUSTO_REDIRECT_URI',  { default: '' });
 //     UI subscription stays live
 //   - honors cancelRequested at every flush boundary and at exit
 //   - derives counters from the attempts array (cannot diverge)
-async function processSMSCampaign(docRef, data) {
+async function processSMSCampaign(tenantId, docRef, data) {
   const sid       = twilioSid.value();
   const token     = twilioToken.value();
   const apiKeySid = twilioApiKeySid.value();
@@ -1588,9 +1616,33 @@ async function processSMSCampaign(docRef, data) {
     if (!phone) {
       attempts.push({ name: r.name || '(unknown)', phone: r.phone || '', status: 'failed', code: 'INVALID_PHONE_FORMAT', reason: `Could not normalize phone "${r.phone || ''}" to E.164`, at });
     } else {
-      const body = (data.smsBody || '')
-        .replace(/\{firstName\}/g, r.name?.split(' ')[0] || 'there')
-        .replace(/\{lastName\}/g,  r.name?.split(' ').slice(1).join(' ') || '');
+      // Personalized promo: generate a unique code bound to this client
+      // before formatting the body so {promoCode} can be substituted.
+      // Failure to mint a code is non-fatal — we still send the message
+      // (just without the code) and log it on the attempt for traceability.
+      let promoCode = null;
+      let promoMintError = null;
+      if (data.promoPersonalize && r.clientId) {
+        try {
+          const minted = await createPersonalizedPromo(tenantId, {
+            prefix:      data.promoPersonalize.prefix,
+            type:        data.promoPersonalize.type,
+            value:       data.promoPersonalize.value,
+            expiresDays: data.promoPersonalize.expiresDays,
+            clientId:    r.clientId,
+            campaignId:  docRef.id,
+          });
+          if (minted) promoCode = minted.code;
+        } catch (e) {
+          promoMintError = e?.message || 'promo_mint_failed';
+          console.error(`[processSMSCampaign] promo mint failed for ${r.name}:`, promoMintError);
+        }
+      }
+      const body = substitutePlaceholders(data.smsBody, {
+        firstName: r.name?.split(' ')[0] || 'there',
+        lastName:  r.name?.split(' ').slice(1).join(' ') || '',
+        promoCode: promoCode || '',
+      });
       try {
         const msg = await client.messages.create({ body, from, to: phone });
         const tStatus = msg?.status || '';
@@ -1598,15 +1650,15 @@ async function processSMSCampaign(docRef, data) {
           const code   = msg?.errorCode != null ? String(msg.errorCode) : `TWILIO_${tStatus.toUpperCase()}`;
           const reason = msg?.errorMessage || `Twilio reported status: ${tStatus}`;
           console.error(`[processSMSCampaign] ${r.name} ${phone} delivery-failed (no throw) status=${tStatus} code=${code} reason=${reason}`);
-          attempts.push({ name: r.name || '(unknown)', phone, status: 'failed', code, reason, twilioStatus: tStatus, twilioSid: msg?.sid || null, at });
+          attempts.push({ name: r.name || '(unknown)', phone, status: 'failed', code, reason, twilioStatus: tStatus, twilioSid: msg?.sid || null, promoCode: promoCode || null, at });
         } else {
-          attempts.push({ name: r.name || '(unknown)', phone, status: 'sent', twilioStatus: tStatus || null, twilioSid: msg?.sid || null, at });
+          attempts.push({ name: r.name || '(unknown)', phone, status: 'sent', twilioStatus: tStatus || null, twilioSid: msg?.sid || null, promoCode: promoCode || null, at });
         }
       } catch (err) {
         const code = err?.code != null ? String(err.code) : 'UNKNOWN';
         const reason = err?.message || 'Unknown Twilio error';
         console.error(`[processSMSCampaign] ${r.name} ${phone} threw code=${code} reason=${reason}`);
-        attempts.push({ name: r.name || '(unknown)', phone, status: 'failed', code, reason, at });
+        attempts.push({ name: r.name || '(unknown)', phone, status: 'failed', code, reason, promoCode: promoCode || null, at });
       }
     }
 
@@ -1651,7 +1703,7 @@ exports.sendSMSCampaign = onDocumentCreated(
     // Only fire on immediate sends. Scheduled campaigns are picked up by
     // runScheduledCampaigns once their scheduleAt is past.
     if (data.status !== 'pending') return;
-    await processSMSCampaign(event.data.ref, data);
+    await processSMSCampaign(event.params.tenantId, event.data.ref, data);
   }
 );
 
@@ -1697,7 +1749,7 @@ exports.runScheduledCampaigns = onSchedule(
         }
         if (!claimedData) continue;
         try {
-          await processSMSCampaign(cDoc.ref, claimedData);
+          await processSMSCampaign(tDoc.id, cDoc.ref, claimedData);
         } catch (e) {
           console.error(`[runScheduledCampaigns] processSMSCampaign failed for ${cDoc.id}:`, e?.message);
           await cDoc.ref.update({ status: 'failed', error: e?.message || 'scheduled_run_failed' }).catch(() => {});
@@ -1713,6 +1765,51 @@ function normalizePhone(raw) {
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits[0] === '1') return `+${digits}`;
   return null;
+}
+
+// Generate a unique single-use promo code bound to a specific client.
+// Used by personalized-promo campaigns: each recipient gets a unique code
+// they (and only they) can redeem. Returns { code, ref } or null on
+// failure (caller should still send the message — promo is a bonus, not
+// blocker). Code is always uppercase + alphanumeric for SMS friendliness.
+async function createPersonalizedPromo(tenantId, params) {
+  const { prefix, type, value, expiresDays, clientId, campaignId } = params;
+  if (!clientId) return null; // cannot bind a code to nobody
+  const crypto = require('crypto');
+  const safePrefix = (prefix || 'PROMO').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'PROMO';
+  const suffix = crypto.randomBytes(4).toString('hex').toUpperCase(); // 8 hex chars
+  const code = `${safePrefix}-${suffix}`;
+  const today = new Date();
+  const start = today.toISOString().slice(0, 10);
+  const end = new Date(today.getTime() + Math.max(1, expiresDays || 30) * 86400000).toISOString().slice(0, 10);
+  const db = getFirestore();
+  const ref = db.collection(`tenants/${tenantId}/promoCodes`).doc();
+  await ref.set({
+    code,
+    type:        type === 'amount' ? 'amount' : 'percent',
+    value:       Math.max(0, Number(value) || 0),
+    clientId,
+    campaignId:  campaignId || null,
+    active:      true,
+    startDate:   start,
+    endDate:     end,
+    singleUse:   true,
+    usedCount:   0,
+    _autoGenerated: true,
+    _personalized: true,
+    createdAt:   new Date().toISOString(),
+  });
+  return { code, ref };
+}
+
+// Apply standard placeholder substitution to a message body. Used by both
+// email and SMS paths so the variable set stays consistent.
+function substitutePlaceholders(body, vars) {
+  let out = body || '';
+  if (vars.firstName != null) out = out.replace(/\{firstName\}/gi, vars.firstName);
+  if (vars.lastName  != null) out = out.replace(/\{lastName\}/gi,  vars.lastName);
+  if (vars.promoCode != null) out = out.replace(/\{promoCode\}/g,  vars.promoCode);
+  return out;
 }
 
 // ── Stripe Billing ────────────────────────────────────────────────────────────

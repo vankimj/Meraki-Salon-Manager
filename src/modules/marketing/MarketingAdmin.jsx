@@ -626,12 +626,25 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
   const [techSel,     setTechSel]     = useState(prefill?.segmentParams?.techName || '');
   const [serviceSel,  setServiceSel]  = useState(prefill?.segmentParams?.serviceName || '');
   const [promoSel,    setPromoSel]    = useState('');
+  // Personalized promo codes: when on, one unique code is generated per
+  // recipient at send time, bound to that client's clientId so only they
+  // can redeem it. Body should include {promoCode} as the substitution
+  // token. Works on both email and SMS channels.
+  const [persPromo,   setPersPromo]   = useState(!!prefill?.promoPersonalize);
+  const [persPrefix,  setPersPrefix]  = useState(prefill?.promoPersonalize?.prefix || (settings?.salonName || 'MERAKI').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 8));
+  const [persType,    setPersType]    = useState(prefill?.promoPersonalize?.type   || 'percent');
+  const [persValue,   setPersValue]   = useState(prefill?.promoPersonalize?.value != null ? String(prefill.promoPersonalize.value) : '10');
+  const [persExpDays, setPersExpDays] = useState(prefill?.promoPersonalize?.expiresDays != null ? String(prefill.promoPersonalize.expiresDays) : '30');
   const [subject,     setSubject]     = useState(prefill?.subject || '');
   const [body,        setBody]        = useState(prefill?.body || '');
   const [smsBody,     setSmsBody]     = useState(prefill?.smsBody || '');
   const [addCta,      setAddCta]      = useState(!!(prefill?.ctaUrl));
   const [ctaText,     setCtaText]     = useState(prefill?.ctaText || 'Book Your Appointment');
-  const [ctaUrl,      setCtaUrl]      = useState(prefill?.ctaUrl || settings?.bookingUrl || '');
+  // Default to the tenant's actual public booking URL when no override is
+  // configured in settings. /?book=1 is the param App.jsx routes to
+  // BookingScreen; /?web routes to the salon webfront landing.
+  const defaultBookingUrl = (typeof window !== 'undefined' ? window.location.origin : '') + '/?book=1';
+  const [ctaUrl,      setCtaUrl]      = useState(prefill?.ctaUrl || settings?.bookingUrl || defaultBookingUrl);
   const [showPreview, setShowPreview] = useState(false);
   const [savingTpl,   setSavingTpl]   = useState(false);
   const [tplName,     setTplName]     = useState('');
@@ -854,8 +867,17 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
       body:       channel === 'email' ? body.trim()    : null,
       smsBody:    channel === 'sms'   ? smsBody.trim() : null,
       segmentType: segType, segmentParams,
-      promoCode:  channel === 'email' && selectedPromo?.code  ? selectedPromo.code  : null,
-      promoLabel: channel === 'email' && promoLabel           ? promoLabel           : null,
+      // Shared promo (single code visible in the email block) is mutually
+      // exclusive with personalized — when persPromo is on, no shared code
+      // is attached and the function generates per-recipient codes instead.
+      promoCode:  !persPromo && channel === 'email' && selectedPromo?.code  ? selectedPromo.code  : null,
+      promoLabel: !persPromo && channel === 'email' && promoLabel           ? promoLabel          : null,
+      promoPersonalize: persPromo ? {
+        prefix:       (persPrefix || 'PROMO').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'PROMO',
+        type:         persType === 'amount' ? 'amount' : 'percent',
+        value:        Math.max(0, Number(persValue) || 0),
+        expiresDays:  Math.max(1, Math.floor(Number(persExpDays) || 30)),
+      } : null,
       ctaText:    channel === 'email' && addCta && ctaText.trim() ? ctaText.trim() : null,
       ctaUrl:     channel === 'email' && addCta && ctaUrl.trim()  ? ctaUrl.trim()  : null,
       recipients: recipients.map(c => ({ clientId: c.id, name: c.name, email: c.email || null, phone: c.phone || null })),
@@ -1098,18 +1120,20 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
               </F>
 
               <F label="Attach promo code (optional)">
-                <select value={promoSel} onChange={e => setPromoSel(e.target.value)} style={inp}>
-                  <option value="">— None —</option>
-                  {promos.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.code} · {p.type === 'percent' ? `${p.value}% off` : `$${p.value} off`}
-                      {p.endDate ? ` · expires ${p.endDate}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {selectedPromo && (
+                {!persPromo && (
+                  <select value={promoSel} onChange={e => setPromoSel(e.target.value)} style={inp}>
+                    <option value="">— None —</option>
+                    {promos.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.code} · {p.type === 'percent' ? `${p.value}% off` : `$${p.value} off`}
+                        {p.endDate ? ` · expires ${p.endDate}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {!persPromo && selectedPromo && (
                   <div style={{ fontSize: 11, color: '#2D7A5F', marginTop: 5, padding: '6px 10px', background: '#f0faf6', borderRadius: 6, border: '1px solid #c6e8d5' }}>
-                    <strong style={{ fontFamily: 'monospace', fontSize: 13 }}>{selectedPromo.code}</strong> · {promoLabel} will appear as a highlighted block in the email.
+                    <strong style={{ fontFamily: 'monospace', fontSize: 13 }}>{selectedPromo.code}</strong> · {promoLabel} will appear as a highlighted block in the email. (One shared code for all recipients.)
                   </div>
                 )}
               </F>
@@ -1144,6 +1168,9 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
                   <span style={{ fontSize: 10, color: '#aaa', marginRight: 4 }}>Insert:</span>
                   <button type="button" onClick={() => insertVariable('{firstName}')} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #d8d8d8', background: '#fafafa', color: '#555', cursor: 'pointer', fontFamily: 'inherit' }}>{'{firstName}'}</button>
                   <button type="button" onClick={() => insertVariable('{lastName}')} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #d8d8d8', background: '#fafafa', color: '#555', cursor: 'pointer', fontFamily: 'inherit' }}>{'{lastName}'}</button>
+                  {persPromo && (
+                    <button type="button" onClick={() => insertVariable('{promoCode}')} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid #2D7A5F', background: '#f0faf6', color: '#2D7A5F', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>{'{promoCode}'}</button>
+                  )}
                 </div>
                 <span style={{ fontSize: 10, color: smsInfo.segments > 1 ? '#f59e0b' : '#888' }}>
                   {smsInfo.length} chars · {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''} · {smsInfo.encoding}
@@ -1161,6 +1188,46 @@ function CampaignModal({ onSend, onClose, prefill = null }) {
               </div>
             </F>
           )}
+
+          <F label="Personalized promo per recipient">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, color: '#333' }}>
+              <div onClick={() => setPersPromo(v => !v)}
+                style={{ width: 36, height: 20, borderRadius: 10, background: persPromo ? '#2D7A5F' : '#d1d5db', position: 'relative', transition: 'background .2s', flexShrink: 0, cursor: 'pointer' }}>
+                <div style={{ position: 'absolute', top: 2, left: persPromo ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .2s' }} />
+              </div>
+              <span style={{ flex: 1 }}>Generate a unique single-use code for each recipient. The code is bound to that client only — others can't redeem it.</span>
+            </label>
+            {persPromo && (
+              <div style={{ marginTop: 10, padding: '12px 14px', background: '#f0faf6', border: '1px solid #c6e8d5', borderRadius: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: '#555', display: 'block', marginBottom: 3 }}>Code prefix</label>
+                    <input value={persPrefix} onChange={e => setPersPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
+                      placeholder="MERAKI" style={{ ...inp, fontFamily: 'monospace' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: '#555', display: 'block', marginBottom: 3 }}>Discount</label>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <select value={persType} onChange={e => setPersType(e.target.value)} style={{ ...inp, flex: '0 0 90px' }}>
+                        <option value="percent">% off</option>
+                        <option value="amount">$ off</option>
+                      </select>
+                      <input type="number" min="0" step={persType === 'percent' ? '1' : '0.01'} value={persValue} onChange={e => setPersValue(e.target.value)} style={{ ...inp, flex: 1 }} />
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#555' }}>
+                  <span>Expires after</span>
+                  <input type="number" min="1" max="365" value={persExpDays} onChange={e => setPersExpDays(e.target.value)}
+                    style={{ ...inp, width: 70 }} />
+                  <span>day{Number(persExpDays) === 1 ? '' : 's'}</span>
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: '#15803d', padding: '6px 10px', background: '#f0fdf4', border: '1px dashed #86efac', borderRadius: 6 }}>
+                  Use <code style={{ fontFamily: 'monospace', background: '#dcfce7', padding: '0 4px', borderRadius: 3 }}>{'{promoCode}'}</code> in the {channel === 'sms' ? 'SMS body' : 'email body'} to insert the recipient's unique code. Example: <code style={{ fontFamily: 'monospace', background: '#fff', padding: '0 4px', borderRadius: 3 }}>{persPrefix || 'MERAKI'}-A3F7K9P2</code>
+                </div>
+              </div>
+            )}
+          </F>
 
           <F label="Send schedule">
             <div style={{ display: 'flex', gap: 8, marginBottom: sendMode === 'later' ? 10 : 0 }}>
