@@ -482,21 +482,31 @@ function PromoEditModal({ promo, onSave, onClose }) {
 
 // ── Gift Card create modal ────────────────────────────────
 function GiftCardModal({ onSave, onClose }) {
-  const [amount,    setAmount]    = useState('');
-  const [code,      setCode]      = useState(genCode());
-  const [issuedTo,  setIssuedTo]  = useState('');
-  const [note,      setNote]      = useState('');
-  const [saving,    setSaving]    = useState(false);
+  const [amount,         setAmount]         = useState('');
+  const [code,           setCode]           = useState(genCode());
+  const [recipientName,  setRecipientName]  = useState('');
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [note,           setNote]           = useState('');
+  const [saving,         setSaving]         = useState(false);
+
+  // Email is required because the Cloud Function emails the recipient the
+  // code on creation. Without an email the recipient never gets it.
+  const validEmail = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(recipientEmail.trim());
+  const canSave = !!amount && Number(amount) > 0 && !!code.trim() && validEmail;
 
   async function handleSave() {
-    const amt = Number(amount);
-    if (!amt || amt <= 0) return;
+    if (!canSave) return;
     setSaving(true);
     await onSave({
       code:           code.trim().toUpperCase(),
-      initialBalance: amt,
-      balance:        amt,
-      issuedTo:       issuedTo.trim() || null,
+      initialBalance: Number(amount),
+      balance:        Number(amount),
+      // Naming aligned with the checkout flow + Cloud Function
+      // sendGiftCardEmail (recipientName / recipientEmail). issuedTo is
+      // kept populated for backward-compat with existing UI references.
+      recipientName:  recipientName.trim() || null,
+      recipientEmail: recipientEmail.trim(),
+      issuedTo:       recipientName.trim() || null,
       note:           note.trim() || null,
       voided:         false,
     });
@@ -523,10 +533,21 @@ function GiftCardModal({ onSave, onClose }) {
           </div>
         </Field>
 
-        <Field label="Issued to (optional)">
-          <input value={issuedTo} onChange={e => setIssuedTo(e.target.value)}
+        <Field label="Recipient name (optional)">
+          <input value={recipientName} onChange={e => setRecipientName(e.target.value)}
             placeholder="Client name…"
             style={inputStyle} />
+        </Field>
+
+        <Field label="Recipient email *">
+          <input value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)}
+            placeholder="recipient@example.com" inputMode="email"
+            style={{ ...inputStyle, borderColor: recipientEmail && !validEmail ? '#ef4444' : '#d8d8d8' }} />
+          <div style={{ fontSize: 11, color: recipientEmail && !validEmail ? '#ef4444' : '#888', marginTop: 4 }}>
+            {recipientEmail && !validEmail
+              ? "Enter a valid email — we'll send the code here."
+              : "We'll email the code + balance to this address."}
+          </div>
         </Field>
 
         <Field label="Note (optional)">
@@ -539,11 +560,14 @@ function GiftCardModal({ onSave, onClose }) {
           <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Gift card summary</div>
           <div style={{ fontSize: 13, color: '#1a1a1a', marginTop: 4 }}>
             {code || '—'} · {amount ? fmt$(amount) : '$—'}
-            {issuedTo && <span style={{ color: '#555' }}> · {issuedTo}</span>}
+            {recipientName && <span style={{ color: '#555' }}> · {recipientName}</span>}
           </div>
+          {validEmail && (
+            <div style={{ fontSize: 11, color: '#166534', marginTop: 3 }}>📧 Code will be emailed to {recipientEmail}</div>
+          )}
         </div>
 
-        <SaveBtn onClick={handleSave} saving={saving} disabled={!amount || Number(amount) <= 0 || !code.trim()}>
+        <SaveBtn onClick={handleSave} saving={saving} disabled={!canSave}>
           Issue Gift Card
         </SaveBtn>
       </ModalBox>
