@@ -17,8 +17,8 @@ Switching Meraki Nail Studio off GlossGenius and onto this app. Items grouped by
 
 - [ ] Verify **Services** menu: every service active, prices/durations correct, categories right.
 - [ ] Verify **Employees**: 10 techs, photos, contact info, `serviceIds` assigned (so each tech only books for what they actually do).
-- [ ] **Store hours** — Calendar → 🕐 Hours toolbar button. Set realistic open/close + per-day variations.
-- [ ] **Financial settings**: tax rate (7.5% Columbus), CC fee (Stripe 2.9% + $0.30), removal price.
+- [x] **Store hours** — Calendar → 🕐 Hours toolbar button. Set realistic open/close + per-day variations.
+- [x] **Financial settings**: tax rate (7.5% Columbus), CC fee (Stripe 2.9% + $0.30), removal price.
 - [ ] **Decide on tip policy**: "Disable tips on credit card" toggle on or off.
 - [ ] **Online Booking** settings: enabled, lead time, cancellation policy, deposit, removal question text.
 - [ ] **Tech assignment method**: confirmed `turnQueue` (Mango POS) is what you want.
