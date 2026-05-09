@@ -10,6 +10,10 @@ const Anthropic            = require('@anthropic-ai/sdk');
 initializeApp();
 
 const TENANT_ID   = 'meraki';
+// Bootstrap super-admin — mirrors src/lib/firebase.js. Always passes staff/admin
+// gates regardless of tenant configuration.
+const BOOTSTRAP_ADMINS = ['jvankim@gmail.com'];
+
 const resendKey       = defineString('RESEND_API_KEY',      { default: '' });
 const resendFrom      = defineString('RESEND_FROM',         { default: 'Meraki Nail Studio <noreply@merakinailstudio.com>' });
 const mapsApiKey      = defineString('GOOGLE_MAPS_API_KEY', { default: '' });
@@ -54,6 +58,62 @@ function apptManageUrl(tenantId, apptId) {
   const t = apptManageToken(tenantId, apptId);
   const base = (publicAppUrl.value() || '').replace(/\/+$/, '');
   return `${base}/?manage=${encodeURIComponent(apptId)}&tid=${encodeURIComponent(tenantId)}&t=${t}`;
+}
+
+// ── Server-side authorization helpers (mirror firestore.rules) ──
+// Cloud Functions run with Admin SDK and BYPASS Firestore rules, so every
+// callable that reads/writes tenant data MUST gate role membership in code.
+// These helpers mirror the rules' isTenantStaff / isTenantAdmin / isTenantOwner
+// checks against the tenant's `data/users` doc (`staffEmails` / `adminEmails`)
+// and the root `tenants/{tenantId}` doc (`ownerEmail`).
+async function callerEmail(request) {
+  return (request?.auth?.token?.email || '').toLowerCase();
+}
+async function isBootstrapAdmin(request) {
+  return BOOTSTRAP_ADMINS.includes(await callerEmail(request));
+}
+async function requireTenantStaff(db, tenantId, request) {
+  if (!request?.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const email = await callerEmail(request);
+  if (!email) throw new HttpsError('permission-denied', 'No email on token');
+  if (await isBootstrapAdmin(request)) return;
+  // Tenant owner check
+  const tenDoc = await db.doc(`tenants/${tenantId}`).get();
+  if (tenDoc.exists && (tenDoc.data().ownerEmail || '').toLowerCase() === email) return;
+  // Staff list check
+  const usersDoc = await db.doc(`tenants/${tenantId}/data/users`).get();
+  const staffEmails = (usersDoc.exists ? (usersDoc.data().staffEmails || []) : [])
+    .map(e => String(e || '').toLowerCase());
+  if (!staffEmails.includes(email)) {
+    throw new HttpsError('permission-denied', 'Not a staff member of this tenant');
+  }
+}
+async function requireTenantAdmin(db, tenantId, request) {
+  if (!request?.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const email = await callerEmail(request);
+  if (!email) throw new HttpsError('permission-denied', 'No email on token');
+  if (await isBootstrapAdmin(request)) return;
+  const tenDoc = await db.doc(`tenants/${tenantId}`).get();
+  if (tenDoc.exists && (tenDoc.data().ownerEmail || '').toLowerCase() === email) return;
+  const usersDoc = await db.doc(`tenants/${tenantId}/data/users`).get();
+  const adminEmails = (usersDoc.exists ? (usersDoc.data().adminEmails || []) : [])
+    .map(e => String(e || '').toLowerCase());
+  if (!adminEmails.includes(email)) {
+    throw new HttpsError('permission-denied', 'Admin access required for this tenant');
+  }
+}
+// Returns 'admin' | 'scheduler' | 'tech' | 'readonly' | null.
+async function callerRole(db, tenantId, request) {
+  if (!request?.auth) return null;
+  const email = await callerEmail(request);
+  if (!email) return null;
+  if (await isBootstrapAdmin(request)) return 'admin';
+  const tenDoc = await db.doc(`tenants/${tenantId}`).get();
+  if (tenDoc.exists && (tenDoc.data().ownerEmail || '').toLowerCase() === email) return 'admin';
+  const usersDoc = await db.doc(`tenants/${tenantId}/data/users`).get();
+  const users = (usersDoc.exists ? (usersDoc.data().users || []) : []);
+  const u = users.find(x => (x.email || '').toLowerCase() === email);
+  return u?.role || null;
 }
 
 function fmtTime(str) {
@@ -522,6 +582,23 @@ exports.processUnsubscribe = onCall({ cors: true }, async (request) => {
     updatedAt:          new Date().toISOString(),
   });
   return { ok: true, name: doc.data().name || null };
+});
+
+// Returns the signed manage-appointment URL for staff. Same URL the booking
+// confirmation + reminder emails contain, so staff can resend it directly
+// from the appt edit modal when a client says "I lost the email".
+exports.getApptManageLink = onCall({ cors: true }, async (request) => {
+  const { apptId, tenantId: tid } = request.data || {};
+  const tenantId = tid || TENANT_ID;
+  if (!apptId) throw new HttpsError('invalid-argument', 'apptId required');
+  const db = getFirestore();
+  // Mints a signed URL that lets the holder reschedule/cancel without auth —
+  // staff-only since exposing it widens the blast radius of a leaked link.
+  await requireTenantStaff(db, tenantId, request);
+  const exists = await db.doc(`tenants/${tenantId}/appointments/${apptId}`).get();
+  if (!exists.exists) throw new HttpsError('not-found', 'Appointment not found');
+  const url = apptManageUrl(tenantId, apptId);
+  return { url };
 });
 
 // ── Self-service appointment manage (public via HMAC token) ────
@@ -1212,6 +1289,24 @@ exports.sendTechAppointmentReminders = onSchedule(
     const empByName = {};
     empSnap.docs.forEach(d => { const e = d.data(); if (e.name) empByName[e.name] = e; });
 
+    // Pull today's time-off entries up-front so we can skip reminders for
+    // techs who are out (vacation/sick/personal). Per-day check; covers
+    // multi-day blocks via startDate/endDate range and partial-day blocks
+    // via startTime/endTime.
+    const toSnap = await db.collection(`tenants/${TENANT_ID}/timeOff`).get();
+    const timeOffEntries = toSnap.docs.map(d => d.data())
+      .filter(t => (t.startDate || '') <= localToday && localToday <= (t.endDate || t.startDate || ''));
+    const isTechOnTimeOff = (techName, apptStartMins) => {
+      for (const t of timeOffEntries) {
+        if (t.techName !== techName) continue;
+        if (t.allDay !== false) return true;
+        const sM = t.startTime ? (() => { const [h, m] = t.startTime.split(':').map(Number); return h * 60 + m; })() : 0;
+        const eM = t.endTime   ? (() => { const [h, m] = t.endTime.split(':').map(Number); return h * 60 + m; })() : 24 * 60;
+        if (apptStartMins >= sM && apptStartMins < eM) return true;
+      }
+      return false;
+    };
+
     const apiKey = resendKey.value();
     const resend = apiKey ? new Resend(apiKey) : null;
 
@@ -1223,11 +1318,30 @@ exports.sendTechAppointmentReminders = onSchedule(
       ? require('twilio')(twApiKeySid || twSid, twToken, twApiKeySid ? { accountSid: twSid } : undefined)
       : null;
 
-    let emailsSent = 0, smsSent = 0, skipped = 0;
+    let emailsSent = 0, smsSent = 0, skipped = 0, skippedTimeOff = 0;
 
     for (const appt of candidates) {
       const emp = empByName[appt.techName];
       if (!emp || emp.techReminderOptOut) { skipped++; continue; }
+
+      // If the tech is on time-off today (and the appt time falls in the
+      // off window for partial-day blocks), skip the reminder. The appt
+      // itself shouldn't be on a tech who's out, but stale schedules can
+      // happen — better safe than waking someone on vacation.
+      const apptStartMinsCheck = (() => {
+        const [h, m] = (appt.startTime || '00:00').split(':').map(Number);
+        return (h || 0) * 60 + (m || 0);
+      })();
+      if (isTechOnTimeOff(appt.techName, apptStartMinsCheck)) {
+        skippedTimeOff++;
+        // Still mark as "sent" so we don't retry every 5 min — tech is out
+        await db.doc(`tenants/${TENANT_ID}/appointments/${appt.id}`).update({
+          techReminderSent: true,
+          techReminderSentAt: new Date().toISOString(),
+          techReminderSkippedReason: 'tech_on_time_off',
+        });
+        continue;
+      }
 
       const [ah, am] = appt.startTime.split(':').map(Number);
       const apptMins = ah * 60 + am;
@@ -1292,7 +1406,7 @@ exports.sendTechAppointmentReminders = onSchedule(
       });
     }
 
-    console.log(`[TechReminders] ${candidates.length} due. emails:${emailsSent} sms:${smsSent} skipped:${skipped}`);
+    console.log(`[TechReminders] ${candidates.length} due. emails:${emailsSent} sms:${smsSent} skipped:${skipped} skippedTimeOff:${skippedTimeOff}`);
   }
 );
 
@@ -1760,7 +1874,6 @@ ${cfg.policy || 'Appointments canceled with less than 24 hours notice may incur 
 exports.chatWithReports = onCall(
   { secrets: [anthropicKey], cors: true, timeoutSeconds: 90 },
   async (request) => {
-    if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
     const apiKey = anthropicKey.value();
     if (!apiKey) throw new HttpsError('unavailable', 'AI not configured');
 
@@ -1770,7 +1883,13 @@ exports.chatWithReports = onCall(
     }
     if (messages.length > 20) throw new HttpsError('invalid-argument', 'Too many messages');
 
-    const db = getFirestore();
+    // Reports surface revenue, full client PII, top-spenders, etc. — admin only.
+    // Mirrors the original code intent ("admin-only, read-only" comment) which
+    // was missing the actual server-side check.
+    const dbAuth = getFirestore();
+    await requireTenantAdmin(dbAuth, TENANT_ID, request);
+
+    const db = dbAuth;
     const APPTS    = `tenants/${TENANT_ID}/appointments`;
     const RECEIPTS = `tenants/${TENANT_ID}/receipts`;
     const CLIENTS  = `tenants/${TENANT_ID}/clients`;
@@ -2087,11 +2206,10 @@ When using tools:
 exports.voiceCommand = onCall(
   { secrets: [anthropicKey], cors: true, timeoutSeconds: 30 },
   async (request) => {
-    if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
     const apiKey = anthropicKey.value();
     if (!apiKey) throw new HttpsError('unavailable', 'AI not configured');
 
-    const { transcript, role = 'admin' } = request.data || {};
+    const { transcript } = request.data || {};
     if (!transcript || typeof transcript !== 'string') {
       throw new HttpsError('invalid-argument', 'transcript required');
     }
@@ -2100,6 +2218,13 @@ exports.voiceCommand = onCall(
     }
 
     const db = getFirestore();
+    // Tools below read client PII (name/phone/email) which the firestore.rules
+    // gate behind isTenantStaff. Enforce the same gate here since Admin SDK
+    // bypasses rules. Also derive role from the tenant's users doc — DO NOT
+    // trust a caller-supplied role, which only goes into the AI system prompt.
+    await requireTenantStaff(db, TENANT_ID, request);
+    const role = (await callerRole(db, TENANT_ID, request)) || 'tech';
+
     const APPTS    = `tenants/${TENANT_ID}/appointments`;
     const CLIENTS  = `tenants/${TENANT_ID}/clients`;
     const EMPS     = `tenants/${TENANT_ID}/employees`;
@@ -2521,7 +2646,25 @@ Output the JSON only.`;
 
 // ── Auto-campaigns ────────────────────────────────────
 
+// Defense-in-depth URL allowlist for CTA buttons in transactional emails.
+// We send from a verified custom domain (DKIM-aligned), so a free-form CTA
+// URL in an email is a powerful phishing primitive. Reject anything that's
+// not http(s) or that fails to parse — and additionally enforce a host
+// allowlist (Stripe Checkout / our own publicAppUrl) where the caller
+// passes `ctaUrl`.
+function isSafeCtaUrl(url, allowedHosts = null) {
+  if (!url || typeof url !== 'string') return false;
+  let parsed;
+  try { parsed = new URL(url); } catch { return false; }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+  if (allowedHosts && allowedHosts.length) {
+    return allowedHosts.some(h => parsed.host === h || parsed.host.endsWith('.' + h));
+  }
+  return true;
+}
+
 function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl) {
+  const safeCta = isSafeCtaUrl(ctaUrl);
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
@@ -2531,7 +2674,7 @@ function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl) {
     <div style="padding:24px;">
       <p style="font-size:15px;color:#222;margin:0 0 12px;font-weight:600;">Hi ${firstName}!</p>
       ${bodyHtml}
-      ${ctaUrl ? `<div style="text-align:center;margin:24px 0;">
+      ${safeCta ? `<div style="text-align:center;margin:24px 0;">
         <a href="${ctaUrl}" style="display:inline-block;background:#2D7A5F;color:#fff;font-size:14px;font-weight:700;padding:13px 32px;border-radius:10px;text-decoration:none;">${ctaText}</a>
       </div>` : ''}
       <p style="font-size:12px;color:#aaa;margin:16px 0 0;">— The Meraki Nail Studio Team</p>
@@ -3291,15 +3434,18 @@ exports.stripeWebhook = onRequest(
 // Auto-creates the Stripe Product + Price for the plan if one doesn't exist
 // yet, and reuses the client's Stripe Customer if we have one.
 exports.createMembershipCheckout = onCall({ cors: true, secrets: [stripeKey] }, async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
   const { membershipId, successUrl, cancelUrl, tenantId: tid } = request.data || {};
   const tenantId = tid || TENANT_ID;
+  // Mints a Stripe Checkout URL + writes Stripe IDs back to client/plan/
+  // membership docs (rules say admin-only writes). Admin gate required.
+  const dbAuth = getFirestore();
+  await requireTenantAdmin(dbAuth, tenantId, request);
   if (!membershipId) throw new HttpsError('invalid-argument', 'membershipId required');
 
   const key = stripeKey.value();
   if (!key) throw new HttpsError('unavailable', 'Stripe not configured');
   const stripe = require('stripe')(key);
-  const db     = getFirestore();
+  const db     = dbAuth;
 
   const memRef = db.doc(`tenants/${tenantId}/memberships/${membershipId}`);
   const memSnap = await memRef.get();
@@ -3381,41 +3527,52 @@ exports.createMembershipCheckout = onCall({ cors: true, secrets: [stripeKey] }, 
 // Generate a Stripe Customer Portal session for a member to manage billing
 // (cancel, update card, view invoices).
 exports.createMembershipPortal = onCall({ cors: true, secrets: [stripeKey] }, async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
-  const { membershipId, returnUrl, tenantId: tid } = request.data || {};
+  const { membershipId, tenantId: tid } = request.data || {};
   const tenantId = tid || TENANT_ID;
 
   const key = stripeKey.value();
   if (!key) throw new HttpsError('unavailable', 'Stripe not configured');
   const stripe = require('stripe')(key);
   const db     = getFirestore();
+  // The portal exposes invoices, saved cards, and lets the visitor cancel
+  // the subscription. Admin gate required — clients shouldn't be able to
+  // mint a portal for someone else just by guessing a membershipId.
+  await requireTenantAdmin(db, tenantId, request);
 
   const memSnap = await db.doc(`tenants/${tenantId}/memberships/${membershipId}`).get();
   if (!memSnap.exists) throw new HttpsError('not-found', 'Membership not found');
   const mem = memSnap.data();
   if (!mem.stripeCustomerId) throw new HttpsError('failed-precondition', 'No Stripe customer for this member yet');
 
+  // Always send the user back to our own app — never accept a caller-
+  // supplied returnUrl, which would be an open-redirect / phishing primitive.
   const baseUrl = (publicAppUrl.value() || 'https://meraki-salon-manager.web.app').replace(/\/+$/, '');
   const session = await stripe.billingPortal.sessions.create({
     customer:   mem.stripeCustomerId,
-    return_url: returnUrl || baseUrl,
+    return_url: baseUrl,
   });
 
   return { url: session.url };
 });
 
-// Email the Stripe Checkout payment link to a member's client. Frontend
-// passes the URL it got from createMembershipCheckout, plus the plan name.
-// Sends the branded transactional email and stamps the membership doc.
+// Email the Stripe Checkout payment link to a member's client.
+//
+// SECURITY: this function previously accepted the link URL from the caller,
+// which let any authed user send arbitrary links — including phishing URLs —
+// from the salon's verified Resend domain. We now read the URL exclusively
+// from the membership doc's `paymentLinkUrl` (stamped by
+// createMembershipCheckout) AND restrict the URL to Stripe-checkout hosts.
 exports.emailMembershipPaymentLink = onCall({ cors: true }, async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
-  const { membershipId, url, tenantId: tid } = request.data || {};
+  const { membershipId, tenantId: tid } = request.data || {};
   const tenantId = tid || TENANT_ID;
-  if (!membershipId || !url) throw new HttpsError('invalid-argument', 'membershipId and url required');
+  if (!membershipId) throw new HttpsError('invalid-argument', 'membershipId required');
 
   const apiKey = resendKey.value();
   if (!apiKey) throw new HttpsError('unavailable', 'Resend not configured');
   const db = getFirestore();
+  // Sends from a verified custom domain — admin gate so a tech-role user
+  // can't fire branded emails on the salon's behalf.
+  await requireTenantAdmin(db, tenantId, request);
 
   const memSnap = await db.doc(`tenants/${tenantId}/memberships/${membershipId}`).get();
   if (!memSnap.exists) throw new HttpsError('not-found', 'Membership not found');
@@ -3426,6 +3583,14 @@ exports.emailMembershipPaymentLink = onCall({ cors: true }, async (request) => {
   const plan = planSnap.data();
   const client = clientSnap.data();
   if (!client.email) throw new HttpsError('failed-precondition', 'Client has no email on file');
+
+  // Use the server-stamped link only. Validate it's a Stripe-hosted URL —
+  // belt-and-suspenders even though the link was minted by our own
+  // createMembershipCheckout.
+  const url = mem.paymentLinkUrl;
+  if (!isSafeCtaUrl(url, ['checkout.stripe.com', 'billing.stripe.com', 'buy.stripe.com'])) {
+    throw new HttpsError('failed-precondition', 'No valid Stripe payment link on this membership — generate one first');
+  }
 
   const resend  = new Resend(apiKey);
   const firstName = (client.name || 'there').split(' ')[0];
@@ -3839,7 +4004,14 @@ async function appendChatMessage(tenantId, clientId, clientInfo, message) {
 // Twilio webhook target: configure in Twilio Console → Phone Numbers →
 // Active Numbers → click your number → Messaging Configuration → "A
 // message comes in" → Webhook → POST <this function URL>.
-exports.twilioInboundSms = onRequest({ cors: false }, async (req, res) => {
+// Escape user-controlled text before interpolating into TwiML XML response.
+function xmlEscape(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  }[c]));
+}
+
+exports.twilioInboundSms = onRequest({ cors: false, secrets: [] }, async (req, res) => {
   try {
     // Twilio sends application/x-www-form-urlencoded; Firebase parses to req.body
     const From = req.body?.From || '';
@@ -3853,6 +4025,74 @@ exports.twilioInboundSms = onRequest({ cors: false }, async (req, res) => {
     }
     // Single-tenant for now; for multi-tenant SaaS we'd map To-number → tenantId.
     const tenantId = TENANT_ID;
+
+    // ── Pause check ──────────────────────────────────────
+    // If the salon is currently paused, either auto-reply with the closure
+    // notice (mode A, default) or forward the inbound to the admin's personal
+    // phone (mode B, opt-in). Either way, skip the normal thread/notify flow.
+    const db0 = getFirestore();
+    const sDoc = await db0.doc(`tenants/${tenantId}/data/settings`).get().catch(() => null);
+    const pauseCfg = (sDoc && sDoc.exists ? sDoc.data() : {}).pause || {};
+    const pauseUntilStr = String(pauseCfg.until || '').trim();
+    if (pauseUntilStr) {
+      // Compare in salon timezone to avoid edge-of-day misses
+      const tz = 'America/New_York';
+      const todayLocal = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+      if (todayLocal <= pauseUntilStr) {
+        // Persist a record so the salon can see what came in during the pause
+        await db0.collection(`tenants/${tenantId}/inboundSmsPaused`).add({
+          from: From, to: To, body: Body, twilioSid: Sid,
+          at: new Date().toISOString(),
+          handled: pauseCfg.forwardPhone ? 'forwarded' : 'auto-replied',
+        }).catch(() => {});
+
+        if (pauseCfg.forwardPhone) {
+          // Mode B — forward to admin's personal phone, no auto-reply to client.
+          // If forward setup fails (Twilio creds missing, bad phone), fall through
+          // to Mode A so the customer at least gets the closure notice.
+          let forwarded = false;
+          try {
+            const twSid       = twilioSid.value();
+            const twToken     = twilioToken.value();
+            const twApiKeySid = twilioApiKeySid.value();
+            const twFrom      = twilioFrom.value();
+            const fwdTo       = normalizePhone(pauseCfg.forwardPhone);
+            if (twSid && twToken && twFrom && fwdTo) {
+              const tw = require('twilio')(twApiKeySid || twSid, twToken,
+                twApiKeySid ? { accountSid: twSid } : undefined);
+              const fwdBody = `[Plume Nexus · while paused] From ${From}: ${Body.slice(0, 1400)}`;
+              await tw.messages.create({ from: twFrom, to: fwdTo, body: fwdBody });
+              forwarded = true;
+            } else {
+              console.warn('[twilioInboundSms] pause-forward unavailable: missing Twilio creds or bad phone, falling back to auto-reply');
+            }
+          } catch (e) {
+            console.error('[twilioInboundSms] pause-forward failed, falling back to auto-reply:', e.message);
+          }
+          if (forwarded) {
+            res.set('Content-Type', 'text/xml').status(200).send('<Response/>');
+            return;
+          }
+          // Fall through to Mode A so the customer isn't left in silence.
+        }
+
+        // Mode A — auto-reply with closure notice
+        const friendlyDate = (() => {
+          try {
+            return new Date(pauseUntilStr + 'T12:00:00').toLocaleDateString('en-US',
+              { month: 'long', day: 'numeric', year: 'numeric' });
+          } catch { return pauseUntilStr; }
+        })();
+        const defaultMsg = `Thanks for reaching out! We're temporarily closed and will reopen on ${friendlyDate}. Online booking will be available again then. We appreciate your patience!`;
+        const replyText = String(pauseCfg.customMessage || defaultMsg).slice(0, 1500)
+          .replace(/\{date\}/gi, friendlyDate);
+        res.set('Content-Type', 'text/xml').status(200).send(
+          `<Response><Message>${xmlEscape(replyText)}</Message></Response>`
+        );
+        return;
+      }
+    }
+
     const client = await findClientByPhone(tenantId, From);
     if (!client) {
       // Unknown sender — log and respond OK. We don't auto-create a client
@@ -4200,18 +4440,55 @@ Every AI call runs server-side, never trains on customer data, never shared.
 - Auto-rebook nudges when a client is overdue
 
 ━━━ PRICING (USD/mo, no setup fees, no per-tx surcharges) ━━━
-- Solo — $49/mo: 1 staff, full feature set minus advanced extras
-- Studio — $99/mo: up to 8 staff, multi-tech splits, walk-in management, voice commands, loyalty, custom booking domain
-- Salon Pro — $199/mo: unlimited staff, multi-location (Q3), Gusto integration, white-label client app, 2FA, founder-direct support
+Hybrid model: pick a base tier, then stack Power Packs for what you actually need.
+
+Base tiers:
+- Solo — Free for Founders' Members through June 30, 2027 (then $49/mo for new signups). Founders' Members keep lifetime free access. 1 staff, scheduling, POS, gift cards, AI reports, email + booking page (no SMS on free).
+- Studio — $79/mo: up to 8 staff, multi-tech credit splits, smart walk-in management, custom booking domain, priority support.
+- Salon Pro — $149/mo: unlimited staff, multi-location (Q3), founder-direct support, 2FA, dedicated onboarding.
+
+Power Packs (stack on any tier):
+- Comms Pack ($19/mo) — two-way SMS + dedicated phone + email reply parsing + STOP keyword handling.
+- Marketing Pack ($19/mo) — loyalty + tiers + auto-rebook + send-time optimizer + advanced segments.
+- AI Pack ($19/mo) — voice-command booking + AI-drafted marketing copy + conflict-resolution drafts.
+- Operations Pack ($29/mo) — Gusto payroll sync + advanced reporting + 1099-NEC PDFs + multi-location (already included on Salon Pro).
+- Brand Pack ($39/mo) — white-label client app + custom-branded TipFlow kiosk + custom email sender domain.
+
+Atomic add-ons (escape hatch for power users who want exactly one feature from a pack):
+- SMS only: $15/mo (vs $19 Comms Pack)
+- Voice commands only: $15/mo (vs $19 AI Pack)
+- Loyalty only: $15/mo (vs $19 Marketing Pack)
+- Gusto only: $25/mo (vs $29 Operations Pack)
+- Custom email sender domain only: $15/mo (vs $39 Brand Pack)
+
+Pricing logic: packs are always slightly cheaper than buying every atom in them. If a customer wants 2+ atoms from the same pack, the pack is cheaper. If they want exactly one, the atom is cheaper. Most salons want most of a category, so packs are the recommended path.
+
+Examples:
+- Solo stylist with Founders' Year + wants SMS + AI: $0 + $19 Comms + $19 AI = $38/mo
+- 5-tech salon, full marketing user: $79 Studio + $19 Comms + $19 Marketing + $19 AI = $136/mo
+- Multi-location power user: $149 Salon Pro + all 5 packs = $274/mo
+
 - Annual billing saves 20%
-- 30-day free trial
 - Month-to-month, cancel anytime, no exit fees, full data export on request
+
+━━━ FOUNDERS' YEAR ━━━
+- Anyone who signs up for Solo before June 30, 2027 is a "Founders' Member" — their Solo plan is free for life, no expiration. After June 30, 2027, the Solo plan becomes paid ($49/mo) for new signups. Founders' Members keep their lifetime free access regardless.
+- Founders' Members also get: a Founders badge in the app, early access to new features, and a vote on the product roadmap.
+- This is a real cohort, not a marketing trick. The deadline may be extended (we'll announce publicly with at least 90 days notice if so) but won't be shortened.
+- If asked about the Founders' Year deadline being extended in the past or possibly in the future: it's possible we extend (with public notice) but the lifetime free promise to existing Founders' Members is permanent.
 
 ━━━ MIGRATION & SUPPORT ━━━
 - Migration: CSV export from your current platform → one-time import in a single business day. The migration tool dedupes refunds and split payments correctly.
 - Stripe payments: each tenant connects their own Stripe account (funds settle directly to your bank).
 - SMS: dedicated phone number per tenant, separate marketing vs transactional numbers so STOP keywords don't accidentally opt clients out of appointment confirmations.
 - Support: founder-direct email at hello@plumenexus.com on every plan.
+
+━━━ DATA EXPORT IS ALWAYS FREE ━━━
+- One click in Settings exports the customer's entire account: clients, appointments, services, employees, receipts, photos, marketing history. CSV + JSON.
+- Free on every plan, including Free Solo, including Founders' Members, including paused accounts, including the 90-day post-cancellation grace period. Forever.
+- Never paywalled, never gated behind a support ticket, never delayed.
+- This is a core principle, not a feature. If a customer is leaving because the service isn't working for them, we will not make leaving harder. We'd rather they leave with everything intact and recommend us to a friend than feel trapped.
+- If asked about lock-in, vendor risk, or "what if I want to leave?": lead with this answer.
 
 ━━━ WHEN TO ESCALATE TO HUMAN ━━━
 If a user asks for: a custom quote for >25 staff, multi-location pricing, a specific compliance certification (HIPAA, SOC 2), a feature you don't see listed above, or sounds like a complaint — politely point them to the contact form ("I'd loop in the founder for that — drop your details on the contact form below the chat and Jonathan will reply within a business day").

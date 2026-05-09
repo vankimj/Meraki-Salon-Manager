@@ -1610,6 +1610,8 @@ function DayGrid({ date, appts, timeOff = [], techs, allTechs, techExtended, emp
 function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, onAddToTicket, onRefund, viewOnly }) {
   const [saving,    setSaving]    = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [manageCopied, setManageCopied] = useState(false);
+  const [manageLoading, setManageLoading] = useState(false);
   const isView = mode === 'view';
 
   function copyCheckinLink() {
@@ -1618,6 +1620,32 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);
     });
+  }
+
+  // Fetches the signed manage URL (same one in booking confirmation emails)
+  // and copies it to clipboard. Falls back to a prompt() if clipboard
+  // write fails. Useful when a client says "I lost the email".
+  async function copyManageLink() {
+    if (!appt.id) return;
+    setManageLoading(true);
+    try {
+      const { httpsCallable } = await import('firebase/functions');
+      const { functions } = await import('../../lib/firebase');
+      const res = await httpsCallable(functions, 'getApptManageLink')({ apptId: appt.id });
+      const url = res?.data?.url;
+      if (!url) throw new Error('No URL returned');
+      try {
+        await navigator.clipboard.writeText(url);
+        setManageCopied(true);
+        setTimeout(() => setManageCopied(false), 2000);
+      } catch {
+        window.prompt('Copy this manage link to share with the client:', url);
+      }
+    } catch (e) {
+      window.alert(`Could not generate link: ${e.message || 'unknown error'}`);
+    } finally {
+      setManageLoading(false);
+    }
   }
   const isNew  = !appt.id;
 
@@ -1864,6 +1892,12 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                 <button onClick={copyCheckinLink} title="Copy check-in link for client"
                   style={{ fontSize: 12, padding: '8px 12px', borderRadius: 8, border: `1px solid ${linkCopied ? '#bbf7d0' : '#d0d0d0'}`, background: linkCopied ? '#f0fdf4' : '#fff', color: linkCopied ? '#166534' : '#555', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500, flexShrink: 0, whiteSpace: 'nowrap' }}>
                   {linkCopied ? '✓ Copied!' : '🔗 Check-in'}
+                </button>
+              )}
+              {appt.id && appt.status !== 'done' && appt.status !== 'cancelled' && (
+                <button onClick={copyManageLink} disabled={manageLoading} title="Copy the client's reschedule/cancel link"
+                  style={{ fontSize: 12, padding: '8px 12px', borderRadius: 8, border: `1px solid ${manageCopied ? '#bbf7d0' : '#d0d0d0'}`, background: manageCopied ? '#f0fdf4' : '#fff', color: manageCopied ? '#166534' : '#555', cursor: manageLoading ? 'default' : 'pointer', fontFamily: 'inherit', fontWeight: 500, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                  {manageLoading ? '…' : manageCopied ? '✓ Copied!' : '📅 Manage link'}
                 </button>
               )}
               {!viewOnly && (

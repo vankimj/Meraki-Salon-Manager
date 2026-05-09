@@ -188,7 +188,10 @@ function MembersTab({ members, clients, plans, onNew, onEdit, onDelete }) {
       if (!url) throw new Error('No URL returned');
       const client = clients.find(c => c.id === m.clientId);
       if (client?.email) {
-        await httpsCallable(functions, 'emailMembershipPaymentLink')({ membershipId: m.id, url });
+        // emailMembershipPaymentLink reads the URL from the membership doc
+        // (stamped by createMembershipCheckout above) — caller no longer
+        // passes the URL, so an attacker can't substitute a phishing link.
+        await httpsCallable(functions, 'emailMembershipPaymentLink')({ membershipId: m.id });
         showToast(`Payment link emailed to ${client.email}`);
       } else {
         // No email on file — copy URL to clipboard for manual share. Fall

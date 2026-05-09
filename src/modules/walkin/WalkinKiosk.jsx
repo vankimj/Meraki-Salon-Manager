@@ -32,6 +32,35 @@ function minutesAgo(iso) {
   return Math.max(0, Math.floor(ms / 60000));
 }
 
+// Play a short pleasant two-note chime (C5 → E5) when a new walk-in arrives.
+// Uses Web Audio API so we don't need to ship an mp3 asset. Browsers gate
+// audio behind a user gesture; the first chime after a fresh page load may
+// be silent — tapping anything in the UI unlocks it.
+function playChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const playNote = (freq, startMs, durMs) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const t0 = ctx.currentTime + startMs / 1000;
+      const t1 = t0 + durMs / 1000;
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(0.18, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t1);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t1);
+    };
+    playNote(523.25, 0,   180); // C5
+    playNote(659.25, 110, 240); // E5
+    setTimeout(() => ctx.close().catch(() => {}), 600);
+  } catch {}
+}
+
 function nextUpInRotation(roster) {
   if (!roster || roster.length === 0) return null;
   const sorted = [...roster].sort((a, b) => {
@@ -80,6 +109,18 @@ export default function WalkinKiosk() {
   useEffect(() => subscribeTurnRoster(today, data => setRoster((data && data.roster) || [])), []);
   useEffect(() => subscribeQueue(today, setQueue), []);
   useEffect(() => subscribeToAppointments(today, setAppts), []);
+
+  // Audio chime on new walk-in. Tracks queue length and plays a short
+  // pleasant tone via Web Audio API when it grows. First mount initializes
+  // the ref but doesn't chime so refreshing the page is silent.
+  const prevQueueLenRef = useRef(null);
+  useEffect(() => {
+    const waitingNow = queue.filter(q => q.status !== 'seated' && q.status !== 'cancelled').length;
+    if (prevQueueLenRef.current !== null && waitingNow > prevQueueLenRef.current) {
+      playChime();
+    }
+    prevQueueLenRef.current = waitingNow;
+  }, [queue]);
   useEffect(() => {
     fetchEmployees().then(emps => setEmployees(emps.filter(e => e.active !== false))).catch(() => {});
     fetchServices().then(svcs => setServices(svcs.filter(s => s.active !== false))).catch(() => {});
