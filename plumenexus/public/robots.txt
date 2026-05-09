@@ -1,0 +1,8 @@
+# Site is in draft. Do not crawl, do not index.
+# When ready to launch, replace this file with:
+#   User-agent: *
+#   Allow: /
+#   Sitemap: https://plumenexus.com/sitemap.xml
+
+User-agent: *
+Disallow: /
