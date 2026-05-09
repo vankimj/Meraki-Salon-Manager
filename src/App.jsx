@@ -39,6 +39,7 @@ import UnsubscribeScreen from './components/UnsubscribeScreen';
 import ManageAppointmentScreen from './components/ManageAppointmentScreen';
 import { TermsScreen, PrivacyScreen } from './components/PolicyScreen';
 import PinModal from './components/PinModal';
+import FirstLoginWizard from './components/FirstLoginWizard';
 
 const MODULE_TITLES = {
   schedule:   'Schedule',
@@ -97,11 +98,37 @@ function MagicLinkPrompt() {
 }
 
 function AppShell() {
-  const { slides, def, cur, magicLinkPending, handbookPending, isPortalUser, settings, pinPrompt, acceptPinPrompt, dismissPinPrompt } = useApp();
+  const { slides, def, cur, magicLinkPending, handbookPending, isPortalUser, settings, updateSettings, isAdmin, gUser, pinPrompt, acceptPinPrompt, dismissPinPrompt } = useApp();
 
   if (isPortalUser) return <ClientPortal />;
   const [view,      setView]      = useState('home'); // 'home' | 'tipflow' | 'schedule' | 'clients' | 'services' | 'employees'
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+
+  // Auto-open the first-login wizard once per fresh tenant. We trigger if
+  // the user is signed-in admin AND we haven't stamped _wizardCompleted on
+  // settings AND the tenant looks empty (low service count). Owner can
+  // re-open it later from Admin if they need to (TODO).
+  useEffect(() => {
+    if (!gUser || !isAdmin) return;
+    if (settings?._wizardCompleted) return;
+    // Use service count as a proxy for "fresh tenant". Existing tenants
+    // (like Meraki) won't see this even if the flag isn't set.
+    let cancelled = false;
+    (async () => {
+      try {
+        const { fetchServices } = await import('./lib/firestore');
+        const services = await fetchServices();
+        if (!cancelled && (services?.length || 0) < 3) {
+          setShowWizard(true);
+        } else if (!cancelled) {
+          // Tenant already has services — stamp the flag so we never check again.
+          updateSettings({ ...settings, _wizardCompleted: true }).catch(() => {});
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [gUser?.uid, isAdmin, settings?._wizardCompleted]); // eslint-disable-line
 
   const isTipFlow = view === 'tipflow';
   const isHome    = view === 'home';
@@ -166,6 +193,16 @@ function AppShell() {
 
       {/* Admin settings overlay */}
       {showAdmin && <Admin onClose={() => setShowAdmin(false)} />}
+
+      {showWizard && (
+        <FirstLoginWizard onClose={() => {
+          setShowWizard(false);
+          // Stamp the flag so we don't auto-reopen even if the tenant is still
+          // empty (owner explicitly chose to dismiss / finish).
+          updateSettings({ ...settings, _wizardCompleted: true, _wizardCompletedAt: new Date().toISOString() }).catch(() => {});
+          setView('schedule');
+        }} />
+      )}
 
       {/* Handbook signing — shown to non-admin staff on first login after publish */}
       {handbookPending && <HandbookModal />}

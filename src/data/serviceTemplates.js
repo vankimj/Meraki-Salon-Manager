@@ -1,0 +1,124 @@
+// Industry-preset service menus a new tenant can import in one click during
+// the first-login wizard. Each template is a minimum-viable starting menu —
+// owner can edit/delete/add anything after import.
+//
+// Schema mirrors what saveService writes to Firestore: { name, category,
+// basePrice, duration, priceFrom, durationMin, active, sortOrder }.
+
+export const SERVICE_TEMPLATES = [
+  {
+    id: 'nail-salon',
+    label: 'Nail Salon',
+    description: 'Manicures, pedicures, gel/dip/acrylic, nail art',
+    icon: '💅',
+    services: [
+      { category: 'Manicures', name: 'Gel Manicure',         basePrice: 40, duration: 45, priceFrom: false, sortOrder: 0 },
+      { category: 'Manicures', name: 'Signature Manicure',   basePrice: 30, duration: 30, priceFrom: false, sortOrder: 1 },
+      { category: 'Manicures', name: 'Dip Powder Manicure',  basePrice: 50, duration: 60, priceFrom: false, sortOrder: 2 },
+      { category: 'Manicures', name: 'Acrylic Full Set',     basePrice: 60, duration: 75, priceFrom: true,  sortOrder: 3 },
+      { category: 'Manicures', name: 'Acrylic Fill',         basePrice: 45, duration: 60, priceFrom: false, sortOrder: 4 },
+      { category: 'Pedicures', name: 'Signature Pedicure',   basePrice: 45, duration: 45, priceFrom: false, sortOrder: 0 },
+      { category: 'Pedicures', name: 'Deluxe Pedicure',      basePrice: 60, duration: 60, priceFrom: false, sortOrder: 1 },
+      { category: 'Add-ons',   name: 'Nail Art',             basePrice: 10, duration: 10, priceFrom: true,  sortOrder: 0 },
+      { category: 'Add-ons',   name: 'Removal',              basePrice: 10, duration: 15, priceFrom: false, sortOrder: 1 },
+    ],
+  },
+  {
+    id: 'hair-salon',
+    label: 'Hair Salon',
+    description: 'Cuts, color, highlights, blowouts, treatments',
+    icon: '💇',
+    services: [
+      { category: 'Cuts',      name: "Women's Cut",         basePrice: 65,  duration: 45, priceFrom: true,  sortOrder: 0 },
+      { category: 'Cuts',      name: "Men's Cut",           basePrice: 35,  duration: 30, priceFrom: false, sortOrder: 1 },
+      { category: 'Cuts',      name: "Kids' Cut (under 12)",basePrice: 25,  duration: 30, priceFrom: false, sortOrder: 2 },
+      { category: 'Color',     name: 'Single Process Color',basePrice: 90,  duration: 90, priceFrom: true,  sortOrder: 0 },
+      { category: 'Color',     name: 'Partial Highlights',  basePrice: 130, duration: 120, priceFrom: true, sortOrder: 1 },
+      { category: 'Color',     name: 'Full Highlights',     basePrice: 175, duration: 180, priceFrom: true, sortOrder: 2 },
+      { category: 'Color',     name: 'Balayage',            basePrice: 200, duration: 180, priceFrom: true, sortOrder: 3 },
+      { category: 'Color',     name: 'Root Touch-Up',       basePrice: 75,  duration: 60, priceFrom: false, sortOrder: 4 },
+      { category: 'Styling',   name: 'Blowout',             basePrice: 45,  duration: 45, priceFrom: false, sortOrder: 0 },
+      { category: 'Styling',   name: 'Updo / Special Event',basePrice: 95,  duration: 60, priceFrom: true,  sortOrder: 1 },
+      { category: 'Treatments',name: 'Deep Conditioning',   basePrice: 35,  duration: 30, priceFrom: false, sortOrder: 0 },
+      { category: 'Treatments',name: 'Olaplex Treatment',   basePrice: 50,  duration: 30, priceFrom: false, sortOrder: 1 },
+    ],
+  },
+  {
+    id: 'barbershop',
+    label: 'Barbershop',
+    description: 'Cuts, fades, beards, hot-towel shaves',
+    icon: '✂️',
+    services: [
+      { category: 'Cuts',  name: 'Classic Haircut',         basePrice: 30, duration: 30, priceFrom: false, sortOrder: 0 },
+      { category: 'Cuts',  name: 'Skin Fade',               basePrice: 40, duration: 45, priceFrom: false, sortOrder: 1 },
+      { category: 'Cuts',  name: 'Buzz Cut',                basePrice: 20, duration: 20, priceFrom: false, sortOrder: 2 },
+      { category: 'Cuts',  name: "Kids' Cut",               basePrice: 22, duration: 30, priceFrom: false, sortOrder: 3 },
+      { category: 'Beard', name: 'Beard Trim',              basePrice: 20, duration: 20, priceFrom: false, sortOrder: 0 },
+      { category: 'Beard', name: 'Beard Sculpt + Line-Up',  basePrice: 30, duration: 30, priceFrom: false, sortOrder: 1 },
+      { category: 'Beard', name: 'Hot-Towel Straight Shave',basePrice: 40, duration: 45, priceFrom: false, sortOrder: 2 },
+      { category: 'Combo', name: 'Cut + Beard',             basePrice: 50, duration: 60, priceFrom: false, sortOrder: 0 },
+      { category: 'Combo', name: 'The Works',               basePrice: 75, duration: 75, priceFrom: false, sortOrder: 1 },
+    ],
+  },
+  {
+    id: 'spa',
+    label: 'Spa & Wellness',
+    description: 'Massage, facials, body treatments',
+    icon: '🌿',
+    services: [
+      { category: 'Massage', name: 'Swedish Massage (60 min)',  basePrice: 95,  duration: 60,  priceFrom: false, sortOrder: 0 },
+      { category: 'Massage', name: 'Swedish Massage (90 min)',  basePrice: 130, duration: 90,  priceFrom: false, sortOrder: 1 },
+      { category: 'Massage', name: 'Deep Tissue (60 min)',      basePrice: 110, duration: 60,  priceFrom: false, sortOrder: 2 },
+      { category: 'Massage', name: 'Hot Stone (90 min)',        basePrice: 150, duration: 90,  priceFrom: false, sortOrder: 3 },
+      { category: 'Massage', name: 'Couples Massage (60 min)',  basePrice: 220, duration: 60,  priceFrom: false, sortOrder: 4 },
+      { category: 'Facials', name: 'Signature Facial',          basePrice: 95,  duration: 60,  priceFrom: false, sortOrder: 0 },
+      { category: 'Facials', name: 'Anti-Aging Facial',         basePrice: 125, duration: 75,  priceFrom: false, sortOrder: 1 },
+      { category: 'Facials', name: 'Acne Treatment',            basePrice: 110, duration: 75,  priceFrom: false, sortOrder: 2 },
+      { category: 'Body',    name: 'Body Scrub',                basePrice: 110, duration: 60,  priceFrom: false, sortOrder: 0 },
+      { category: 'Body',    name: 'Body Wrap',                 basePrice: 140, duration: 90,  priceFrom: false, sortOrder: 1 },
+    ],
+  },
+  {
+    id: 'lashes-brows',
+    label: 'Lashes & Brows',
+    description: 'Extensions, lifts, tints, threading, waxing',
+    icon: '👁️',
+    services: [
+      { category: 'Lashes', name: 'Classic Lash Full Set',     basePrice: 150, duration: 120, priceFrom: false, sortOrder: 0 },
+      { category: 'Lashes', name: 'Volume Lash Full Set',      basePrice: 200, duration: 150, priceFrom: false, sortOrder: 1 },
+      { category: 'Lashes', name: 'Lash Fill (2 weeks)',       basePrice: 75,  duration: 60,  priceFrom: false, sortOrder: 2 },
+      { category: 'Lashes', name: 'Lash Lift',                 basePrice: 95,  duration: 60,  priceFrom: false, sortOrder: 3 },
+      { category: 'Lashes', name: 'Lash Tint',                 basePrice: 30,  duration: 20,  priceFrom: false, sortOrder: 4 },
+      { category: 'Brows',  name: 'Brow Wax & Tint',           basePrice: 35,  duration: 30,  priceFrom: false, sortOrder: 0 },
+      { category: 'Brows',  name: 'Brow Threading',            basePrice: 18,  duration: 15,  priceFrom: false, sortOrder: 1 },
+      { category: 'Brows',  name: 'Brow Lamination',           basePrice: 80,  duration: 60,  priceFrom: false, sortOrder: 2 },
+      { category: 'Brows',  name: 'Henna Brows',               basePrice: 45,  duration: 30,  priceFrom: false, sortOrder: 3 },
+    ],
+  },
+  {
+    id: 'medspa',
+    label: 'Med Spa',
+    description: 'Botox, fillers, laser, peels, IV therapy',
+    icon: '💉',
+    services: [
+      { category: 'Injectables', name: 'Botox (per unit)',       basePrice: 14,  duration: 30, priceFrom: false, sortOrder: 0 },
+      { category: 'Injectables', name: 'Dysport (per unit)',     basePrice: 5,   duration: 30, priceFrom: false, sortOrder: 1 },
+      { category: 'Injectables', name: 'Lip Filler (1 syringe)', basePrice: 650, duration: 45, priceFrom: true,  sortOrder: 2 },
+      { category: 'Injectables', name: 'Cheek Filler (1 syringe)',basePrice: 700, duration: 45, priceFrom: true,  sortOrder: 3 },
+      { category: 'Lasers',      name: 'IPL Photofacial',        basePrice: 250, duration: 45, priceFrom: false, sortOrder: 0 },
+      { category: 'Lasers',      name: 'Laser Hair Removal — Small', basePrice: 100, duration: 30, priceFrom: true,  sortOrder: 1 },
+      { category: 'Lasers',      name: 'Laser Hair Removal — Large', basePrice: 250, duration: 60, priceFrom: true,  sortOrder: 2 },
+      { category: 'Peels',       name: 'Light Chemical Peel',    basePrice: 125, duration: 45, priceFrom: false, sortOrder: 0 },
+      { category: 'Peels',       name: 'Medium Chemical Peel',   basePrice: 200, duration: 45, priceFrom: false, sortOrder: 1 },
+      { category: 'IV',          name: 'IV Hydration',           basePrice: 150, duration: 45, priceFrom: false, sortOrder: 0 },
+      { category: 'IV',          name: 'B12 Shot',               basePrice: 35,  duration: 15, priceFrom: false, sortOrder: 1 },
+    ],
+  },
+];
+
+// Mark all template entries as active and durationMin: true so they show up
+// in the booking page UI immediately. Caller spreads these over each service.
+export const TEMPLATE_DEFAULTS = {
+  active: true,
+  durationMin: true,
+};

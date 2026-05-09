@@ -97,6 +97,24 @@ export default function EmployeesAdmin() {
     setEmployees(es => es.map(e => e.id === emp.id ? { ...e, active: !e.active } : e));
   }
 
+  async function handleSendInvite(emp) {
+    if (!emp.email) {
+      showToast('Add an email to this employee first', 3000);
+      return;
+    }
+    try {
+      const { httpsCallable } = await import('firebase/functions');
+      const { functions } = await import('../../lib/firebase');
+      await httpsCallable(functions, 'emailEmployeeInvite')({ employeeId: emp.id });
+      logActivity('employee_invite_sent', `${emp.name} → ${emp.email}`);
+      showToast(`Invite sent to ${emp.email}`);
+      // Optimistic update so the badge flips locally
+      setEmployees(es => es.map(e => e.id === emp.id ? { ...e, inviteSentAt: new Date().toISOString(), inviteSentTo: emp.email } : e));
+    } catch (e) {
+      showToast(`Could not send invite: ${e.message || 'unknown error'}`, 4000);
+    }
+  }
+
   async function seedEmployees() {
     setSeeding(true);
     try {
@@ -225,6 +243,7 @@ export default function EmployeesAdmin() {
               onEdit={() => setEditing({ ...emp })}
               onDelete={() => handleDelete(emp)}
               onToggleActive={() => handleToggleActive(emp)}
+              onSendInvite={() => handleSendInvite(emp)}
             />
           ))}
         </div>
@@ -244,7 +263,7 @@ export default function EmployeesAdmin() {
   );
 }
 
-function EmployeeRow({ emp, totalServices, last, onEdit, onDelete, onToggleActive }) {
+function EmployeeRow({ emp, totalServices, last, onEdit, onDelete, onToggleActive, onSendInvite }) {
   const svcCount = emp.serviceIds?.length || 0;
   const svcConfigured = svcCount > 0;
   return (
@@ -271,6 +290,13 @@ function EmployeeRow({ emp, totalServices, last, onEdit, onDelete, onToggleActiv
         )}
       </div>
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        {emp.email && onSendInvite && (
+          <button onClick={onSendInvite}
+            title={emp.inviteSentAt ? `Resend sign-in link (last sent ${new Date(emp.inviteSentAt).toLocaleDateString()})` : 'Send sign-in invite to this employee'}
+            style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '1px solid #d8d0e8', background: emp.inviteSentAt ? '#f3eafc' : '#fff', color: '#5b3b8c', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
+            {emp.inviteSentAt ? '↻ Resend' : '📨 Invite'}
+          </button>
+        )}
         <button onClick={onToggleActive} style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '1px solid #d8d8d8', background: emp.active ? '#f0fdf4' : '#f5f5f5', color: emp.active ? '#16a34a' : '#aaa', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500 }}>
           {emp.active ? 'Active' : 'Inactive'}
         </button>

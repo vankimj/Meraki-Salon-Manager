@@ -584,6 +584,59 @@ exports.processUnsubscribe = onCall({ cors: true }, async (request) => {
   return { ok: true, name: doc.data().name || null };
 });
 
+// Send a branded "you've been invited to your salon's Plume Nexus account"
+// email to a newly-added employee. Owner clicks "Send invite" in
+// EmployeesAdmin and we email a Google sign-in link (tenant subdomain) so
+// the tech can join with one click. Admin gate; uses the owner's verified
+// Resend domain.
+exports.emailEmployeeInvite = onCall({ cors: true }, async (request) => {
+  const { tenantId: tid, employeeId } = request.data || {};
+  const tenantId = tid || TENANT_ID;
+  if (!employeeId) throw new HttpsError('invalid-argument', 'employeeId required');
+  const db = getFirestore();
+  await requireTenantAdmin(db, tenantId, request);
+
+  const empSnap = await db.doc(`tenants/${tenantId}/employees/${employeeId}`).get();
+  if (!empSnap.exists) throw new HttpsError('not-found', 'Employee not found');
+  const emp = empSnap.data();
+  const email = (emp.email || '').trim();
+  if (!email) throw new HttpsError('failed-precondition', 'No email on file for this employee');
+
+  const tenSnap = await db.doc(`tenants/${tenantId}`).get();
+  const salonName = tenSnap.exists ? (tenSnap.data().name || 'Your salon') : 'Your salon';
+  const baseUrl = (publicAppUrl.value() || 'https://meraki-salon-manager.web.app').replace(/\/+$/, '');
+  // Sign-in URL — for SaaS this would be `https://{tenantId}.plumenexus.com`.
+  const signInUrl = tenantId === 'meraki' ? baseUrl : `https://${tenantId}.plumenexus.com`;
+
+  const apiKey = resendKey.value();
+  if (!apiKey) throw new HttpsError('unavailable', 'Resend not configured');
+  const resend = new Resend(apiKey);
+
+  const firstName = (emp.name || 'there').split(' ')[0];
+  const html = buildAutoEmail(
+    `Welcome to ${salonName}`,
+    firstName,
+    `<p style="font-size:14px;color:#222;margin:0 0 12px;">${esc(salonName)} added you to their team on Plume Nexus — the salon's scheduling and earnings app.</p>
+     <p style="font-size:13px;color:#555;margin:0 0 18px;">Click below to sign in with Google using <strong>${esc(email)}</strong>. You'll see your daily schedule, real-time tips and earnings, and your weekly take-home — all in one place.</p>`,
+    'Sign in with Google',
+    signInUrl
+  );
+  await resend.emails.send({
+    from:    resendFrom.value(),
+    to:      email,
+    subject: `You're invited to ${salonName}'s team on Plume Nexus`,
+    html,
+  });
+
+  await db.doc(`tenants/${tenantId}/employees/${employeeId}`).set({
+    inviteSentAt: new Date().toISOString(),
+    inviteSentTo: email,
+    updatedAt:    new Date().toISOString(),
+  }, { merge: true });
+
+  return { ok: true, sentTo: email };
+});
+
 // Returns the signed manage-appointment URL for staff. Same URL the booking
 // confirmation + reminder emails contain, so staff can resend it directly
 // from the appt edit modal when a client says "I lost the email".
@@ -2888,15 +2941,22 @@ exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
   }
 
   const now  = new Date().toISOString();
-  const url  = `https://${tenantId}.tipflow.app`;
+  const url  = `https://${tenantId}.plumenexus.com`;
   const planVal = ['starter', 'pro', 'enterprise'].includes(plan) ? plan : 'starter';
 
-  // Create registry doc + provision in parallel
+  // Create registry doc + provision in parallel. Pre-populate the staffEmails
+  // array so isTenantStaff rule passes for the owner immediately (rules
+  // require the array form; saveUsers later re-derives it).
+  const ownerEmailLower = (ownerEmail || '').toLowerCase();
   await Promise.all([
     db.doc(`tenants/${tenantId}`).set({ name: salonName, ownerName: ownerName || '', ownerEmail, plan: planVal, active: true, createdAt: now }),
     db.doc(`tenants/${tenantId}/data/settings`).set({ timeoutMin: 5, createdAt: now }),
     db.doc(`tenants/${tenantId}/data/slides`).set({ slides: [], def: 0, cur: 0 }),
-    db.doc(`tenants/${tenantId}/data/users`).set({ users: [{ email: ownerEmail, role: 'admin', uid: '', addedAt: now }] }),
+    db.doc(`tenants/${tenantId}/data/users`).set({
+      users: [{ email: ownerEmail, role: 'admin', uid: '', addedAt: now }],
+      staffEmails: [ownerEmailLower],
+      adminEmails: [ownerEmailLower],
+    }),
   ]);
 
   // Send welcome email
@@ -2904,9 +2964,9 @@ exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
   if (apiKey) {
     const resend = new Resend(apiKey);
     await resend.emails.send({
-      from: 'TipFlow <hello@tipflow.app>',
+      from: resendFrom.value(),
       to:   ownerEmail,
-      subject: `Welcome to TipFlow — ${salonName} is ready`,
+      subject: `Welcome to Plume Nexus — ${salonName} is ready`,
       html: buildWelcomeHtml(salonName, ownerEmail, tenantId, url),
     }).catch(e => console.error('[Onboarding] welcome email failed:', e.message));
   }
