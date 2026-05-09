@@ -1,5 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import {
+  getFirestore,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
@@ -22,11 +23,21 @@ const app = initializeApp(FIREBASE_CONFIG);
 // when the network drops and sync automatically when it returns. Multi-tab
 // manager lets the kiosk + admin browser tab + a tech's phone share one
 // IndexedDB on the same device without stomping each other.
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager(),
-  }),
-});
+//
+// Fallback: if persistence init throws (private browsing, corrupted IDB,
+// multi-tab lock contention), drop to in-memory and keep the app working.
+let _db;
+try {
+  _db = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
+  });
+} catch (e) {
+  console.warn('[Firestore] persistent cache init failed, falling back to memory:', e?.message);
+  _db = getFirestore(app);
+}
+export const db = _db;
 export const auth      = getAuth(app);
 export const functions = getFunctions(app);
 export const callFn    = (name) => httpsCallable(functions, name);
