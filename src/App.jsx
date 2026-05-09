@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { BUILD_LABEL } from './lib/version';
 import { TENANT_ID } from './lib/tenant';
