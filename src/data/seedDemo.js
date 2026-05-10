@@ -5,8 +5,19 @@ import {
   saveAppointment, saveClient, createReceipt,
   fetchDemoReceipts, deleteReceipt,
   createGiftCard, fetchDemoGiftCards, deleteGiftCard,
-  fetchProducts,
+  fetchProducts, deleteProduct,
+  createPromoCode, fetchPromoCodes,
+  createMembership, createMembershipPlan, fetchMembershipPlans, fetchMemberships, deleteMembership, saveMembership,
+  createTimeOff, fetchTimeOff, deleteTimeOff,
+  createBonus, fetchBonuses, deleteBonus,
+  saveWebfrontConfig, fetchWebfrontConfig,
+  addToWaitlist,
+  createCampaign,
 } from '../lib/firestore';
+import { db } from '../lib/firebase';
+import { TENANT_ID } from '../lib/tenant';
+import { collection, getDocs, query, where, deleteDoc, doc } from 'firebase/firestore';
+import { seedProducts as seedProductCatalog } from './seedProducts';
 
 // ── Name pools ─────────────────────────────────────────
 const FIRST_NAMES = [
@@ -1224,6 +1235,251 @@ function randomCode(len) {
   return s;
 }
 
+// ── Helpers for the auxiliary seeders below ─────────────
+const dPlus  = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const isoNow = () => new Date().toISOString();
+
+// ── Promo codes ────────────────────────────────────────
+export async function seedDemoPromos(onProgress) {
+  const promos = [
+    { code: 'WELCOME20', type: 'percent', value: 20, active: true,  startDate: dPlus(-30), endDate: dPlus(60), singleUse: false, usedCount: 12, description: 'Welcome 20% off any service for new clients' },
+    { code: 'BIRTHDAY10',type: 'amount',  value: 10, active: true,  startDate: dPlus(-365),endDate: dPlus(365),singleUse: false, usedCount: 47, description: '$10 off in your birthday month' },
+    { code: 'REFER15',   type: 'percent', value: 15, active: true,  startDate: dPlus(-90), endDate: dPlus(90), singleUse: false, usedCount: 8,  description: 'Refer-a-friend 15% off for both' },
+    { code: 'SUMMER25',  type: 'percent', value: 25, active: false, startDate: dPlus(-120),endDate: dPlus(-30),singleUse: false, usedCount: 31, description: 'Summer special — expired' },
+    { code: 'VIPMOM',    type: 'amount',  value: 20, active: true,  startDate: dPlus(-60), endDate: dPlus(60), singleUse: false, usedCount: 5,  description: '$20 off — Mother\'s Day VIPs' },
+    { code: 'BLACKFRI30',type: 'percent', value: 30, active: true,  startDate: dPlus(-7),  endDate: dPlus(7),  singleUse: false, usedCount: 0,  description: 'Black Friday flash 30% off' },
+  ];
+  onProgress?.(`Creating ${promos.length} promo codes…`);
+  for (const p of promos) {
+    await createPromoCode({ ...p, _demo: true });
+  }
+  return promos.length;
+}
+
+// ── Memberships (1 plan + ~20 active subscribers) ──────
+export async function seedDemoMemberships(onProgress, allClients) {
+  onProgress?.('Creating membership plan…');
+  const planId = await createMembershipPlan({
+    name: 'VIP Monthly',
+    price: 79,
+    billingPeriod: 'monthly',
+    description: '1 manicure + 1 pedicure per month, 10% off all retail, priority booking.',
+    perks: ['1 manicure / month', '1 pedicure / month', '10% off retail', 'Priority booking'],
+    active: true,
+    _demo: true,
+  });
+
+  // Pick ~20 clients from the celebrity list for active memberships (they
+  // tend to be the higher-spend names so it's plausible they'd be VIPs).
+  const candidates = allClients.filter(c => c.name && allClients.indexOf(c) < 50).slice(0, 20);
+  onProgress?.(`Subscribing ${candidates.length} VIP members…`);
+  let count = 0;
+  for (const client of candidates) {
+    await createMembership({
+      planId,
+      clientId: client.id,
+      clientName: client.name,
+      status: 'active',
+      startedAt: dPlus(-Math.floor(Math.random() * 180)) + 'T12:00:00.000Z',
+      _demo: true,
+    });
+    count++;
+  }
+  return { plans: 1, members: count };
+}
+
+// ── Time off entries for techs ─────────────────────────
+export async function seedDemoTimeOff(onProgress) {
+  // Mirror the demo techs created by onboard-test-tenant; for Meraki this
+  // also matches first names so the entries actually attach to a real tech.
+  const entries = [
+    { techName: 'Alex Rivers',   type: 'vacation', startDate: dPlus(7),  endDate: dPlus(11), allDay: true,  reason: 'Family vacation' },
+    { techName: 'Jamie Chen',    type: 'sick',     startDate: dPlus(-3), endDate: dPlus(-3), allDay: true,  reason: 'Out sick' },
+    { techName: 'Morgan Lee',    type: 'personal', startDate: dPlus(14), endDate: dPlus(14), allDay: false, startTime: '13:00', endTime: '17:00', reason: 'Doctor appointment' },
+    { techName: 'Yasmin D',      type: 'vacation', startDate: dPlus(21), endDate: dPlus(28), allDay: true,  reason: 'Vacation' },
+    { techName: 'Samantha T',    type: 'personal', startDate: dPlus(-10),endDate: dPlus(-10),allDay: true,  reason: 'Personal' },
+  ];
+  onProgress?.(`Creating ${entries.length} time-off entries…`);
+  for (const e of entries) {
+    await createTimeOff({ ...e, _demo: true });
+  }
+  return entries.length;
+}
+
+// ── Sample Google reviews (cached on data/googleReviews) ──
+export async function seedDemoReviews(onProgress) {
+  const reviews = [
+    { name: 'Brittany Walsh',   rating: 5, text: 'Best gel manicure I have ever had. Booking was super easy and they confirmed the same day.',                date: '2 weeks ago',  photoUrl: null, authorUrl: null },
+    { name: 'Sarah Williams',   rating: 5, text: 'Love this place! Alex did a perfect French set, will be back monthly.',                                     date: '3 weeks ago',  photoUrl: null, authorUrl: null },
+    { name: 'Vanessa Martinez', rating: 5, text: 'Spa pedicure was incredible. Clean, calm, and Jamie was so attentive.',                                     date: '1 month ago',  photoUrl: null, authorUrl: null },
+    { name: 'Olivia Brooks',    rating: 4, text: 'Great service, just wish they had more weekend availability. Polish lasted 3 weeks!',                       date: '1 month ago',  photoUrl: null, authorUrl: null },
+    { name: 'Hannah Patel',     rating: 5, text: 'Morgan is a Gel-X queen. Got compliments on my nails for two solid weeks.',                                date: '2 months ago', photoUrl: null, authorUrl: null },
+    { name: 'Kayla Nguyen',     rating: 5, text: 'My birthday treat to myself — felt so welcomed. Definitely my new spot.',                                  date: '2 months ago', photoUrl: null, authorUrl: null },
+    { name: 'Emily Carter',     rating: 5, text: 'I have tried every salon in town. This is the only one I trust with my nails now.',                        date: '3 months ago', photoUrl: null, authorUrl: null },
+    { name: 'Nicole Cooper',    rating: 4, text: 'Loved the manicure, parking is a tiny bit tricky. Worth it though!',                                       date: '3 months ago', photoUrl: null, authorUrl: null },
+  ];
+  onProgress?.(`Caching ${reviews.length} Google reviews…`);
+  const wf = await fetchWebfrontConfig().catch(() => ({}));
+  await saveWebfrontConfig({
+    ...(wf || {}),
+    googleReviews: {
+      reviews,
+      rating: 4.9,
+      userRatingCount: 87,
+      refreshedAt: isoNow(),
+      _demo: true,
+    },
+  });
+  return reviews.length;
+}
+
+// ── HR bonuses ─────────────────────────────────────────
+export async function seedDemoBonuses(onProgress) {
+  const bonuses = [
+    { techName: 'Alex Rivers',   amount: 250, reason: 'Top retail seller — Q3',           date: dPlus(-90) },
+    { techName: 'Jamie Chen',    amount: 150, reason: 'Perfect attendance bonus',         date: dPlus(-60) },
+    { techName: 'Morgan Lee',    amount: 200, reason: 'Most 5-star reviews this quarter', date: dPlus(-30) },
+    { techName: 'Alex Rivers',   amount: 500, reason: 'Holiday bonus 2025',               date: dPlus(-180) },
+    { techName: 'Yasmin D',      amount: 300, reason: 'Employee of the month',            date: dPlus(-15) },
+  ];
+  onProgress?.(`Creating ${bonuses.length} bonuses…`);
+  for (const b of bonuses) {
+    await createBonus({ ...b, _demo: true });
+  }
+  return bonuses.length;
+}
+
+// ── Walk-in queue history (last 30 days) ───────────────
+// Not necessarily today's queue — most are completed entries that show up
+// in the queue / arrivals reports.
+export async function seedDemoWaitlist(onProgress, allClients) {
+  const SVC_NAMES = ['Classic Manicure', 'Gel Manicure', 'Spa Pedicure', 'Gel-X Full Set'];
+  const TECHS     = ['Alex Rivers', 'Jamie Chen', 'Morgan Lee', 'Any'];
+  const STATUSES  = ['seated', 'seated', 'seated', 'cancelled', 'no_show'];
+  const entries = [];
+  for (let i = 0; i < 20; i++) {
+    const c = allClients[Math.floor(Math.random() * allClients.length)];
+    const daysAgo = 1 + Math.floor(Math.random() * 30);
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    const date = d.toISOString().slice(0, 10);
+    entries.push({
+      clientName:  c.name,
+      clientPhone: '',
+      clientId:    c.id,
+      serviceName: SVC_NAMES[Math.floor(Math.random() * SVC_NAMES.length)],
+      techName:    TECHS[Math.floor(Math.random() * TECHS.length)],
+      isWalkIn:    true,
+      hasAppointment: false,
+      status:      STATUSES[Math.floor(Math.random() * STATUSES.length)],
+      date,
+      addedAt:     d.toISOString(),
+      _demo:       true,
+    });
+  }
+  onProgress?.(`Creating ${entries.length} walk-in queue entries…`);
+  // Use the raw collection (addToWaitlist forces today's date — we want
+  // historical entries here).
+  for (const e of entries) {
+    await import('firebase/firestore').then(({ collection: c, addDoc }) =>
+      addDoc(c(db, 'tenants', TENANT_ID, 'waitlist'), e)
+    );
+  }
+  return entries.length;
+}
+
+// ── Marketing campaigns (2 sent + 1 scheduled) ─────────
+export async function seedDemoCampaigns(onProgress) {
+  const sent = [
+    {
+      name: 'Summer Sale 2026',
+      subject: '☀️ 25% off all services — this week only',
+      body: 'Hi {firstName}!\n\nSummer is here and so is our biggest sale of the year. Use code SUMMER25 at checkout for 25% off any service. Book before Friday — appointments are filling up fast.\n\nWe can\'t wait to see you 💅',
+      channel: 'email',
+      status: 'sent',
+      sentAt: dPlus(-90) + 'T10:00:00.000Z',
+      sentCount: 327,
+      failCount: 4,
+    },
+    {
+      name: 'Holiday Hours Update',
+      subject: 'Holiday hours + last appointments before Christmas',
+      body: 'Hi {firstName}, just a quick heads-up on our holiday schedule. We\'re open through Dec 23 and back Dec 28. Book your last appointment of the year now — slots are going quick!',
+      channel: 'email',
+      status: 'sent',
+      sentAt: dPlus(-30) + 'T09:00:00.000Z',
+      sentCount: 289,
+      failCount: 2,
+    },
+  ];
+  const scheduled = {
+    name: 'Black Friday Flash',
+    subject: 'Black Friday: 30% off — code inside',
+    body: 'Hi {firstName}!\n\nOur biggest sale of the season starts Friday. Use {promoCode} at checkout for 30% off any service. Limited slots — book early!',
+    channel: 'email',
+    status: 'scheduled',
+    scheduleAt: dPlus(7) + 'T08:00:00.000Z',
+    promoCode: 'BLACKFRI30',
+  };
+  onProgress?.(`Creating ${sent.length + 1} marketing campaigns…`);
+  for (const c of sent)  await createCampaign({ ...c, _demo: true });
+  await createCampaign({ ...scheduled, _demo: true });
+  return sent.length + 1;
+}
+
+// ── Master seeder ──────────────────────────────────────
+// Orchestrates every demo seeder above into one flow. Resumable in spirit
+// — each sub-seeder is idempotent against `_demo: true` so re-running adds
+// duplicates rather than failing. Use clearDemoData first if you need a
+// clean slate.
+export async function seedFullDemo(onProgress) {
+  const stats = {};
+
+  onProgress?.('Step 1/9 · Seeding products…');
+  await seedProductCatalog(onProgress);
+  stats.products = 25;
+
+  onProgress?.('Step 2/9 · Seeding clients + appointments…');
+  const base = await seedDemoData(onProgress);
+  stats.clients      = base.clients;
+  stats.appointments = base.appointments;
+
+  // Re-fetch clients now that they're in Firestore — the auxiliary
+  // seeders need real ids.
+  const allClients = await fetchDemoClients();
+
+  onProgress?.('Step 3/9 · Backfilling receipts (services, gift cards, retail)…');
+  const tx = await backfillDemoTransactions(onProgress);
+  stats.receipts        = tx.receipts;
+  stats.cancelled       = tx.cancelled;
+  stats.noShow          = tx.noShow;
+  stats.giftCardSales   = tx.giftCardSales || 0;
+  stats.productSales    = tx.productSales || 0;
+
+  onProgress?.('Step 4/9 · Seeding promo codes…');
+  stats.promos = await seedDemoPromos(onProgress);
+
+  onProgress?.('Step 5/9 · Seeding memberships…');
+  const mem = await seedDemoMemberships(onProgress, allClients);
+  stats.memberships = mem.members;
+
+  onProgress?.('Step 6/9 · Seeding time off…');
+  stats.timeOff = await seedDemoTimeOff(onProgress);
+
+  onProgress?.('Step 7/9 · Seeding Google reviews…');
+  stats.reviews = await seedDemoReviews(onProgress);
+
+  onProgress?.('Step 8/9 · Seeding HR bonuses…');
+  stats.bonuses = await seedDemoBonuses(onProgress);
+
+  onProgress?.('Step 9/9 · Seeding walk-in queue history + marketing campaigns…');
+  stats.waitlist  = await seedDemoWaitlist(onProgress, allClients);
+  stats.campaigns = await seedDemoCampaigns(onProgress);
+
+  onProgress?.('Done!');
+  return stats;
+}
+
 // ── Clear ──────────────────────────────────────────────
 export async function clearDemoData(onProgress) {
   onProgress?.('Finding demo clients…');
@@ -1258,6 +1514,55 @@ export async function clearDemoData(onProgress) {
     if ((i + 1) % 50 === 0) onProgress?.(`Gift cards removed: ${i + 1} / ${demoGcs.length}`);
   }
 
+  // Helper: wipe all docs in a tenant collection that have _demo: true.
+  // Used by the auxiliary seeders below — each writes the flag, this
+  // function reads it back and deletes.
+  async function wipeByDemoFlag(collName) {
+    const col = collection(db, 'tenants', TENANT_ID, collName);
+    const snap = await getDocs(query(col, where('_demo', '==', true)));
+    for (const d of snap.docs) await deleteDoc(doc(col, d.id));
+    return snap.size;
+  }
+
+  onProgress?.('Removing demo products…');
+  const products = await wipeByDemoFlag('products');
+
+  onProgress?.('Removing demo promo codes…');
+  const promos = await wipeByDemoFlag('promoCodes');
+
+  onProgress?.('Removing demo memberships + plans…');
+  const memberships = await wipeByDemoFlag('memberships');
+  const memPlans    = await wipeByDemoFlag('membershipPlans');
+
+  onProgress?.('Removing demo time off…');
+  const timeOff = await wipeByDemoFlag('timeOff');
+
+  onProgress?.('Removing demo bonuses…');
+  const bonuses = await wipeByDemoFlag('bonuses');
+
+  onProgress?.('Removing demo waitlist entries…');
+  const waitlist = await wipeByDemoFlag('waitlist');
+
+  onProgress?.('Removing demo campaigns…');
+  const campaigns = await wipeByDemoFlag('campaigns');
+
+  // Demo Google reviews live on data/webfront.googleReviews._demo. Strip
+  // them by overwriting the field with an empty value if they're flagged.
+  onProgress?.('Clearing demo Google reviews…');
+  let reviewsCleared = 0;
+  try {
+    const wf = await fetchWebfrontConfig();
+    if (wf?.googleReviews?._demo) {
+      await saveWebfrontConfig({ ...(wf || {}), googleReviews: null });
+      reviewsCleared = (wf.googleReviews.reviews || []).length;
+    }
+  } catch { /* best-effort */ }
+
   onProgress?.('Done!');
-  return { clients: demoClients.length, appointments: demoAppts.length, receipts: demoReceipts.length, giftCards: demoGcs.length };
+  return {
+    clients: demoClients.length, appointments: demoAppts.length,
+    receipts: demoReceipts.length, giftCards: demoGcs.length,
+    products, promos, memberships, memPlans, timeOff, bonuses, waitlist, campaigns,
+    reviews: reviewsCleared,
+  };
 }

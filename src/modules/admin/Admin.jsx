@@ -17,7 +17,7 @@ import { ASSIGNMENT_METHODS, ASSIGNMENT_METHOD_LABELS, ASSIGNMENT_METHOD_DESCRIP
 import { MODULES, effectivePlan, isModuleAvailableForPlan, PLAN_RANK } from '../../lib/modules';
 import { formatTime } from '../../utils/helpers';
 import { logActivity } from '../../lib/logger';
-import { seedDemoData, clearDemoData, addFutureAppointments, backfillDemoTransactions } from '../../data/seedDemo';
+import { seedFullDemo, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
 import FeedbackModal from '../../components/FeedbackModal';
 import CsvImportSection from '../../components/CsvImportSection';
 
@@ -443,16 +443,10 @@ export default function Admin({ onClose }) {
                 <CsvImportSection />
               </div>
             </Section>
-            {/* Super-admin-only test data tools. Hidden from regular salon
+            {/* Super-admin-only demo seeder. Hidden from regular salon
                 owners — these create / wipe sample records and aren't
                 appropriate for production-tenant admin panels. */}
-            {isSuperAdmin && (
-              <Section title="🧪 Test Data (Super Admin)">
-                <div style={{ padding: '12px 14px' }}>
-                  <DemoSeedSection />
-                </div>
-              </Section>
-            )}
+            {isSuperAdmin && <DemoSeedSection />}
           </>
         )}
 
@@ -1204,12 +1198,13 @@ function DemoSeedSection() {
   const [phase,   setPhase]   = useState('idle');
 
   async function runSeed() {
-    if (!confirm('Populate with 500 regular + 500 celebrity clients and ~2,500 appointments (400 days past + today + 30 days future). Takes 10–15 min. Continue?')) return;
+    if (!confirm('Populate the demo tenant with: 25 retail products · 1,000 clients · ~2,500 appointments · receipts (with cancellations + no-shows + gift cards + retail sales) · 6 promo codes · 1 membership plan + 20 active members · 5 time-off entries · 8 Google reviews · 5 HR bonuses · 20 walk-in queue history entries · 3 marketing campaigns. Takes 10–15 min. Continue?')) return;
     setRunning(true); setPhase('idle'); setStatus('');
     try {
-      await seedDemoData(msg => setStatus(msg));
+      const stats = await seedFullDemo(msg => setStatus(msg));
+      setStatus(`Seeded: ${stats.clients} clients · ${stats.appointments} appts · ${stats.receipts} receipts · ${stats.products} products · ${stats.promos} promos · ${stats.memberships} members · ${stats.timeOff} time-off · ${stats.reviews} reviews · ${stats.bonuses} bonuses · ${stats.waitlist} walk-ins · ${stats.campaigns} campaigns.`);
       setPhase('seeded');
-      logActivity('demo_seeded', 'full seed');
+      logActivity('demo_seeded', `full seed: ${JSON.stringify(stats)}`);
     } catch (e) {
       setStatus('Error: ' + e.message); setPhase('error');
     } finally { setRunning(false); }
@@ -1227,26 +1222,13 @@ function DemoSeedSection() {
   }
 
   async function runClear() {
-    if (!confirm('Permanently delete all demo clients and appointments?')) return;
+    if (!confirm('Permanently delete ALL demo data: clients · appointments · receipts · gift cards · products · promos · memberships · time off · bonuses · waitlist · campaigns · cached Google reviews?')) return;
     setRunning(true); setPhase('idle'); setStatus('');
     try {
-      const result = await clearDemoData(msg => setStatus(msg));
-      setStatus(`Removed ${result.clients} clients, ${result.appointments} appts, ${result.receipts || 0} receipts, ${result.giftCards || 0} gift cards.`);
+      const r = await clearDemoData(msg => setStatus(msg));
+      setStatus(`Removed: ${r.clients}c · ${r.appointments}a · ${r.receipts}r · ${r.giftCards}gc · ${r.products}prod · ${r.promos}promo · ${r.memberships}m · ${r.memPlans}plans · ${r.timeOff}to · ${r.bonuses}b · ${r.waitlist}wl · ${r.campaigns}camp · ${r.reviews}rev.`);
       setPhase('cleared');
-      logActivity('demo_cleared', `${result.clients} clients · ${result.appointments} appts · ${result.receipts || 0} receipts · ${result.giftCards || 0} GC`);
-    } catch (e) {
-      setStatus('Error: ' + e.message); setPhase('error');
-    } finally { setRunning(false); }
-  }
-
-  async function runBackfill() {
-    if (!confirm('Backfill all past "done" demo appointments with realistic receipts (random method, tip, tax), plus 40 gift card sales and 50 retail product sales. Some appointments flip to Cancelled (~15%) and No-show (~10%) for variety. Continue?')) return;
-    setRunning(true); setPhase('idle'); setStatus('');
-    try {
-      const result = await backfillDemoTransactions(msg => setStatus(msg));
-      setStatus(`${result.receipts} appt receipts · ${result.cancelled} cancelled · ${result.noShow} no-shows · ${result.giftCardSales || 0} gift card sales · ${result.productSales || 0} product sales.`);
-      setPhase('seeded');
-      logActivity('demo_backfilled', `${result.receipts} receipts · ${result.cancelled} cancelled · ${result.noShow} no-shows · ${result.giftCardSales || 0} GC · ${result.productSales || 0} retail`);
+      logActivity('demo_cleared', JSON.stringify(r));
     } catch (e) {
       setStatus('Error: ' + e.message); setPhase('error');
     } finally { setRunning(false); }
@@ -1258,7 +1240,7 @@ function DemoSeedSection() {
     <Section title="🧪 Demo Data">
       <div style={{ padding: '12px 16px' }}>
         <div style={{ fontSize: 12, color: '#555', marginBottom: 10 }}>
-          Seed 500 regular + 500 celebrity clients with 400 days past (~13 months) + today + 30 days future appointments, or top-up with days 31–60 future without re-seeding.
+          One-click populate every module with realistic sample data: clients, appointments, receipts, products, promo codes, memberships, time off, Google reviews, HR bonuses, walk-in queue, and marketing campaigns. Use this to show the platform off without exposing real customer data.
         </div>
         {status && (
           <div style={{ fontSize: 12, color: phase === 'error' ? '#ef4444' : phase === 'cleared' || phase === 'seeded' ? '#16a34a' : '#888', marginBottom: 10, fontStyle: 'italic' }}>
@@ -1267,13 +1249,10 @@ function DemoSeedSection() {
         )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Btn color="#f59e0b" onClick={runSeed} disabled={running}>
-            {busy ? 'Running…' : '↓ Seed Demo Data'}
+            {busy ? 'Running…' : '↓ Seed Full Demo'}
           </Btn>
           <Btn color="#3D95CE" onClick={runAddFuture} disabled={running}>
-            {busy ? 'Running…' : '+ Add 1 Month Future'}
-          </Btn>
-          <Btn color="#7c3aed" onClick={runBackfill} disabled={running}>
-            {busy ? 'Running…' : '$ Backfill Receipts'}
+            {busy ? 'Running…' : '+ Top-up Future Appts'}
           </Btn>
           <Btn color="#ef4444" onClick={runClear} disabled={running}>
             {busy ? 'Removing…' : '× Remove All Demo'}
