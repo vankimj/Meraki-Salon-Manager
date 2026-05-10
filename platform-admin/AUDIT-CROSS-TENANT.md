@@ -1,6 +1,6 @@
 # Cross-Tenant Access Audit
 
-**Status:** Audit v4 (2026-05-10)
+**Status:** Audit v5 (2026-05-10)
 **Owner:** Jonathan VanKim
 **Purpose:** Methodical review of every cloud function and access path to verify principle #10 — *founder cannot read tenant customer data without invitation*. Documents what each function does, who can call it, what data it touches, and whether it could leak data to the founder's UI.
 **Cadence:** Re-run before every release that adds new functions or changes access patterns.
@@ -42,7 +42,7 @@ Pattern: `request.auth.token.email` is checked against the tenant's user list. C
 | `getApptManageLink` | Generate magic link for client to manage own appt | Tenant-staff signed |
 | `manageAppointment` | Client self-serve appt management via magic link | Token-validated, single-appt scope |
 | `refreshGoogleReviews` | Re-fetch Google reviews | Auth-checked tenant-staff |
-| `chatWithSalon` | Public-website AI chatbot | Tenant-scoped via `TENANT_ID` (currently Meraki only) |
+| `chatWithSalon` | Public-website AI chatbot | Accepts tenantId (v5); 60/hr per-IP rate limit |
 | `chatWithReports` | Reports → Ask AI tab | Auth-checked tenant-admin, read-only AI tools, returns answers about that tenant only |
 | `voiceCommand` | Voice AI booking action | Auth-checked tenant-admin/scheduler |
 | `draftConflictMessages` | AI-drafted conflict-resolution texts | Auth-checked tenant-staff |
@@ -172,8 +172,8 @@ Pattern: cron-driven functions that fan out across every active tenant via the `
 ### Before tenant #2 onboards
 1. ✅ **Done (v2 — 2026-05-09)** — 6 cron-driven scheduled functions refactored to iterate all active tenants via `forEachActiveTenant`.
 2. ✅ **Done (v3 — 2026-05-10)** — 9 document triggers refactored to use `tenants/{tenantId}/...` wildcard paths and `event.params.tenantId`. Includes `notifyOnCheckIn` (added in the v2 PII hardening pass) which the v2 audit had missed. `buildReminderHtml` helper updated to take `tenantId` as a parameter so its `apptManageUrl` call resolves to the correct tenant.
-3. **Refactor `chatWithSalon`** (public-facing salon chatbot) to accept tenantId as a request parameter instead of hardcoded `TENANT_ID`. Tenant identified by subdomain or query param.
-4. **Audit all `webfront` config endpoints** to make sure they accept tenantId param.
+3. ✅ **Done (v5 — 2026-05-10)** — `chatWithSalon`, `chatWithReports`, `voiceCommand`, `draftConflictMessages`, `createPaymentIntent`, and `refreshGoogleReviews` all accept `tenantId` from request data (validated `[a-z0-9-]{1,64}`), fall back to `TENANT_ID` for legacy callers, and gate auth/staff/admin checks against the supplied id. `chatWithSalon` got an IP-rate-limit (60/hr) since it's public + bills Anthropic per call. Frontend salon-app callers (CheckoutModal, ScheduleAdmin, VoiceAssistant, ReportsAdmin, SalonWebfront, Admin) now pass `tenantId: TENANT_ID` from the subdomain-resolved constant in `src/lib/tenant.js`.
+4. **Audit all `webfront` config endpoints** — frontend `fetchWebfrontConfig`/`fetchGoogleReviews` are already multi-tenant via the subdomain-resolved `tenantDoc()` helper (no changes needed). Cloud-function `refreshGoogleReviews` swept up under #3 above.
 5. **Replace TenantsTab in salon app** with deep-link to platform admin (`platform-admin.web.app`).
 6. ✅ **Done (v4 — 2026-05-10)** — `RESEND_FROM` env var removed in favor of `tenantFromAddress(db, tenantId)` helper. Default sender is `${tenantName} <noreply@plumenexus.com>`; per-tenant override via `tenants/{id}.fromAddress` (used by Meraki to keep sending from `noreply@merakinailstudio.com`). The two platform-level emails — onboarding welcome and `submitContactInquiry` admin notification — explicitly hardcode `Plume Nexus <noreply@plumenexus.com>` since they're not tenant-bound. **Open prerequisite for tenant #2:** verify `plumenexus.com` in Resend (DKIM/SPF DNS records) — until then any new tenant without a `fromAddress` override would send-fail.
 
@@ -187,6 +187,7 @@ Pattern: cron-driven functions that fan out across every active tenant via the `
 
 ## Document changelog
 
+- **v5 — 2026-05-10** — 6 callables refactored to accept `tenantId` as a request param: `chatWithSalon`, `chatWithReports`, `voiceCommand`, `draftConflictMessages`, `createPaymentIntent`, `refreshGoogleReviews`. Each validates the id format and gates `requireTenantStaff`/`requireTenantAdmin` against the supplied id rather than the hardcoded constant. `chatWithSalon` adds a 60/hr per-IP rate limit since it's public + bills Anthropic. Frontend salon-app surfaces (booking page chat, reports AI, voice assistant, conflict-message drafter, POS Stripe checkout, webfront-tab Google reviews refresh) updated to pass `tenantId: TENANT_ID` from the subdomain-resolved constant. The branding fallbacks (booking URL, salon name in system prompts) prefer per-tenant data and only fall back to Meraki defaults when the legacy `tid || TENANT_ID` path triggers.
 - **v4 — 2026-05-10** — `RESEND_FROM` env var replaced by `tenantFromAddress(db, tenantId)` helper that resolves to either `tenants/{id}.fromAddress` (BYO override) or the shared `${tenantName} <noreply@plumenexus.com>`. ~25 send-sites refactored. In-process per-tenantId cache (Map) avoids one Firestore read per outbound email. Two platform sends (onboarding welcome, contact-inquiry notification) bypass the helper and hardcode the platform identity since they're not tenant-bound. Discovered + fixed a quiet regression: `tenants/meraki` document didn't exist (Meraki predates the SaaS tenant-doc schema); `forEachActiveTenant` uses `.get()` on the tenants collection, which excludes implicit parents — so the v2 scheduled-function fan-out had been silently no-op for Meraki for ~24 hours. New script `scripts/set-meraki-from-address.cjs` creates / heals the Meraki registry doc with name, ownerEmail, fromAddress, active, subdomain, aliases.
 - **v3 — 2026-05-10** — All 9 remaining document triggers refactored to `tenants/{tenantId}/...` wildcard paths with `event.params.tenantId` reads. Includes `notifyOnCheckIn` (which the v2 audit didn't flag — it was added during the v2 PII hardening pass and inherited the same hardcoded path). Twilio + Stripe billing + Gusto `defineString`/`defineSecret` declarations moved to top-of-file so scheduled-function `secrets:` arrays don't hit the const temporal-dead-zone at module load.
 - **v2 — 2026-05-09** — 6 of the 8 scheduled functions refactored to iterate all active tenants via the new `forEachActiveTenant(label, cb, options)` helper in functions/index.js. Birthday + lapsed campaigns opt into `{ skipPaused: true }`. `generateAnnual1099s` deferred (annual cadence, low priority). Document triggers (8 in Category B) still bind their `document:` paths to `${TENANT_ID}` and need a separate refactor — added to "Before tenant #2 onboards" recommendations.
