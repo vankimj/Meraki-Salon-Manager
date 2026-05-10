@@ -16,7 +16,13 @@ import { useState } from 'react';
 //                that read `appt.notes` keep working.
 //
 // Append-only by design (delete is allowed; in-place edit is not).
-export default function NotesEditor({ entries, legacy, onChange, viewOnly, author }) {
+//
+// `enableSoap` gates the SOAP-format composer — most salons (nail, hair,
+// barbershop) don't need clinical notes, and the extra button adds noise.
+// Med spas / lash / brow / treatment-heavy shops can opt in via Settings
+// → "Enable clinical (SOAP) notes". When false, only free-form notes can
+// be composed; existing SOAP-typed entries still render fully.
+export default function NotesEditor({ entries, legacy, onChange, viewOnly, author, enableSoap = false }) {
   const [composer, setComposer] = useState(null); // null | 'free' | 'soap'
   const [draft,    setDraft]    = useState('');
   const [soap,     setSoap]     = useState({ s: '', o: '', a: '', p: '' });
@@ -112,13 +118,13 @@ export default function NotesEditor({ entries, legacy, onChange, viewOnly, autho
       {!viewOnly && composer == null && (
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
           <button onClick={() => setComposer('free')}
-            style={{ flex: 2, padding: '8px 10px', borderRadius: 8, border: '1px dashed #bfdbfe', background: '#eff6ff', color: '#1e40af', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+            style={{ flex: enableSoap ? 2 : 1, padding: '8px 10px', borderRadius: 8, border: '1px dashed #bfdbfe', background: '#eff6ff', color: '#1e40af', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
             + Add note
           </button>
-          <button onClick={() => setComposer('soap')} title="Clinical SOAP-format note: Subjective / Objective / Assessment / Plan"
+          {enableSoap && <button onClick={() => setComposer('soap')} title="Clinical SOAP-format note: Subjective / Objective / Assessment / Plan"
             style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px dashed #c7d2fe', background: '#eef2ff', color: '#4338ca', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
             + SOAP note
-          </button>
+          </button>}
         </div>
       )}
 

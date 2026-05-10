@@ -3,6 +3,8 @@ import { fetchServices, createService, saveService, deleteService, servicesExist
 import { groupByCategory, formatPrice, formatDuration, validateService, blankService } from '../../utils/serviceHelpers';
 import { SEED_SERVICES, CATEGORY_ORDER } from '../../data/seedServices';
 import { logActivity } from '../../lib/logger';
+import EmptyState from '../../components/EmptyState';
+import CoachMark from '../../components/CoachMark';
 import { resizeImg } from '../../utils/helpers';
 import { useApp } from '../../context/AppContext';
 
@@ -273,7 +275,14 @@ export default function ServicesAdmin() {
         </div>
       </div>
 
-      {groups.length === 0 && <Empty>No services yet — click Add Service to start.</Empty>}
+      {groups.length === 0 && (
+        <EmptyState
+          icon="✂️"
+          title="Set up your service menu"
+          description="Add the services you offer (manicures, pedicures, lashes, etc.) with their durations and prices. Clients see this list when booking online, and the schedule auto-blocks time based on the service duration."
+          actions={!isTech ? [{ label: '+ Add a service', onClick: () => { setEditing(blankService()); setErrors({}); } }] : []}
+        />
+      )}
 
       {groups.map(({ category, services: svcs }) => (
         <div key={category} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', marginBottom: 14, overflow: 'hidden' }}>
@@ -317,6 +326,13 @@ export default function ServicesAdmin() {
           onClose={() => { setEditing(null); setErrors({}); }}
         />
       )}
+
+      <CoachMark
+        id="services_intro"
+        icon="✂️"
+        title="This menu drives your booking page"
+        body="The services here are exactly what clients see when they book online. Set duration + price for each — the schedule auto-blocks the right amount of time when one is picked. Group them with categories for a tidy menu."
+      />
     </div>
   );
 }

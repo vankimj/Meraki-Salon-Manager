@@ -3,6 +3,7 @@ import { fetchAppointmentsByRange, fetchClients, fetchReceiptsByRange, fetchEmpl
 import { useApp } from '../../context/AppContext';
 import { generate1099NecPdf } from '../../lib/pdf1099';
 import { todayStr, apptRevenue, apptToSyntheticReceipt, buildTransactions, computeMetrics, computeCancellations } from './metrics';
+import CoachMark from '../../components/CoachMark';
 
 
 function startOf(daysAgo) {
@@ -405,6 +406,13 @@ export default function ReportsAdmin() {
           )}
         </>
       )}
+
+      <CoachMark
+        id="reports_intro"
+        icon="📊"
+        title="Try the AI assistant"
+        body='Click "Ask AI" up top and ask plain-English questions like "how many first-time visitors did I get last month?" or "who were my top 5 clients in March by spend?" Beats clicking through filters.'
+      />
     </div>
   );
 }

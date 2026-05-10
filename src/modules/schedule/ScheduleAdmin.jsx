@@ -9,6 +9,7 @@ import { notifyAffectedTechs } from '../../lib/notifications';
 import { resizeImg } from '../../utils/helpers';
 import VoiceAssistant from '../voice/VoiceAssistant';
 import NotesEditor from '../../components/NotesEditor';
+import CoachMark from '../../components/CoachMark';
 
 const FALLBACK_TECHS = ['Yasmin D', 'Audriana L', 'Samantha T', 'Tess D', 'Elizabeth L', 'Yan W', 'Jen T', 'Marisela I', 'Ana P', 'Jenesis B'];
 
@@ -235,6 +236,10 @@ export default function ScheduleAdmin({ onOpenClient } = {}) {
   const [showAll,          setShowAll]          = useState(false);
   const [showHours,        setShowHours]        = useState(false);
   const [showTimeOff,      setShowTimeOff]      = useState(false);
+  // Toolbar overflow menu — collapses infrequent controls (Hours,
+  // Time Off, future settings) under a single ⚙ button so the daily
+  // toolbar stays uncluttered for non-tech-savvy salon owners.
+  const [showToolbarMenu,  setShowToolbarMenu]  = useState(false);
   const [timeOff,          setTimeOff]          = useState([]);
   const [visibleTechNames, setVisibleTechNames] = useState(null);
   // Single-tech focus mode. Click a column header in the day grid to zoom
@@ -716,17 +721,54 @@ function openNew(techName, slotMins) {
           );
         })()}
 
-        {isAdmin && (
-          <button onClick={() => setShowHours(true)} title="Edit store hours"
-            style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fff', color: '#555', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
-            🕐 Hours
-          </button>
-        )}
+        {/* Overflow menu — keeps the toolbar focused on daily controls
+            (date nav, view toggle, queue) and tucks infrequent ones
+            (Hours, Time Off) under a single ⚙ button. Closed by
+            default; clicking outside dismisses it. */}
         {(isAdmin || isScheduler || isTech) && (
-          <button onClick={() => setShowTimeOff(true)} title="Vacation / sick / personal time off"
-            style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fff', color: '#555', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
-            🌴 Time Off
-          </button>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button onClick={() => setShowToolbarMenu(o => !o)}
+              title="Schedule options"
+              style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: `1px solid ${showToolbarMenu ? '#3D95CE' : '#d8d8d8'}`, background: showToolbarMenu ? '#eff6ff' : '#fff', color: showToolbarMenu ? '#1e40af' : '#555', cursor: 'pointer', fontFamily: 'inherit' }}>
+              ⚙ Options
+            </button>
+            {showToolbarMenu && (
+              <>
+                {/* Click-away catcher */}
+                <div onClick={() => setShowToolbarMenu(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 19, background: 'transparent' }} />
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+                  background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8,
+                  boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 20,
+                  minWidth: 200, padding: 4,
+                }}>
+                  {isAdmin && (
+                    <button onClick={() => { setShowHours(true); setShowToolbarMenu(false); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 10px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: '#333', borderRadius: 6 }}
+                      onMouseEnter={e => e.currentTarget.style.background = '#f5f9ff'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <span>🕐</span>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>Store hours</div>
+                        <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>Open / close times by day</div>
+                      </div>
+                    </button>
+                  )}
+                  <button onClick={() => { setShowTimeOff(true); setShowToolbarMenu(false); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 10px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: '#333', borderRadius: 6 }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#f5f9ff'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <span>🌴</span>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Time off</div>
+                      <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>Vacation / sick / personal</div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
       {showHours && <HoursModal settings={settings} updateSettings={updateSettings} onClose={() => setShowHours(false)} />}
@@ -1082,6 +1124,15 @@ function openNew(techName, slotMins) {
       )}
 
       <VoiceAssistant clients={clients} services={services} techs={techs} />
+
+      {/* First-visit tip. Salon owners often miss the click-to-create +
+          drag-to-reschedule + tech-focus interactions on first encounter
+          with the day grid; one-time popover surfaces them. */}
+      <CoachMark
+        id="schedule_intro"
+        title="A few schedule shortcuts"
+        body="Click any empty slot to book an appointment. Drag an existing one to reschedule it. Tap a tech's name at the top of a column to zoom into just that tech's day."
+      />
     </div>
   );
 }
@@ -1350,11 +1401,11 @@ function WeekGrid({ weekStart, appts, clients, employees, allTechs, onApptClick,
                               {minsToStr(strToMins(appt.startTime))}
                             </div>
                             {appt.techRequestType === 'specific' ? (
-                              <span title="Client specifically requested this tech" style={{ fontSize: 13, color: '#ef4444', lineHeight: 1, fontWeight: 700 }}>★</span>
+                              <span title="Client asked for this tech" style={{ fontSize: 13, color: '#ef4444', lineHeight: 1, fontWeight: 700 }}>★</span>
                             ) : appt.techRequestType === 'auto' ? (
-                              <span title="No preference — auto-assigned" style={{ fontSize: 10, lineHeight: 1 }}>🎲</span>
+                              <span title="No preference — picked automatically" style={{ fontSize: 10, lineHeight: 1 }}>🎲</span>
                             ) : (
-                              <span title="Scheduler assigned this tech" style={{ fontSize: 10, lineHeight: 1 }}>📋</span>
+                              <span title="Front desk assigned this tech" style={{ fontSize: 10, lineHeight: 1 }}>📋</span>
                             )}
                             <span style={{ fontSize: 8, color: dot.color }}>{dot.label}</span>
                           </div>
@@ -1774,11 +1825,11 @@ function DayGrid({ date, appts, timeOff = [], techs, allTechs, techExtended, emp
               <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 {!isOverlap && (
                   appt.techRequestType === 'specific' ? (
-                    <span title="Client specifically requested this tech" style={{ fontSize: 14, color: '#ef4444', flexShrink: 0, lineHeight: 1, fontWeight: 700 }}>★</span>
+                    <span title="Client asked for this tech" style={{ fontSize: 14, color: '#ef4444', flexShrink: 0, lineHeight: 1, fontWeight: 700 }}>★</span>
                   ) : appt.techRequestType === 'auto' ? (
-                    <span title="No preference — auto-assigned" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>🎲</span>
+                    <span title="No preference — picked automatically" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>🎲</span>
                   ) : (
-                    <span title="Scheduler assigned this tech" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>📋</span>
+                    <span title="Front desk assigned this tech" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>📋</span>
                   )
                 )}
                 <div style={{ fontSize: isOverlap ? 11 : 13, fontWeight: 700, color: blockText, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -1840,6 +1891,13 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
   // visible warning and require an explicit override checkbox before saving.
   // Resets whenever the linked client changes.
   const [banOverrideAck, setBanOverrideAck] = useState(false);
+  // Collapsible "More options" disclosure that hides infrequent fields
+  // (the "Client asked for this tech" toggle, the recurring/Repeat
+  // section). Auto-opens when an existing appt already has any of those
+  // values set so the user doesn't lose track of an active setting.
+  const [advancedOpen, setAdvancedOpen] = useState(
+    appt.techRequestType === 'specific' || !!appt.recurrence
+  );
   const linkedClient = clients.find(c => c.id === appt.clientId);
   const linkedBanned = !!linkedClient?.banned;
   useEffect(() => { setBanOverrideAck(false); }, [appt.clientId]);
@@ -2360,25 +2418,15 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
             </Field>
           </div>
 
-          {/* Specifically requested toggle (manual override of techRequestType) */}
-          {isView ? (
-            (appt.techRequestType === 'specific') && (
-              <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#1a1a1a', fontWeight: 600 }}>
-                <span style={{ fontSize: 14, color: '#ef4444', fontWeight: 700 }}>★</span>
-                Client specifically requested {appt.techName}
-              </div>
-            )
-          ) : (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, border: `1.5px solid ${appt.techRequestType === 'specific' ? '#ef4444' : '#e8e8e8'}`, background: appt.techRequestType === 'specific' ? '#fef2f2' : '#fafafa', cursor: 'pointer', marginBottom: 10 }}>
-              <input type="checkbox"
-                checked={appt.techRequestType === 'specific'}
-                onChange={e => onChange({ techRequestType: e.target.checked ? 'specific' : 'scheduler' })}
-                style={{ accentColor: '#ef4444', cursor: 'pointer' }} />
-              <span style={{ fontSize: 13, fontWeight: 600, color: appt.techRequestType === 'specific' ? '#991b1b' : '#444' }}>
-                <span style={{ color: '#ef4444', fontWeight: 700, marginRight: 4 }}>★</span>
-                Client specifically requested this tech
-              </span>
-            </label>
+          {/* "Client asked for this tech" — view-mode shows the active
+              flag inline; the edit-mode checkbox lives under the
+              "More options" disclosure further down (uncommon setting,
+              kept off the default form to reduce clutter). */}
+          {isView && appt.techRequestType === 'specific' && (
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#1a1a1a', fontWeight: 600 }}>
+              <span style={{ fontSize: 14, color: '#ef4444', fontWeight: 700 }}>★</span>
+              Client asked for {appt.techName}
+            </div>
           )}
 
           {/* Date */}
@@ -2446,6 +2494,7 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
               onChange={notesLog => onChange({ notesLog })}
               viewOnly={isView}
               author={gUser?.email || gUser?.displayName || ''}
+              enableSoap={settings?.clinicalNotes === true}
             />
           </Field>
 
@@ -2598,13 +2647,40 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
             </div>
           )}
 
-          {/* Repeat — new appointments only */}
-          {!appt.id && !isView && (
-            <RepeatSection
-              recurrence={appt.recurrence}
-              date={appt.date}
-              onChange={onChange}
-            />
+          {/* More options — disclosure for infrequent fields. Most
+              bookings don't touch the "client asked for this tech" flag
+              or recurring schedules, so they're hidden behind a single
+              link to keep the default modal short. */}
+          {!isView && (
+            <div style={{ marginBottom: 10 }}>
+              <button onClick={() => setAdvancedOpen(o => !o)} type="button"
+                style={{ background: 'none', border: 'none', color: '#3D95CE', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '6px 0', fontFamily: 'inherit' }}>
+                {advancedOpen ? '▾ Hide more options' : '▸ More options · client asked for tech, repeat'}
+              </button>
+              {advancedOpen && (
+                <div style={{ marginTop: 8, paddingTop: 10, borderTop: '1px dashed #e5e7eb' }}>
+                  {/* "Client asked for this tech" checkbox */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, border: `1.5px solid ${appt.techRequestType === 'specific' ? '#ef4444' : '#e8e8e8'}`, background: appt.techRequestType === 'specific' ? '#fef2f2' : '#fafafa', cursor: 'pointer', marginBottom: 10 }}>
+                    <input type="checkbox"
+                      checked={appt.techRequestType === 'specific'}
+                      onChange={e => onChange({ techRequestType: e.target.checked ? 'specific' : 'scheduler' })}
+                      style={{ accentColor: '#ef4444', cursor: 'pointer' }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: appt.techRequestType === 'specific' ? '#991b1b' : '#444' }}>
+                      <span style={{ color: '#ef4444', fontWeight: 700, marginRight: 4 }}>★</span>
+                      Client asked for this tech
+                    </span>
+                  </label>
+                  {/* Recurring repeat — new appointments only */}
+                  {!appt.id && (
+                    <RepeatSection
+                      recurrence={appt.recurrence}
+                      date={appt.date}
+                      onChange={onChange}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Photos */}
@@ -3594,7 +3670,7 @@ function TimeOffConflictView({ affected, draftEntry, techs, employees, services,
           return (
             <div key={a.id} style={{ border: `1px solid ${isSpecific ? '#fca5a5' : '#e8e8e8'}`, borderRadius: 10, padding: 10, background: isSpecific ? '#fef2f2' : '#fff' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                {isSpecific && <span title="Client specifically requested this tech" style={{ color: '#ef4444', fontWeight: 700, fontSize: 14 }}>⭐</span>}
+                {isSpecific && <span title="Client asked for this tech" style={{ color: '#ef4444', fontWeight: 700, fontSize: 14 }}>⭐</span>}
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', flex: 1 }}>
                   {a.clientName || 'Walk-in'}
                 </div>

@@ -26,8 +26,8 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
   function previewLabel(va) {
     if (!va) return '';
     if (va.role === 'tech') return va.techName;
-    if (va.role === 'scheduler') return 'Scheduler';
-    return 'Read-only';
+    if (va.role === 'scheduler') return 'Front desk';
+    return 'View only';
   }
 
   function parsePreview(val) {

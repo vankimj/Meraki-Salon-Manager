@@ -185,8 +185,16 @@ service cloud.firestore {
               isShortString(request.resource.data.notes, 500))
         );
         allow delete:         if isTenantStaff(tenantId);
-        allow update:         if isTenantStaff(tenantId) ||
-                                 request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkedInAt']);
+        // Public update is single-shot only: a check-in can fire at most
+        // once per appointment. Without this, a public caller (knowing
+        // the apptId) can flap `checkedInAt` null↔value repeatedly to
+        // re-trigger the `notifyOnCheckIn` Firestore trigger and email-
+        // bomb the assigned tech via the salon's verified Resend domain.
+        allow update:         if isTenantStaff(tenantId) || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkedInAt'])
+          && resource.data.get('checkedInAt', null) == null
+          && request.resource.data.checkedInAt is string
+        );
       }
 
       // Time off (vacation/sick/personal): staff read so the day grid can

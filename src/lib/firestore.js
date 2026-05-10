@@ -60,7 +60,8 @@ export async function loadAll() {
     users:         fullArray ?? legacyArray ?? [],
     staffEmails:   projection.staffEmails ?? null,
     adminEmails:   projection.adminEmails ?? null,
-    byEmail:       projection.byEmail     ?? {},
+    // byEmail intentionally not returned — replaced by getMyTenantRole
+    // callable so non-admin self-lookup doesn't expose coworker roles.
     settings:      settingsDoc?.exists() ? settingsDoc.data() : {},
   };
 }
@@ -73,10 +74,10 @@ export async function ensureStaffEmailsBackfill(users) {
   try {
     await Promise.all([
       setDoc(USERS_REF, {
-        users:       deleteField(),                     // purge from projection
+        users:       deleteField(),         // purge legacy users[]
+        byEmail:     deleteField(),         // purge legacy byEmail leak
         staffEmails: buildStaffEmails(users),
         adminEmails: buildAdminEmails(users),
-        byEmail:     buildByEmail(users),
       }, { merge: true }),
       setDoc(USERS_FULL_REF, { users }, { merge: true }),
     ]);
@@ -108,21 +109,15 @@ export function buildStaffEmails(users) {
 export function buildAdminEmails(users) {
   return emailsByRole(users, u => u.role === 'admin');
 }
-// Slim self-lookup map: email -> { role, techName? }. Lets a non-admin
-// staff member find their own role without exposing every coworker's
-// name / picture / addedAt timestamps. Stored on data/users (staff
-// readable). Email keys are lowercased so lookup is consistent.
-export function buildByEmail(users) {
-  const out = {};
-  (users || []).forEach(u => {
-    const email = String(u?.email || '').trim().toLowerCase();
-    if (!email || !u.role) return;
-    const slice = { role: u.role };
-    if (u.techName) slice.techName = u.techName;
-    out[email] = slice;
-  });
-  return out;
-}
+// (Removed) The `byEmail` projection map was a security regression —
+// staff-readable so any tech could enumerate every coworker's
+// (email, role) tuple from the JS console. Self-lookup now goes
+// through the `getMyTenantRole` Cloud Function callable, which
+// returns ONLY the caller's own slice. Old buildByEmail helper
+// retained as a no-op so any stray callers (tests, etc.) don't break,
+// and saveUsers/ensureStaffEmailsBackfill purge the legacy field via
+// `deleteField()` markers below.
+export function buildByEmail() { return undefined; }
 // Save splits the write across two docs:
 //   data/users      — slim projection (staff readable)
 //   data/usersFull  — rich users[] (admin only)
@@ -133,10 +128,10 @@ export function buildByEmail(users) {
 export const saveUsers = async (users) => {
   await Promise.all([
     setDoc(USERS_REF, {
-      users:       deleteField(),                       // purge legacy users[]
+      users:       deleteField(),         // purge legacy users[]
+      byEmail:     deleteField(),         // purge legacy byEmail map (was leaking coworker roles)
       staffEmails: buildStaffEmails(users),
       adminEmails: buildAdminEmails(users),
-      byEmail:     buildByEmail(users),
     }, { merge: true }),
     setDoc(USERS_FULL_REF, { users }, { merge: true }),
   ]);
@@ -320,16 +315,19 @@ export async function saveEmployee(id, data) {
   const { publicFields, privateFields } = splitEmployeeFields(data);
   const ref = doc(EMPLOYEES_COL, targetId);
   const now = new Date().toISOString();
-  // Self-healing: ensure any legacy private fields living on the public
-  // doc are explicitly removed (deleteField markers below). On a write
-  // through this path, the doc is normalized to public-only — even if it
-  // came back from Firestore with embedded sensitive fields.
+  // Atomic two-doc write via writeBatch — either BOTH the public-doc
+  // purge AND the private-doc set commit, or neither. Without this, a
+  // partial failure (transient permission-denied, network blip) could
+  // leave legacy sensitive fields stranded on the publicly-readable
+  // parent doc until the next successful save.
   const purgeMarkers = {};
   for (const k of PRIVATE_EMP_FIELDS) purgeMarkers[k] = deleteField();
-  await setDoc(ref, { ...purgeMarkers, ...publicFields, updatedAt: now }, { merge: true });
+  const batch = writeBatch(db);
+  batch.set(ref, { ...purgeMarkers, ...publicFields, updatedAt: now }, { merge: true });
   if (Object.keys(privateFields).length) {
-    await setDoc(empPrivateRef(targetId), { ...privateFields, updatedAt: now }, { merge: true });
+    batch.set(empPrivateRef(targetId), { ...privateFields, updatedAt: now }, { merge: true });
   }
+  await batch.commit();
   return targetId;
 }
 

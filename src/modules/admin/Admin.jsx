@@ -178,9 +178,9 @@ export default function Admin({ onClose }) {
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     <select value={u.role} onChange={e => grantAccess(u.email, e.target.value, u.techName)}
                       style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #d8d8d8', background: '#fafafa', fontFamily: 'inherit' }}>
-                      <option value="readonly">Read only</option>
+                      <option value="readonly">View only</option>
                       <option value="tech">Tech</option>
-                      <option value="scheduler">Scheduler</option>
+                      <option value="scheduler">Front desk</option>
                       <option value="admin">Admin</option>
                       <option value="denied">Denied</option>
                     </select>
@@ -376,6 +376,7 @@ export default function Admin({ onClose }) {
             <PauseSection settings={settings} updateSettings={updateSettings} />
             <DomainSection />
             <TileVisibilitySection settings={settings} updateSettings={updateSettings} />
+            <NotesPreferenceSection settings={settings} updateSettings={updateSettings} />
             <BrandingSection settings={settings} updateSettings={updateSettings} />
             <UpgradeSection settings={settings} gUser={gUser} />
             <BackupRestoreSection />
@@ -564,7 +565,7 @@ function AutoAssignSection({ method, onChange, saving }) {
     <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0' }}>
       <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8, fontWeight: 600 }}>"NO PREFERENCE" AUTO-ASSIGNMENT</div>
       <div style={{ fontSize: 11, color: '#888', marginBottom: 10, lineHeight: 1.5 }}>
-        When a customer picks "no preference" while booking, how should we choose which tech gets the appointment? Specifically requested techs are always honored — appointments specifically requested show a ⭐ on the schedule.
+        When a customer picks "no preference" while booking, how should we choose which tech gets the appointment? Clients who ask for a specific tech are always honored — those bookings show a ⭐ on the schedule.
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {ASSIGNMENT_METHODS.map(m => {
@@ -835,9 +836,9 @@ function PendingRow({ req, employees, onGrant }) {
   return (
     <UserRow user={req}>
       <select value={role} onChange={e => setRole(e.target.value)} style={sel}>
-        <option value="readonly">Read only</option>
+        <option value="readonly">View only</option>
         <option value="tech">Tech</option>
-        <option value="scheduler">Scheduler</option>
+        <option value="scheduler">Front desk</option>
         <option value="admin">Admin</option>
       </select>
       {role === 'tech' && (
@@ -2316,6 +2317,37 @@ function DomainSection() {
           </div>
         </div>
       )}
+    </Section>
+  );
+}
+
+// ── Notes preferences ─────────────────────────────────────────────────────────
+// Single toggle for clinical (SOAP) note format. Off by default — most
+// salons (nail, hair, barbershop) capture quick free-form notes.
+// Med spas / lash / brow / treatment-heavy shops can opt in to also
+// surface the SOAP composer (Subjective / Objective / Assessment / Plan)
+// inside appointment + client modals. Existing SOAP-typed entries
+// always render; this toggle only controls whether a NEW entry can be
+// composed in SOAP format.
+function NotesPreferenceSection({ settings, updateSettings }) {
+  const enabled = settings?.clinicalNotes === true;
+  return (
+    <Section title="📋 Notes preferences">
+      <div style={{ padding: '10px 16px 14px' }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 10, border: `1px solid ${enabled ? '#c7d2fe' : '#e5e7eb'}`, background: enabled ? '#eef2ff' : '#fafafa', cursor: 'pointer' }}>
+          <input type="checkbox" checked={enabled}
+            onChange={e => updateSettings({ ...settings, clinicalNotes: e.target.checked })}
+            style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#4338ca', flexShrink: 0, marginTop: 2 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: enabled ? '#3730a3' : '#374151' }}>
+              Enable clinical (SOAP) notes
+            </div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2, lineHeight: 1.45 }}>
+              Adds a "+ SOAP note" button alongside "+ Add note" inside appointment + client modals. SOAP splits an entry into <strong>Subjective</strong> / <strong>Objective</strong> / <strong>Assessment</strong> / <strong>Plan</strong> — common in med spas, lash, brow, and any treatment-heavy practice. Free-form notes work the same regardless.
+            </div>
+          </div>
+        </label>
+      </div>
     </Section>
   );
 }

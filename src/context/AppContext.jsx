@@ -24,11 +24,12 @@ export function AppProvider({ children }) {
   const [def,      setDef]      = useState(0);
   const [cur,      setCur]      = useState(0);
   const [users,    setUsers]    = useState([]);
-  // Slim projection map (email → { role, techName? }) read from
-  // data/users.byEmail. Lets non-admin staff find their OWN role
-  // without reading the rich users[] array (which now lives in
-  // data/usersFull, admin-only).
-  const [byEmail,  setByEmail]  = useState({});
+  // Slim self-record (just the caller's own role + techName) fetched
+  // via the `getMyTenantRole` Cloud Function for non-admin users.
+  // Replaces the old data/users.byEmail map, which leaked every
+  // coworker's (email, role) tuple to all staff. Empty for admin
+  // users (they read the rich users[] from data/usersFull instead).
+  const [myRecord, setMyRecord] = useState(null);
   const [settings, setSettings] = useState({ timeoutMin: 5 });
   const [gUser,           setGUser]           = useState(null);
   const [syncState,       setSyncState]       = useState('idle');
@@ -190,7 +191,6 @@ export function AppProvider({ children }) {
           setSlides(DEFAULTS.slides);
         }
         setUsers(data.users);
-        setByEmail(data.byEmail || {});
         setSettings(s => ({ ...s, ...data.settings }));
         setSyncDot('ok');
       } catch (e) {
@@ -225,18 +225,33 @@ export function AppProvider({ children }) {
       currentUsers = loadedData.users;
       currentTimeoutMin = loadedData.settings?.timeoutMin || currentTimeoutMin;
       setUsers(currentUsers);
-      setByEmail(loadedData.byEmail || {});
       setSettings(s => ({ ...s, ...loadedData.settings }));
     } catch (_) {}
 
     // For non-admin staff (techs/scheduler/readonly), data/usersFull is
-    // rules-blocked, so currentUsers comes back empty. Synthesize a
-    // 1-element stub from the byEmail projection so the access checks
-    // below + the downstream `_rec` lookup find the right record.
-    if ((!currentUsers || !currentUsers.length) && loadedData?.byEmail) {
-      const emailLower = (user.email || '').toLowerCase();
-      const slim = loadedData.byEmail[emailLower];
-      if (slim) currentUsers = [{ email: user.email, ...slim }];
+    // rules-blocked, so loadAll's `users` is empty. Fetch THIS USER'S
+    // own slice via the `getMyTenantRole` callable (server-side, admin
+    // SDK reads, returns only the caller's record). Synthesize a
+    // 1-element stub so the access checks below + downstream `_rec`
+    // lookup find the right record. The previous implementation read
+    // a public `byEmail` map, which leaked every coworker's role.
+    if (!currentUsers || !currentUsers.length) {
+      try {
+        const { httpsCallable } = await import('firebase/functions');
+        const { functions } = await import('../lib/firebase');
+        const res = await httpsCallable(functions, 'getMyTenantRole')({});
+        const me = res?.data;
+        if (me && me.role) {
+          const stub = { email: user.email, role: me.role };
+          if (me.techName) stub.techName = me.techName;
+          currentUsers = [stub];
+          setMyRecord(stub);
+        }
+      } catch (_) { /* unauthenticated, denied, or pending — fall through */ }
+    } else {
+      // Admin path — `_rec` already comes from users[]; clear any stale
+      // myRecord (e.g., a role-change since last login).
+      setMyRecord(null);
     }
 
     if (ALLOWED_EMAILS.includes(user.email)) {
@@ -551,14 +566,11 @@ export function AppProvider({ children }) {
   }, [settings?.themeId, settings?.autoTheme]);
 
   // Self-record lookup. Admin reads users[] (rich) from data/usersFull;
-  // non-admin only has the byEmail projection — fall back to that so
-  // role/techName checks below still resolve correctly.
+  // non-admin gets the slim record (`{ role, techName? }`) from the
+  // `getMyTenantRole` callable in checkUserAccess, stored in myRecord.
+  // Fall back to that when users[] doesn't contain the caller.
   const _rec = gUser
-    ? (users.find(u => u.email === gUser.email)
-        || (() => {
-          const slim = byEmail[(gUser.email || '').toLowerCase()];
-          return slim ? { email: gUser.email, ...slim } : null;
-        })())
+    ? (users.find(u => u.email === gUser.email) || myRecord || null)
     : null;
   const realIsAdmin = _rec?.role === 'admin';
   const isAdmin     = viewAs ? false : realIsAdmin;

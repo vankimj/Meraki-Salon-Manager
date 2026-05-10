@@ -869,6 +869,43 @@ exports.getPublicAppointment = onCall({ cors: true }, async (request) => {
   };
 });
 
+// Returns the CALLER's own role + techName for a tenant. Replaces the
+// staff-readable `byEmail` map on data/users — that map exposed every
+// coworker's (email, role) tuple to any staff member. With this callable
+// the caller only ever learns their own slice. Admin SDK reads
+// data/usersFull (admin-only at the rules layer) and returns one entry.
+//
+// Returns `{ role, techName? }` for staff, or null if the caller is
+// authenticated but not in this tenant's user list. Throws on missing
+// auth / tenantId. Cheap: one Firestore doc read.
+exports.getMyTenantRole = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const { tenantId: tid } = request.data || {};
+  const tenantId = String(tid || TENANT_ID);
+  const callerEmail = String(request.auth.token.email || '').toLowerCase();
+  if (!callerEmail) throw new HttpsError('permission-denied', 'No email on token');
+
+  const db = getFirestore();
+  // Bootstrap admin (platform-founder) returns admin role globally.
+  if (await isBootstrapAdmin(request)) return { role: 'admin' };
+  // Tenant owner returns admin
+  const tenDoc = await db.doc(`tenants/${tenantId}`).get();
+  if (tenDoc.exists && (tenDoc.data().ownerEmail || '').toLowerCase() === callerEmail) {
+    return { role: 'admin' };
+  }
+  // Otherwise look up the caller in the rich users[] (admin-only doc).
+  const fullDoc = await db.doc(`tenants/${tenantId}/data/usersFull`).get();
+  const users = fullDoc.exists ? (fullDoc.data().users || []) : [];
+  const me = users.find(u => (u.email || '').toLowerCase() === callerEmail);
+  if (!me) return null;
+  // Return ONLY the slim slice the client needs for self-lookup. Names,
+  // pictures, addedAt timestamps, etc. stay server-side.
+  return {
+    role:     me.role || null,
+    techName: me.techName || null,
+  };
+});
+
 // email to a newly-added employee. Owner clicks "Send invite" in
 // EmployeesAdmin and we email a Google sign-in link (tenant subdomain) so
 // the tech can join with one click. Admin gate; uses the owner's verified
@@ -3378,12 +3415,12 @@ exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
     db.doc(`tenants/${tenantId}/data/settings`).set({ timeoutMin: 5, createdAt: now }),
     db.doc(`tenants/${tenantId}/data/slides`).set({ slides: [], def: 0, cur: 0 }),
     // Slim projection — staff readable. Holds membership lists +
-    // self-lookup map. The rich users[] array now lives in data/usersFull
-    // (admin-only), see the next write below.
+    // The rich users[] array lives in data/usersFull (admin-only); the
+    // staff-readable projection only carries the membership arrays the
+    // Firestore rules need (isTenantStaff / isTenantAdmin).
     db.doc(`tenants/${tenantId}/data/users`).set({
       staffEmails: [ownerEmailLower],
       adminEmails: [ownerEmailLower],
-      byEmail:     { [ownerEmailLower]: { role: 'admin' } },
     }),
     // Rich users array — admin-only.
     db.doc(`tenants/${tenantId}/data/usersFull`).set({

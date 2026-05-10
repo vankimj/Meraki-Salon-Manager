@@ -5,6 +5,7 @@ import { logActivity, logError } from '../../lib/logger';
 
 import { useApp } from '../../context/AppContext';
 import NotesEditor from '../../components/NotesEditor';
+import EmptyState from '../../components/EmptyState';
 
 // ── helpers ────────────────────────────────────────────
 function blankClient() {
@@ -216,7 +217,19 @@ export default function ClientsAdmin({ initialClientId, onInitialClientOpened } 
 
       {/* List */}
       {visible.length === 0
-        ? <Empty>{search ? 'No clients match that search.' : 'No clients yet — click Add Client to start.'}</Empty>
+        ? (search ? (
+            <Empty>No clients match "{search}". Try a different name or phone number.</Empty>
+          ) : (
+            <EmptyState
+              icon="👋"
+              title="No clients yet"
+              description="Add your first client manually, or import everyone from GlossGenius / a CSV in one go. Once they're in, every booking auto-links and visit history starts to build."
+              actions={[
+                { label: '+ Add a client',     onClick: () => setModal({ client: blankClient(), mode: 'edit' }) },
+                { label: 'Import from CSV',    onClick: () => showToast('Open Admin → Settings → Data Imports to import.', 4000) },
+              ]}
+            />
+          ))
         : (
           <>
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', overflow: 'hidden' }}>
@@ -270,6 +283,13 @@ export default function ClientsAdmin({ initialClientId, onInitialClientOpened } 
           onClose={() => setModal(null)}
         />
       )}
+
+      <CoachMark
+        id="clients_intro"
+        icon="👥"
+        title="This is your client list"
+        body="Search by name or phone in the box up top. Click anyone's row to open their profile — visit history, notes, social handles. Use the export button on the right to download a CSV."
+      />
     </div>
   );
 }
@@ -307,8 +327,7 @@ function ClientRow({ client, referralCount, last, onView, onEdit, onDelete }) {
 
 // ── modal ──────────────────────────────────────────────
 function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, onSave, onClose }) {
-  const { gUser } = useApp();
-  const { showToast, isAdmin, settings } = useApp();
+  const { gUser, settings, showToast, isAdmin } = useApp();
   const [mode,             setMode]             = useState(initialMode);
   const [tab,              setTab]              = useState('profile');
   const [saving,           setSaving]           = useState(false);
@@ -534,6 +553,7 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
                   onChange={notesLog => onChange({ notesLog })}
                   viewOnly={isView}
                   author={gUser?.email || gUser?.displayName || ''}
+                  enableSoap={settings?.clinicalNotes === true}
                 />
               </Field>
               <Field label="Banned">

@@ -4,6 +4,7 @@ import { resizeImg } from '../../utils/helpers';
 import { SEED_EMPLOYEES } from '../../data/seedEmployees';
 import { useApp } from '../../context/AppContext';
 import { logActivity, logError } from '../../lib/logger';
+import EmptyState from '../../components/EmptyState';
 
 
 const WORK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -235,7 +236,15 @@ export default function EmployeesAdmin() {
       </div>
 
       {employees.length === 0 ? (
-        <Empty>No employees yet — seed the default staff list or add manually.</Empty>
+        <EmptyState
+          icon="💇"
+          title="Add your team"
+          description="Each tech / stylist / barber gets a profile here — name, photo, services they perform, and (admin-only) compensation. The schedule renders one column per active employee."
+          actions={[
+            { label: '+ Add an employee',  onClick: () => setEditing(blankEmployee()) },
+            { label: '↺ Use sample staff', onClick: seedEmployees },
+          ]}
+        />
       ) : (
         <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e8e8', overflow: 'hidden' }}>
           {employees.map((emp, i) => (
