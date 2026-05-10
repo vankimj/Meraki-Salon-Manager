@@ -15,7 +15,10 @@ const TENANT_ID   = 'meraki';
 const BOOTSTRAP_ADMINS = ['jvankim@gmail.com'];
 
 const resendKey       = defineString('RESEND_API_KEY',      { default: '' });
-const resendFrom      = defineString('RESEND_FROM',         { default: 'Meraki Nail Studio <noreply@merakinailstudio.com>' });
+// RESEND_FROM env var was the global single-tenant sender. Removed in favor of
+// per-tenant tenantFromAddress() — see helper definition below. Setting still
+// honored as the per-tenant override via the `fromAddress` field on the tenant
+// doc.
 const mapsApiKey      = defineString('GOOGLE_MAPS_API_KEY', { default: '' });
 const publicAppUrl    = defineString('PUBLIC_APP_URL',      { default: 'https://meraki-salon-manager.web.app' });
 // HMAC signing keys for two distinct token types. Split into separate
@@ -147,6 +150,43 @@ async function callerRole(db, tenantId, request) {
   const users = (usersDoc.exists ? (usersDoc.data().users || []) : []);
   const u = users.find(x => (x.email || '').toLowerCase() === email);
   return u?.role || null;
+}
+
+// ── Per-tenant outbound email sender ──────────────────────────────────────────
+// Returns the RFC 5322 "from" mailbox to use for emails sent on a tenant's
+// behalf. Resolution order:
+//   1. tenant.fromAddress (explicit BYO override — used by tenants who have
+//      verified their own domain in Resend, like Meraki on
+//      merakinailstudio.com)
+//   2. shared platform sender: "{tenant.name} <noreply@plumenexus.com>"
+//
+// Display name is sanitized so RFC 5322 special chars (<, >, ", comma,
+// semicolon, @) can't break the mailbox parse. Falls back to "Plume Nexus"
+// when the tenant doc is missing or has no name (e.g. read failed).
+//
+// Cached in-process by tenantId. Cloud Functions instances live for several
+// minutes between cold starts so this saves ~1 Firestore read per outbound
+// email. If a tenant edits their fromAddress, worst-case the next cold
+// start picks it up — no manual cache flush needed.
+const _fromAddrCache = new Map();
+async function tenantFromAddress(db, tenantId) {
+  if (_fromAddrCache.has(tenantId)) return _fromAddrCache.get(tenantId);
+  let addr = 'Plume Nexus <noreply@plumenexus.com>';
+  try {
+    const tDoc = await db.doc(`tenants/${tenantId}`).get();
+    const tData = tDoc.exists ? tDoc.data() : {};
+    if (tData?.fromAddress) {
+      addr = String(tData.fromAddress).slice(0, 200);
+    } else {
+      const rawName = String(tData?.name || 'Plume Nexus').trim();
+      const displayName = rawName.replace(/[<>",;@]/g, '').slice(0, 50) || 'Plume Nexus';
+      addr = `${displayName} <noreply@plumenexus.com>`;
+    }
+  } catch (e) {
+    console.warn(`[tenantFromAddress] tenant=${tenantId} lookup failed:`, e?.message);
+  }
+  _fromAddrCache.set(tenantId, addr);
+  return addr;
 }
 
 // ── Multi-tenant iteration helper ─────────────────────────────────────────────
@@ -387,9 +427,9 @@ exports.sendReceiptEmail = onDocumentCreated(
     try {
       const resend = new Resend(apiKey);
       const { error } = await resend.emails.send({
-        from:    resendFrom.value(),
+        from:    await tenantFromAddress(getFirestore(), tenantId),
         to:      clientEmail,
-        subject: `Your receipt from Meraki Nail Studio — ${fmtDate(date)}`,
+        subject: `Your receipt — ${fmtDate(date)}`,
         html,
       });
       if (error) throw new Error(error.message || JSON.stringify(error));
@@ -480,7 +520,7 @@ async function processEmailCampaign(tenantId, docRef, data) {
   });
 
   const resend = new Resend(apiKey);
-  const fromAddr = resendFrom.value();
+  const fromAddr = await tenantFromAddress(getFirestore(), tenantId);
   const subject = data.subject || '';
   const body = data.body || '';
 
@@ -943,7 +983,7 @@ exports.emailEmployeeInvite = onCall({ cors: true }, async (request) => {
     signInUrl
   );
   await resend.emails.send({
-    from:    resendFrom.value(),
+    from:    await tenantFromAddress(db, tenantId),
     to:      email,
     subject: `You're invited to ${salonName}'s team on Plume Nexus`,
     html,
@@ -1207,9 +1247,11 @@ exports.sendReviewRequestEmail = onDocumentCreated(
 </html>`;
 
     try {
+      const db0 = getFirestore();
+      const fromAddr = await tenantFromAddress(db0, tenantId);
       const resend = new Resend(apiKey);
       const { error } = await resend.emails.send({
-        from:    resendFrom.value(),
+        from:    fromAddr,
         to:      clientEmail,
         subject: `How was your visit? We'd love your feedback 💅`,
         html,
@@ -1227,7 +1269,7 @@ exports.sendReviewRequestEmail = onDocumentCreated(
         if (techEmail) {
           const tFirstName = (empSnap.docs[0].data().name || data.techName).split(' ')[0];
           await resend.emails.send({
-            from:    resendFrom.value(),
+            from:    fromAddr,
             to:      techEmail,
             subject: `Review request sent to ${clientName}`,
             html: `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -1312,9 +1354,10 @@ exports.sendAccessRequestNotification = onDocumentCreated(
 </body>
 </html>`;
 
+    const fromAddr = await tenantFromAddress(db, tenantId);
     await Promise.all(admins.map(admin =>
       resend.emails.send({
-        from:    resendFrom.value(),
+        from:    fromAddr,
         to:      admin.email,
         subject: `Access request — ${name}`,
         html,
@@ -1400,7 +1443,7 @@ exports.sendApptNotification = onDocumentCreated(
         ? buildHandbookReminderHtml(data, empSnap.docs[0].data().name)
         : buildHtml(data);
       const { error } = await resend.emails.send({
-        from:    resendFrom.value(),
+        from:    await tenantFromAddress(db, tenantId),
         to:      email,
         subject,
         html,
@@ -1514,11 +1557,11 @@ function buildMeetingReminderHtml(meeting, participantName, timeLabel) {
 </html>`;
 }
 
-async function sendMeetingReminderBatch(resend, meeting, participants, timeLabel, ref, flag) {
+async function sendMeetingReminderBatch(resend, fromAddr, meeting, participants, timeLabel, ref, flag) {
   const withEmail = (participants || []).filter(p => p.email);
   await Promise.all(withEmail.map(p =>
     resend.emails.send({
-      from:    resendFrom.value(),
+      from:    fromAddr,
       to:      p.email,
       subject: `Starting in ${timeLabel}: ${meeting.title}`,
       html:    buildMeetingReminderHtml(meeting, p.name, timeLabel),
@@ -1539,6 +1582,7 @@ exports.sendMeetingReminders = onSchedule(
 
     await forEachActiveTenant('MeetingReminders', async (tenantId) => {
       const db = getFirestore();
+      const fromAddr = await tenantFromAddress(db, tenantId);
       const snap = await db.collection(`tenants/${tenantId}/meetings`)
         .where('date', '>=', today)
         .get();
@@ -1552,11 +1596,11 @@ exports.sendMeetingReminders = onSchedule(
         const diffMin = (startTimestamp - now) / 60000;
 
         if (diffMin >= 55 && diffMin <= 75 && !reminders.sent60) {
-          await sendMeetingReminderBatch(resend, meeting, participants, '1 hour',     docSnap.ref, 'sent60');
+          await sendMeetingReminderBatch(resend, fromAddr, meeting, participants, '1 hour',     docSnap.ref, 'sent60');
           batchesSent++;
         }
         if (diffMin >= 10 && diffMin <= 25 && !reminders.sent15) {
-          await sendMeetingReminderBatch(resend, meeting, participants, '15 minutes', docSnap.ref, 'sent15');
+          await sendMeetingReminderBatch(resend, fromAddr, meeting, participants, '15 minutes', docSnap.ref, 'sent15');
           batchesSent++;
         }
       }
@@ -1582,6 +1626,7 @@ exports.sendDailyReminders = onSchedule(
     await forEachActiveTenant('Reminders', async (tenantId, tData) => {
       const db = getFirestore();
       const tenantName = tData.name || tenantId;
+      const fromAddr = await tenantFromAddress(db, tenantId);
 
       const apptSnap = await db
         .collection(`tenants/${tenantId}/appointments`)
@@ -1613,7 +1658,7 @@ exports.sendDailyReminders = onSchedule(
 
         try {
           const { error } = await resend.emails.send({
-            from:    resendFrom.value(),
+            from:    fromAddr,
             to:      email,
             subject: `Reminder: Your appointment tomorrow at ${tenantName}`,
             html:    buildReminderHtml(appt, client, tenantId),
@@ -1669,6 +1714,7 @@ exports.sendTechAppointmentReminders = onSchedule(
       const db = getFirestore();
       const tenantName = tData.name || tenantId;
       const tenantShort = String(tenantName).split(/\s+/)[0] || tenantName;
+      const fromAddr = await tenantFromAddress(db, tenantId);
 
       const sDoc = await db.doc(`tenants/${tenantId}/data/settings`).get();
       const cfg  = ((sDoc.exists ? sDoc.data() : {}).techReminders) || {};
@@ -1762,7 +1808,7 @@ exports.sendTechAppointmentReminders = onSchedule(
               null, null
             );
             const { error } = await resend.emails.send({
-              from: resendFrom.value(),
+              from: fromAddr,
               to: emp.email.trim(),
               subject,
               html,
@@ -1867,7 +1913,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
       }
       if (emailOk) {
         await resend.emails.send({
-          from:    resendFrom.value(),
+          from:    await tenantFromAddress(db, tenantId),
           to:      appt.clientEmail,
           subject: `Booking confirmed — ${fmtDate(appt.date)} at ${fmtTime(appt.startTime)}`,
           html:    clientHtml,
@@ -1884,6 +1930,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
       const adminEmails = usersSnap.exists ? (usersSnap.data().adminEmails || []) : [];
       const admins      = adminEmails.map(email => ({ email }));
       if (admins.length) {
+        const adminFrom = await tenantFromAddress(db, tenantId);
         const adminHtml = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -1911,7 +1958,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
 </html>`;
         await Promise.all(admins.map(a =>
           resend.emails.send({
-            from:    resendFrom.value(),
+            from:    adminFrom,
             to:      a.email,
             subject: `New online booking — ${appt.clientName} on ${fmtDate(appt.date)}`,
             html:    adminHtml,
@@ -2042,9 +2089,10 @@ exports.sendChatNotification = onDocumentCreated(
     </div>
   </div></body></html>`;
 
+    const fromAddr = await tenantFromAddress(db, tenantId);
     await Promise.all(admins.map(a =>
       resend.emails.send({
-        from:    resendFrom.value(),
+        from:    fromAddr,
         to:      a.email,
         subject: `New message from ${data.clientName || 'a client'}`,
         html,
@@ -2109,9 +2157,10 @@ exports.sendReviewReceivedNotification = onDocumentCreated(
     }
 
     const resend = new Resend(apiKey);
+    const fromAddr = await tenantFromAddress(db, tenantId);
     await Promise.all(recipients.map(r =>
       resend.emails.send({
-        from:    resendFrom.value(),
+        from:    fromAddr,
         to:      r.email,
         subject: `New ${data.rating || 5}-star Google review — ${data.clientName || 'client'}`,
         html,
@@ -3197,6 +3246,7 @@ exports.autoBirthdayCampaign = onSchedule(
         .filter(c => c.email && !c.marketingOptOut && c.birthday && c.birthday.slice(5, 10) === mdKey);
       if (!targets.length) return;
 
+      const fromAddr = await tenantFromAddress(db, tenantId);
       let sent = 0;
       for (const client of targets) {
         const sentDocId   = `birthday_${year}_${client.id}`;
@@ -3214,7 +3264,7 @@ exports.autoBirthdayCampaign = onSchedule(
 
         try {
           const { error } = await resend.emails.send({
-            from:    resendFrom.value(),
+            from:    fromAddr,
             to:      client.email,
             subject: `Happy Birthday, ${firstName}! 🎂 A gift from ${tenantShort}`,
             html,
@@ -3272,6 +3322,7 @@ exports.autoLapsedCampaign = onSchedule(
       const lapsed = clients.filter(c => !activeIds.has(c.id));
       if (!lapsed.length) return;
 
+      const fromAddr = await tenantFromAddress(db, tenantId);
       let sent = 0;
       for (const client of lapsed) {
         const sentDocId = `lapsed_${client.id}`;
@@ -3289,7 +3340,7 @@ exports.autoLapsedCampaign = onSchedule(
 
         try {
           const { error } = await resend.emails.send({
-            from:    resendFrom.value(),
+            from:    fromAddr,
             to:      client.email,
             subject: `We miss you, ${firstName}! Come see us 💅`,
             html,
@@ -3428,12 +3479,13 @@ exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
     }),
   ]);
 
-  // Send welcome email
+  // Send welcome email — always from the platform identity (the new
+  // owner doesn't recognize their own salon as a sender yet).
   const apiKey = resendKey.value();
   if (apiKey) {
     const resend = new Resend(apiKey);
     await resend.emails.send({
-      from: resendFrom.value(),
+      from: 'Plume Nexus <noreply@plumenexus.com>',
       to:   ownerEmail,
       subject: `Welcome to Plume Nexus — ${salonName} is ready`,
       html: buildWelcomeHtml(salonName, ownerEmail, tenantId, url),
@@ -4131,7 +4183,7 @@ exports.emailMembershipPaymentLink = onCall({ cors: true }, async (request) => {
     url
   );
   await resend.emails.send({
-    from:    resendFrom.value(),
+    from:    await tenantFromAddress(db, tenantId),
     to:      client.email.trim(),
     subject: `Complete your ${plan.name} membership`,
     html,
@@ -4473,14 +4525,15 @@ exports.sendMeetingInvites = onCall(async (request) => {
   // Admin-only: matches the firestore.rules write gate on /meetings.
   // Also prevents leaking a private meeting's title/description into an
   // invite email body for someone who shouldn't see it.
-  await requireTenantAdmin(getFirestore(), TENANT_ID, request);
-  const { meetingId } = request.data || {};
+  const { tenantId: tid, meetingId } = request.data || {};
+  const tenantId = tid || TENANT_ID;
+  await requireTenantAdmin(getFirestore(), tenantId, request);
   if (!meetingId) throw new HttpsError('invalid-argument', 'meetingId required');
   const apiKey = resendKey.value();
   if (!apiKey) throw new HttpsError('failed-precondition', 'Email is not configured (RESEND_API_KEY missing)');
 
   const db = getFirestore();
-  const meetingRef = db.doc(`tenants/${TENANT_ID}/meetings/${meetingId}`);
+  const meetingRef = db.doc(`tenants/${tenantId}/meetings/${meetingId}`);
   const snap = await meetingRef.get();
   if (!snap.exists) throw new HttpsError('not-found', 'Meeting not found');
   const meeting = { id: snap.id, ...snap.data() };
@@ -4493,6 +4546,7 @@ exports.sendMeetingInvites = onCall(async (request) => {
   const sentAt = new Date().toISOString();
   const updated = [];
   let sent = 0, skipped = 0;
+  const fromAddr = await tenantFromAddress(db, tenantId);
 
   for (const p of participants) {
     const email = (p.email || '').trim();
@@ -4500,9 +4554,9 @@ exports.sendMeetingInvites = onCall(async (request) => {
     const token = p.inviteToken || (require('crypto').randomUUID());
     try {
       await resend.emails.send({
-        from:    resendFrom.value(),
+        from:    fromAddr,
         to:      email,
-        subject: `You're invited: ${meeting.title || 'Meraki meeting'} · ${fmtDate(meeting.date)}`,
+        subject: `You're invited: ${meeting.title || 'meeting'} · ${fmtDate(meeting.date)}`,
         html:    meetingInviteHtml({ meeting, token, recipientName: p.name }),
         attachments: [{
           filename: 'meeting.ics',
@@ -4885,14 +4939,15 @@ ${SALON_ADDRESS_HTML || 'Columbus, OH'}
 </div></body></html>`;
 
   const resend = new Resend(apiKey);
+  const fromAddr = await tenantFromAddress(db, tenantId);
   let resendId = null, resendError = null;
   try {
     const result = await resend.emails.send({
-      from: resendFrom.value(),
+      from: fromAddr,
       to: email,
       subject,
       html,
-      replyTo: resendFrom.value(), // future: per-staff inbox; for now just the salon's address
+      replyTo: fromAddr, // future: per-staff inbox; for now just the salon's address
     });
     if (result?.error) {
       resendError = `${result.error.name || 'RESEND_ERROR'}: ${result.error.message || JSON.stringify(result.error)}`;
@@ -4979,9 +5034,9 @@ async function processGiftCardEmail(tenantId, docRef, data) {
   let resendId = null, errorCode = null, errorReason = null;
   try {
     const result = await resend.emails.send({
-      from: resendFrom.value(),
+      from: await tenantFromAddress(getFirestore(), tenantId),
       to:   recipientEmail,
-      subject: `🎁 You've received a $${amount.toFixed(2)} gift card from Meraki Nail Studio`,
+      subject: `🎁 You've received a $${amount.toFixed(2)} gift card`,
       html,
     });
     if (result?.error) {
@@ -5292,7 +5347,9 @@ exports.submitContactInquiry = onCall(
         `.trim();
 
         await resend.emails.send({
-          from:     resendFrom.value(),
+          // Platform-level inquiry, not tenant-bound — always send from
+          // the Plume Nexus identity to my admin inbox.
+          from:     'Plume Nexus <noreply@plumenexus.com>',
           to:       'jvankim@gmail.com',
           replyTo:  cleanEmail,
           subject:  `[Plume Nexus] ${cleanName} — ${cleanSalon || 'inquiry'}`,
