@@ -1,40 +1,63 @@
-import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
+import { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import { GoogleAuthProvider, signInWithCredential, signInAnonymously } from 'firebase/auth';
+import Constants from 'expo-constants';
 import { auth, ALLOWED_EMAILS } from '../lib/firebase';
-import { fetchUsers } from '../lib/firestore';
 
-// Configure before use — replace with your web client ID from Google Cloud Console
-GoogleSignin.configure({
-  webClientId: '721171829996-REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com',
-});
+// EAS Dev Client / production native build: real Google Sign-In via the
+// native SDK. We pass BOTH the iOS-specific client ID (matches the
+// app's bundle id com.meraki.salonmanager) AND the Web client ID. The
+// Web client ID is what Firebase Auth expects for
+// `GoogleAuthProvider.credential(idToken)` — it's the audience the
+// returned id_token is signed for.
+const WEB_CLIENT_ID = '721171829996-d54s6djk8ph1bvjajaarat4bgvdf16po.apps.googleusercontent.com';
+const IOS_CLIENT_ID = '721171829996-ap9a74l13h4c9rdtf4vv168c4kq1q5ep.apps.googleusercontent.com';
+
+// In Expo Go the native module isn't available — guard the configure
+// call so the screen still renders (with the dev-anonymous fallback).
+const isExpoGo = Constants.appOwnership === 'expo';
+if (!isExpoGo) {
+  GoogleSignin.configure({
+    webClientId: WEB_CLIENT_ID,
+    iosClientId: IOS_CLIENT_ID,
+    offlineAccess: false,
+  });
+}
 
 export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
 
   async function handleGoogleSignIn() {
+    if (isExpoGo) {
+      Alert.alert(
+        'Expo Go limitation',
+        'Real Google Sign-In requires an EAS Dev Client build. For now use the dev button below.',
+      );
+      return;
+    }
     setLoading(true);
     try {
-      await GoogleSignin.hasPlayServices();
-      const { idToken } = await GoogleSignin.signIn();
-      const credential = GoogleAuthProvider.credential(idToken);
-      const result = await signInWithCredential(auth, credential);
-      const email = result.user.email;
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const result = await GoogleSignin.signIn();
+      // v13+ returns { type, data: { idToken, user } }; older returns flat.
+      const idToken = result?.data?.idToken || result?.idToken;
+      if (!idToken) throw new Error('No idToken returned by Google.');
 
-      // Bootstrap admin always allowed; others need a role record
+      const credential = GoogleAuthProvider.credential(idToken);
+      const fbResult = await signInWithCredential(auth, credential);
+      const email = (fbResult.user.email || '').toLowerCase();
+
       if (!ALLOWED_EMAILS.includes(email)) {
-        const users = await fetchUsers();
-        const record = users.find(u => u.email === email);
-        if (!record || ['pending', 'denied'].includes(record.role)) {
-          await auth.signOut();
-          Alert.alert('Access Denied', 'Your account has not been granted access. Contact the salon admin.');
-        }
+        // Bootstrap admins get through immediately; others rely on
+        // Firestore rules to gate data. The web app calls
+        // getMyTenantRole here for a friendlier denied screen — we'll
+        // mirror that in Phase 4.
+        console.log('[auth] non-bootstrap signed in:', email);
       }
     } catch (err) {
-      if (err.code !== 'SIGN_IN_CANCELLED') {
-        Alert.alert('Sign-in failed', err.message);
-      }
+      if (err?.code === statusCodes?.SIGN_IN_CANCELLED) return;
+      Alert.alert('Sign-in failed', err?.message || 'Could not sign in.');
     } finally {
       setLoading(false);
     }
@@ -47,60 +70,53 @@ export default function AuthScreen() {
         <Text style={styles.sub}>NAIL STUDIO</Text>
         <Text style={styles.tagline}>Salon Manager</Text>
 
-        <TouchableOpacity style={styles.googleBtn} onPress={handleGoogleSignIn} disabled={loading}>
+        <TouchableOpacity
+          style={[styles.googleBtn, loading && { opacity: 0.6 }]}
+          onPress={handleGoogleSignIn}
+          disabled={loading}
+        >
           {loading
             ? <ActivityIndicator color="#fff" />
             : <Text style={styles.googleBtnText}>Sign in with Google</Text>
           }
         </TouchableOpacity>
+
+        {/* Dev-only escape hatch for testing UI inside Expo Go where
+            the native Google SDK isn't available. Remove before App Store. */}
+        {isExpoGo && (
+          <TouchableOpacity
+            style={styles.devBtn}
+            onPress={async () => {
+              setLoading(true);
+              try {
+                await signInAnonymously(auth);
+              } catch (e) {
+                Alert.alert(
+                  'Anonymous sign-in disabled',
+                  'Enable Anonymous in Firebase Console → Authentication → Sign-in method.',
+                );
+              } finally {
+                setLoading(false);
+              }
+            }}
+            disabled={loading}
+          >
+            <Text style={styles.devBtnText}>Dev: continue without sign-in</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f1923',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
-    gap: 8,
-  },
-  brand: {
-    fontSize: 52,
-    fontWeight: '400',
-    color: '#fff',
-    letterSpacing: 2,
-  },
-  sub: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#3D9E8A',
-    letterSpacing: 6,
-  },
-  tagline: {
-    fontSize: 12,
-    color: '#888',
-    letterSpacing: 3,
-    marginBottom: 40,
-    textTransform: 'uppercase',
-  },
-  googleBtn: {
-    width: '100%',
-    backgroundColor: '#3D95CE',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  googleBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
+  container: { flex: 1, backgroundColor: '#0f1923', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  card:      { width: '100%', maxWidth: 320, alignItems: 'center', gap: 8 },
+  brand:     { fontSize: 52, fontWeight: '400', color: '#fff', letterSpacing: 2 },
+  sub:       { fontSize: 14, fontWeight: '700', color: '#3D9E8A', letterSpacing: 6 },
+  tagline:   { fontSize: 12, color: '#888', letterSpacing: 3, marginBottom: 40, textTransform: 'uppercase' },
+  googleBtn: { width: '100%', backgroundColor: '#3D95CE', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  googleBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  devBtn:    { width: '100%', paddingVertical: 12, alignItems: 'center', marginTop: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,.18)', borderStyle: 'dashed' },
+  devBtnText:{ color: 'rgba(255,255,255,.55)', fontSize: 12, fontWeight: '500', letterSpacing: 0.4 },
 });

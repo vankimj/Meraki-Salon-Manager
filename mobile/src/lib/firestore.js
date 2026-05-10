@@ -17,6 +17,9 @@ export async function fetchAppointments(date) {
 
 // Live subscription — fires on every Firestore change. Used by Schedule
 // so the tech sees status flips made on the iPad checkout immediately.
+// On permission-denied / network errors we still call the success cb
+// with an empty list so the screen can drop its loading state instead
+// of spinning forever.
 export function subscribeAppointments(date, cb) {
   const q = query(tenantCol('appointments'), where('date', '==', date));
   return onSnapshot(q, (snap) => {
@@ -26,6 +29,7 @@ export function subscribeAppointments(date, cb) {
     cb(list);
   }, (err) => {
     console.warn('[firestore] subscribeAppointments error:', err?.message);
+    cb([]);
   });
 }
 

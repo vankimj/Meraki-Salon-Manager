@@ -1,0 +1,16 @@
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Native build outputs
+ios/
+android/
+
+# Local credentials (never commit)
+GoogleService-Info.plist
+google-services.json
+
+# Dependencies
+node_modules/
