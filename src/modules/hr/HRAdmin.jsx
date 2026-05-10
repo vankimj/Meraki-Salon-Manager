@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../lib/firebase';
 import {
-  fetchEmployees, fetchAppointmentsByRange,
+  fetchEmployeesWithComp, fetchAppointmentsByRange,
   fetchBonuses, createBonus, deleteBonus,
   fetchPayrollRuns, createPayrollRun, savePayrollRun,
   fetchReviews, saveReview, deleteReview,
@@ -72,7 +72,7 @@ export default function HRAdmin() {
   const startDate = startOf(periodDays);
 
   useEffect(() => {
-    fetchEmployees().then(setEmployees).catch(() => {});
+    fetchEmployeesWithComp().then(setEmployees).catch(() => {});
     loadTaxForms();
     if (!isTech) {
       loadBonuses();
@@ -117,7 +117,7 @@ export default function HRAdmin() {
 
   async function handleGenerate1099s(year) {
     const runs = await fetchPayrollRunsForYear(year);
-    const emps = await fetchEmployees();
+    const emps = await fetchEmployeesWithComp();
     const empMap = {};
     emps.forEach(e => { empMap[e.name] = e; });
 
