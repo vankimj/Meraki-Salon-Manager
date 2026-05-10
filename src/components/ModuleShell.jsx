@@ -117,10 +117,16 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
       <style>{`
         @media (max-width: 899px) { .ms-sidebar { display: none !important; } }
         @media (max-width: 600px) {
-          .ms-action-label { display: none; }
+          .ms-action-label,
+          .ms-home-label,
+          .ms-user-name,
+          .ms-user-chevron,
+          .ms-topnav-divider { display: none !important; }
           .ms-action-btn { padding: 0 12px !important; }
           .ms-preview-select { display: none !important; }
           .ms-topnav-right { gap: 4px !important; }
+          .ms-topnav { padding: 0 10px !important; gap: 6px !important; }
+          .ms-home-btn { min-width: 40px !important; padding: 8px !important; }
           .ms-content { padding: 10px !important; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
         }
       `}</style>
@@ -129,7 +135,7 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
       {/* Top nav — taller on mobile for easier tapping. position:relative
           activates the zIndex so this stacking context lifts above the
           schedule's sticky tech-header row (z-index 10 there). */}
-      <div style={{
+      <div className="ms-topnav" style={{
         background: '#fff',
         borderBottom: `1px solid var(--tm-border, #ebebeb)`,
         padding: '0 16px',
@@ -143,13 +149,13 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
         paddingTop: 'env(safe-area-inset-top, 0px)',
       }}>
         {/* Home button */}
-        <button onClick={onHome}
+        <button onClick={onHome} className="ms-home-btn"
           style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--tm-accent, #3D95CE)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500, padding: '8px 6px', borderRadius: 6, flexShrink: 0, minWidth: 44, minHeight: 44, justifyContent: 'center' }}>
           <IconHome size={15} />
-          Home
+          <span className="ms-home-label">Home</span>
         </button>
 
-        <span style={{ color: '#e0e0e0', fontSize: 16, flexShrink: 0 }}>›</span>
+        <span className="ms-topnav-divider" style={{ color: '#e0e0e0', fontSize: 16, flexShrink: 0 }}>›</span>
 
         {/* Module title */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, color: '#555' }}>
