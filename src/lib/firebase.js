@@ -25,16 +25,33 @@ const app = initializeApp(FIREBASE_CONFIG);
 // without buying anything in practice (admins rarely run multiple app tabs
 // on the same device). Second tab silently falls back to memory cache.
 //
+// Mobile phones (iPhone / Android-Mobile) are skipped on purpose: under
+// storage pressure or after Safari evicts site data, the IDB layer can
+// pend queries forever with no error. Techs primarily browse on phones
+// (read-only-ish) and don't need offline-write queueing — kiosks
+// (iPads) keep persistence for offline POS resilience. Manual override:
+// append ?nopersist=1 to force memory cache from anywhere.
+//
 // Fallback: if persistence init throws (private browsing, corrupted IDB),
 // drop to in-memory and keep the app working.
+const isPhoneUA = typeof navigator !== 'undefined' &&
+  /iPhone|iPod|Android.*Mobile/i.test(navigator.userAgent);
+const forceNoPersist = typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('nopersist') === '1';
+const skipPersist = isPhoneUA || forceNoPersist;
+
 let _db;
-try {
-  _db = initializeFirestore(app, {
-    localCache: persistentLocalCache({}),
-  });
-} catch (e) {
-  console.warn('[Firestore] persistent cache init failed, falling back to memory:', e?.message);
+if (skipPersist) {
   _db = getFirestore(app);
+} else {
+  try {
+    _db = initializeFirestore(app, {
+      localCache: persistentLocalCache({}),
+    });
+  } catch (e) {
+    console.warn('[Firestore] persistent cache init failed, falling back to memory:', e?.message);
+    _db = getFirestore(app);
+  }
 }
 export const db = _db;
 export const auth      = getAuth(app);
