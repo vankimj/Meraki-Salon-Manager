@@ -6,71 +6,101 @@ Engineering reference for the Plume Nexus / Meraki Salon Manager stack as of 202
 
 ## System overview
 
+The stack splits into three layers — clients, our Firebase backend, and third-party services. The three diagrams below show each layer and its links to the others. GitHub's Mermaid renderer fits each diagram cleanly; for a single zoomable view of all three together, see the dedicated "Pretty" diagram (Eraser.io / Figma) when one exists.
+
+### Layer 1 — Client surfaces → Firebase
+
 ```mermaid
-graph TB
+graph LR
     subgraph Clients["Client surfaces"]
-        WebPWA["Web PWA<br/>(admin / tech / scheduler / readonly)"]
-        TipFlow["TipFlow kiosk<br/>(front-desk iPad)"]
-        Walkin["Walk-in kiosk<br/>(iPad)"]
-        Mobile["Native mobile<br/>(Expo SDK 54, iOS/Android)"]
-        Public["Public surfaces<br/>booking · check-in · manage · rsvp · unsubscribe"]
+        direction TB
+        WebPWA["Web PWA"]
+        TipFlow["TipFlow kiosk"]
+        Walkin["Walk-in kiosk"]
+        Mobile["Native mobile<br/>(Expo SDK 54)"]
+        Public["Public booking /<br/>check-in / manage /<br/>rsvp / unsubscribe"]
         PNSite["plumenexus.com<br/>marketing site"]
-        PlatAdmin["platform-admin<br/>(super-admin console)"]
+        PlatAdmin["platform-admin<br/>console"]
     end
 
-    subgraph Firebase["Firebase project: meraki-salon-manager"]
-        Auth["Firebase Auth<br/>(Google · magic link · anonymous)"]
-        Fstore["Firestore<br/>tenants/{tid}/..."]
-        Funcs["Cloud Functions v2<br/>(54 functions: callables + triggers + cron)"]
-        Hosting["Hosting<br/>(3 targets: meraki / plumenexus / platform-admin)"]
-        Secrets["Secret Manager<br/>(HMAC keys, Stripe, Twilio, Anthropic)"]
+    subgraph Firebase["Firebase project"]
+        direction TB
+        Auth["Firebase Auth"]
+        Fstore[("Firestore<br/>tenants/{tid}")]
+        Funcs["Cloud Functions v2<br/>(54 fns)"]
+        Hosting["Hosting<br/>(3 targets)"]
     end
 
-    subgraph External["Third-party services"]
-        Stripe["Stripe<br/>(POS · memberships · webhooks)"]
-        Twilio["Twilio<br/>(SMS send + inbound webhook)"]
-        Resend["Resend<br/>(transactional email)"]
-        Gusto["Gusto<br/>(payroll OAuth + 1099s)"]
-        Anthropic["Anthropic<br/>(Reports chatbot · voice command)"]
-        Expo["Expo Push<br/>(APNS + FCM fan-out)"]
-        Google["Google Cloud<br/>(OAuth · Maps · Secret Manager)"]
-        CF["Cloudflare Worker<br/>(URL/host rewrites)"]
-        Apple["Apple App Store<br/>(distribution)"]
+    WebPWA --> Auth & Fstore & Funcs
+    Mobile --> Auth & Fstore & Funcs
+    TipFlow & Walkin --> Fstore
+    Public --> Funcs
+    PNSite --> Funcs
+    PlatAdmin --> Funcs
+    Hosting --> WebPWA & PNSite & PlatAdmin
+
+    classDef firebase fill:#FFA000,stroke:#FF6F00,color:#fff
+    classDef client fill:#2D7A5F,stroke:#1e5240,color:#fff
+    class Auth,Fstore,Funcs,Hosting firebase
+    class WebPWA,TipFlow,Walkin,Mobile,Public,PNSite,PlatAdmin client
+```
+
+### Layer 2 — Cloud Functions → third-party services
+
+```mermaid
+graph LR
+    Funcs["Cloud Functions v2"]
+
+    subgraph Comms["Comms"]
+        Twilio["Twilio<br/>SMS"]
+        Resend["Resend<br/>email"]
+        Expo["Expo Push<br/>(APNS + FCM)"]
     end
 
-    Clients --> Auth
-    Clients --> Fstore
-    Clients --> Funcs
+    subgraph Payments["Payments + payroll"]
+        Stripe["Stripe<br/>POS · memberships"]
+        Gusto["Gusto<br/>payroll · 1099s"]
+    end
 
-    Funcs --> Fstore
-    Funcs --> Secrets
-    Funcs --> Stripe
+    subgraph AI["AI / Maps"]
+        Anthropic["Anthropic<br/>chatbot · voice"]
+        Google["Google Cloud<br/>Maps · OAuth"]
+    end
+
     Funcs --> Twilio
     Funcs --> Resend
+    Funcs --> Expo
+    Funcs --> Stripe
     Funcs --> Gusto
     Funcs --> Anthropic
-    Funcs --> Expo
+    Funcs --> Google
 
-    Stripe -->|webhooks| Funcs
-    Twilio -->|inbound SMS webhook| Funcs
-    Gusto -->|OAuth callback| Funcs
-
-    Mobile --> Expo
-    Mobile --> Auth
-    Mobile --> Fstore
-    Mobile -.->|App Store| Apple
-
-    CF -->|rewrites| Hosting
-    Hosting --> WebPWA
-    Hosting --> PNSite
-    Hosting --> PlatAdmin
+    Stripe -.->|webhook| Funcs
+    Twilio -.->|inbound SMS| Funcs
+    Gusto -.->|OAuth callback| Funcs
 
     classDef firebase fill:#FFA000,stroke:#FF6F00,color:#fff
     classDef external fill:#5b3b8c,stroke:#3d2660,color:#fff
-    classDef client fill:#2D7A5F,stroke:#1e5240,color:#fff
-    class Auth,Fstore,Funcs,Hosting,Secrets firebase
-    class Stripe,Twilio,Resend,Gusto,Anthropic,Expo,Google,CF,Apple external
-    class WebPWA,TipFlow,Walkin,Mobile,Public,PNSite,PlatAdmin client
+    class Funcs firebase
+    class Twilio,Resend,Expo,Stripe,Gusto,Anthropic,Google external
+```
+
+### Layer 3 — Edge + distribution
+
+```mermaid
+graph LR
+    User(("User")) --> CF["Cloudflare Worker<br/>(URL / host rewrites)"]
+    CF --> Hosting["Firebase Hosting<br/>(meraki / plumenexus / platform-admin)"]
+
+    Dev["Mobile build pipeline<br/>(EAS Build)"] -.->|.app + .ipa| Apple["Apple App Store /<br/>TestFlight"]
+    Apple --> Phone(("iPhone"))
+
+    GH["GitHub<br/>(origin)"] -.->|CI hooks TBD| Dev
+
+    classDef firebase fill:#FFA000,stroke:#FF6F00,color:#fff
+    classDef external fill:#5b3b8c,stroke:#3d2660,color:#fff
+    class Hosting firebase
+    class CF,Apple,Dev,GH external
 ```
 
 ---
