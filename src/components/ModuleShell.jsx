@@ -116,15 +116,16 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
       )}
       <style>{`
         @media (max-width: 899px) { .ms-sidebar { display: none !important; } }
-        @media (max-width: 600px) {
+        @media (max-width: 768px) {
           .ms-action-label,
           .ms-home-label,
           .ms-user-name,
           .ms-user-chevron,
-          .ms-topnav-divider { display: none !important; }
+          .ms-topnav-divider,
+          .ms-impersonate-name { display: none !important; }
           .ms-action-btn { padding: 0 12px !important; }
           .ms-preview-select { display: none !important; }
-          .ms-topnav-right { gap: 4px !important; }
+          .ms-topnav-right { gap: 4px !important; min-width: 0 !important; }
           .ms-topnav { padding: 0 10px !important; gap: 6px !important; }
           .ms-home-btn { min-width: 40px !important; padding: 8px !important; }
           .ms-content { padding: 10px !important; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
@@ -167,9 +168,9 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
         <div className="ms-topnav-right" style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           <div style={{ width: 8, height: 8, borderRadius: '50%', background: syncColor, transition: 'background .3s', animation: syncState === 'syncing' ? 'pulse .8s infinite' : 'none' }} />
           {realIsAdmin && viewAs && (
-            <button onClick={() => setViewAs(null)} title="Exit preview"
+            <button onClick={() => setViewAs(null)} title={`Exit preview: ${previewLabel(viewAs)}`}
               style={{ height: 40, borderRadius: 20, border: 'none', background: '#f59e0b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
-              ← Exit {previewLabel(viewAs)}
+              ← Exit <span className="ms-impersonate-name">{previewLabel(viewAs)}</span>
             </button>
           )}
           {isAdmin && (
