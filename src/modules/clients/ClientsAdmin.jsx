@@ -6,6 +6,7 @@ import { logActivity, logError } from '../../lib/logger';
 import { useApp } from '../../context/AppContext';
 import NotesEditor from '../../components/NotesEditor';
 import EmptyState from '../../components/EmptyState';
+import CoachMark from '../../components/CoachMark';
 
 // ── helpers ────────────────────────────────────────────
 function blankClient() {
