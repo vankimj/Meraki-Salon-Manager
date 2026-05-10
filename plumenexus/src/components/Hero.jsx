@@ -87,7 +87,7 @@ export default function Hero() {
               fontSize: 13, color: C.mutedSoft,
             }}>
               <Stat label="Live by lunch · or we set it up free" />
-              <Stat label="No third-party accounts to create" />
+              <Stat label="Even our team can't see your data" />
               <Stat label="Cancel anytime · keep your data" />
             </div>
           </div>

@@ -36,6 +36,10 @@ const ITEMS = [
     a: 'AI runs in read-only mode for reporting questions. Voice command booking proposes an action and waits for your confirmation before writing anything. We never train models on your data, and we never share it. All AI calls are processed server-side through your own Plume Nexus backend.',
   },
   {
+    q: 'Can the Plume Nexus team see my client data?',
+    a: 'No, not by default — and we mean that literally. Our platform admin dashboard shows us only metadata about your account (plan, billing, last activity, total counts). We cannot read your client list, your appointments, your receipts, or your messages. If you ever want our help with something specific, you invite our team as an admin via your own salon\'s users settings — exactly the same Google sign-in flow you\'d use to add any of your own staff. You see who has access, you can revoke it any time. Most SaaS companies quietly keep god-mode access for "support" purposes. We architected the platform so we can\'t. The only exception is Meraki Nail Studio, where the founder is the actual salon owner — and even there, his access flows through the normal tenant-admin role, not via any platform backdoor.',
+  },
+  {
     q: 'Will the AI replace my staff?',
     a: 'No — it removes the work nobody enjoys. AI doesn\'t answer your phone, greet your clients, or do nails. It drafts the texts when a tech calls in sick, surfaces the lapsed clients you forgot to follow up with, answers "how did Saturday go?" with real numbers in seconds. Your front desk gets back the hours they were burning on busywork. Same headcount, more time on the floor.',
   },
