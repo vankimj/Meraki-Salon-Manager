@@ -117,15 +117,6 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
       <style>{`
         @media (max-width: 899px) { .ms-sidebar { display: none !important; } }
         @media (max-width: 768px) {
-          .ms-action-label,
-          .ms-home-label,
-          .ms-user-name,
-          .ms-user-chevron,
-          .ms-topnav-divider,
-          .ms-impersonate-name { display: none !important; }
-          .ms-action-btn { padding: 0 12px !important; }
-          .ms-preview-select { display: none !important; }
-          .ms-topnav-right { gap: 4px !important; min-width: 0 !important; }
           .ms-topnav { padding: 0 10px !important; gap: 6px !important; }
           .ms-home-btn { min-width: 40px !important; padding: 8px !important; }
           .ms-content { padding: 10px !important; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important; }

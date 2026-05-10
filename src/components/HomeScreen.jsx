@@ -51,33 +51,34 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', background: 'var(--tm-bg, #f8f9fa)', overflowY: 'auto' }}>
 
       {/* Top bar */}
-      <div style={{ background: '#fff', borderBottom: `1px solid var(--tm-border, #ebebeb)`, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, width: '100%', boxSizing: 'border-box' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ background: '#fff', borderBottom: `1px solid var(--tm-border, #ebebeb)`, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, width: '100%', boxSizing: 'border-box', gap: 8 }}>
+        <div className="ms-brand-block" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <svg viewBox="0 0 60 60" fill="none" width={18} height={18}><circle cx="30" cy="22" r="7" fill="white"/><path d="M14 50c0-8.8 7.2-16 16-16s16 7.2 16 16" stroke="white" strokeWidth="3.5" strokeLinecap="round"/></svg>
           </div>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--tm-text, #1a1a1a)', lineHeight: 1.2 }}>Meraki Nail Studio</div>
-            <div style={{ fontSize: 11, color: 'var(--tm-muted, #aaa)' }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="ms-brand-title" style={{ fontSize: 14, fontWeight: 700, color: 'var(--tm-text, #1a1a1a)', lineHeight: 1.2 }}>Meraki Nail Studio</div>
+            <div className="ms-brand-subtitle" style={{ fontSize: 11, color: 'var(--tm-muted, #aaa)' }}>
               Salon Manager{t?.seasonal ? ` · ${t.seasonal.emoji}` : ''}
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="ms-topnav-right" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           {isAdmin && (
-            <button onClick={onAdmin} title="Admin Settings"
+            <button onClick={onAdmin} title="Admin Settings" className="ms-action-btn"
               style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-primary, #2D7A5F)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}>
-              <IconSettings size={16} /> Admin
+              <IconSettings size={16} /> <span className="ms-action-label">Admin</span>
             </button>
           )}
           {realIsAdmin && viewAs && (
-            <button onClick={() => setViewAs(null)} title="Exit preview"
+            <button onClick={() => setViewAs(null)} title={`Exit preview: ${previewLabel(viewAs)}`}
               style={{ height: 40, borderRadius: 20, border: 'none', background: '#f59e0b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
-              ← Exit {previewLabel(viewAs)}
+              ← Exit <span className="ms-impersonate-name">{previewLabel(viewAs)}</span>
             </button>
           )}
           {realIsAdmin && !viewAs && (
             <select value="" onChange={e => { const v = parsePreview(e.target.value); if (v) setViewAs(v); }}
+              className="ms-preview-select"
               style={{ height: 40, borderRadius: 20, border: '1px solid #e0e0e0', background: '#fafafa', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#888', fontFamily: 'inherit', padding: '0 12px', outline: 'none' }}>
               <option value="">👤 Preview as…</option>
               {techUsers.map(u => (
@@ -87,9 +88,9 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
               <option value="readonly">👁 Read-only</option>
             </select>
           )}
-          <button onClick={() => setShowFeedback(true)} title="Report a bug or idea"
+          <button onClick={() => setShowFeedback(true)} title="Report a bug or idea" className="ms-action-btn"
             style={{ height: 40, borderRadius: 20, border: 'none', background: 'var(--tm-accent, #3D95CE)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(0,0,0,.2)' }}>
-            <IconMessage size={16} /> Feedback
+            <IconMessage size={16} /> <span className="ms-action-label">Feedback</span>
           </button>
           {gUser && <TicketPanel />}
           {gUser && <NotificationsBell />}
