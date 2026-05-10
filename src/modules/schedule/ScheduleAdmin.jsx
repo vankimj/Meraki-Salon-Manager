@@ -387,51 +387,10 @@ export default function ScheduleAdmin({ onOpenClient } = {}) {
   async function handleSave(appt, original) {
     try {
       const dur = appt.services.reduce((sum, s) => sum + (Number(s.duration) || 0), 0) || 60;
-
-      // Out-of-hours guard — prompt before saving when the time falls outside
-      // the day's store hours (or the day is closed). Skipped when editing
-      // and neither date nor start time has changed (so re-saving an old
-      // appointment doesn't keep re-prompting).
-      const timeChanged = !original?.id || appt.date !== original.date || appt.startTime !== original.startTime;
-      if (timeChanged && appt.date && appt.startTime) {
-        const apptDow = dayOfWeek(appt.date);
-        const day = settings.storeHours?.[apptDow] || {};
-        const startMins = strToMins(appt.startTime);
-        const endMins   = startMins + dur;
-        const fmtMins = (m) => {
-          const h = Math.floor(m / 60), mm = m % 60;
-          const ampm = h >= 12 ? 'PM' : 'AM';
-          const hh = h > 12 ? h - 12 : h === 0 ? 12 : h;
-          return `${hh}:${String(mm).padStart(2, '0')} ${ampm}`;
-        };
-        let warning = null;
-        if (day.closed) {
-          warning = `The salon is marked closed on ${apptDow.charAt(0).toUpperCase() + apptDow.slice(1)}.`;
-        } else if (day.open && day.close) {
-          const openMins  = strToMins(day.open);
-          const closeMins = strToMins(day.close);
-          if (startMins < openMins) {
-            warning = `Appointment starts at ${fmtMins(startMins)}, before the salon opens (${fmtMins(openMins)}).`;
-          } else if (endMins > closeMins) {
-            warning = `Appointment ends at ${fmtMins(endMins)} (${dur}-minute duration), after the salon closes (${fmtMins(closeMins)}).`;
-          }
-        } else {
-          // No per-day store hours configured — fall back to the global
-          // appointment-hours window so we still warn for clearly wild
-          // times.
-          const apptOpen  = strToMins(settings.apptHours?.open  || '09:00');
-          const apptClose = strToMins(settings.apptHours?.close || '20:00');
-          if (startMins < apptOpen) {
-            warning = `Appointment starts at ${fmtMins(startMins)}, before the earliest available slot (${fmtMins(apptOpen)}).`;
-          } else if (endMins > apptClose) {
-            warning = `Appointment ends at ${fmtMins(endMins)}, after the latest available slot (${fmtMins(apptClose)}).`;
-          }
-        }
-        if (warning) {
-          const proceed = window.confirm(`${warning}\n\nBook this appointment anyway?`);
-          if (!proceed) return;
-        }
-      }
+      // Out-of-hours warning is now surfaced inline in ApptModal's Review
+      // panel before the user clicks Save (one consolidated review surface
+      // instead of stacking browser confirms). By the time we get here,
+      // the user has already seen and accepted any soft warnings.
 
       const { recurrence, ...apptBase } = appt;
       // Keep legacy `notes` string in sync with the structured notesLog so
@@ -1860,7 +1819,7 @@ function DayGrid({ date, appts, timeOff = [], techs, allTechs, techExtended, emp
 
 // ── Appointment modal ─────────────────────────────────
 function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdit, onSave, onDelete, onClose, onCheckout, onAddToTicket, onRefund, onOpenClient, onClientCreated, viewOnly }) {
-  const { gUser } = useApp();
+  const { gUser, settings } = useApp();
   const [saving,    setSaving]    = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   // Inline service-history panel — always rendered when an existing
@@ -2032,42 +1991,80 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
     patchService(i, { name, duration: svc?.duration || 60, price: svc?.basePrice || '' });
   }
 
-  // Every appointment — including walk-ins — must be tied to a contactable
-  // person. Either link to an existing client (clientId set), or give us a
-  // name plus a phone or email so reminders, conflict messages, and
-  // self-service reschedule links can reach them.
-  function missingContact() {
-    if (appt.clientId) return null;
-    const hasName  = !!(appt.clientName  || '').trim();
-    const hasPhone = !!(appt.clientPhone || '').trim();
-    const hasEmail = !!(appt.clientEmail || '').trim();
-    if (!hasName)            return 'Please enter the client\'s name (or pick from the list).';
-    if (!hasPhone && !hasEmail) return 'Please add a phone or email — every appointment needs a way to reach the client.';
-    return null;
-  }
-  const contactError = !isView ? missingContact() : null;
+  // Save-time validation, consolidated into a single inline panel above
+  // the form. Replaces a stack of blocking window.alert / window.confirm
+  // popups (missing contact → banned-client → no service → out-of-hours)
+  // that previously fired one after another. Each issue lives in either:
+  //
+  //   blockers  — Save button is disabled until they're resolved
+  //   warnings  — Save proceeds in one click; user has already seen them
+  //
+  // Net effect for the salon owner: zero modal popups during a normal
+  // save. Issues are visible in the form before they hit Save.
+  const issues = (() => {
+    if (isView) return [];
+    const list = [];
 
-  function hasAnyService() {
-    return (appt.services || []).some(s => (s.name || s.customName || '').trim());
-  }
+    // BLOCKER · client must be contactable
+    if (!appt.clientId) {
+      const hasName  = !!(appt.clientName  || '').trim();
+      const hasPhone = !!(appt.clientPhone || '').trim();
+      const hasEmail = !!(appt.clientEmail || '').trim();
+      if (!hasName) {
+        list.push({ kind: 'block', icon: '👤', label: "Add the client's name (or pick one from the search above)." });
+      } else if (!hasPhone && !hasEmail) {
+        list.push({ kind: 'block', icon: '📞', label: "Add a phone or email — every appointment needs a way to reach the client." });
+      }
+    }
+
+    // BLOCKER · banned client without override
+    if (linkedBanned && !banOverrideAck) {
+      list.push({ kind: 'block', icon: '🚫', label: `${linkedClient?.name || 'This client'} is banned. Tick the override checkbox below to proceed.` });
+    }
+
+    // WARN · no service selected
+    const hasService = (appt.services || []).some(s => (s.name || s.customName || '').trim());
+    if (!hasService) {
+      list.push({ kind: 'warn', icon: '✂️', label: 'No service is selected. The appointment will save without one.' });
+    }
+
+    // WARN · out-of-hours / closed-day
+    if (appt.date && appt.startTime) {
+      const dur       = (appt.services || []).reduce((s, sv) => s + (Number(sv.duration) || 0), 0) || Number(appt.duration) || 60;
+      const apptDow   = dayOfWeek(appt.date);
+      const day       = settings?.storeHours?.[apptDow] || {};
+      const startMins = strToMins(appt.startTime);
+      const endMins   = startMins + dur;
+      const fmtMins   = (m) => {
+        const h = Math.floor(m / 60), mm = m % 60;
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const hh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+        return `${hh}:${String(mm).padStart(2, '0')} ${ampm}`;
+      };
+      const dowLabel = apptDow.charAt(0).toUpperCase() + apptDow.slice(1);
+      if (day.closed) {
+        list.push({ kind: 'warn', icon: '🚫', label: `The salon is marked closed on ${dowLabel}. Booking will save anyway.` });
+      } else if (day.open && day.close) {
+        const openMins  = strToMins(day.open);
+        const closeMins = strToMins(day.close);
+        if (startMins < openMins) {
+          list.push({ kind: 'warn', icon: '🕐', label: `Starts at ${fmtMins(startMins)} — before the salon opens at ${fmtMins(openMins)}.` });
+        } else if (endMins > closeMins) {
+          list.push({ kind: 'warn', icon: '🕐', label: `Ends at ${fmtMins(endMins)} (${dur}-minute duration) — after the salon closes at ${fmtMins(closeMins)}.` });
+        }
+      }
+    }
+
+    return list;
+  })();
+  const blockers = issues.filter(i => i.kind === 'block');
+  const warnings = issues.filter(i => i.kind === 'warn');
 
   async function submit() {
-    const err = missingContact();
-    if (err) { window.alert(err); return; }
-    // Banned-client guard — enforced at save time. The override checkbox in
-    // the modal must be ticked before this call succeeds.
-    if (linkedBanned && !banOverrideAck) {
-      window.alert('This client is banned. Tick the override checkbox if you really want to book them.');
-      return;
-    }
+    if (blockers.length) return; // Save is disabled at the button level
     if (linkedBanned && banOverrideAck) {
-      const ok = window.confirm(`Confirm: book a banned client (${linkedClient?.name || 'unknown'})? This action will be logged.`);
-      if (!ok) return;
-      logActivity('banned_booking_override', `Booked banned client ${linkedClient?.name || appt.clientName} (${appt.clientId}) with ${appt.techName} on ${appt.date} at ${appt.startTime}`);
-    }
-    if (!hasAnyService()) {
-      const ok = window.confirm('No service is selected for this appointment. Save it anyway?');
-      if (!ok) return;
+      logActivity('banned_booking_override',
+        `Booked banned client ${linkedClient?.name || appt.clientName} (${appt.clientId}) with ${appt.techName} on ${appt.date} at ${appt.startTime}`);
     }
     setSaving(true);
     try { await onSave(); } finally { setSaving(false); }
@@ -2099,6 +2096,43 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
 
         {/* Body */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
+
+          {/* Review panel — consolidated save-time validation. Shows
+              every blocker / warning in one place so the user reviews
+              everything once instead of clicking through a stack of
+              browser confirms. */}
+          {(blockers.length > 0 || warnings.length > 0) && (
+            <div style={{
+              marginBottom: 12,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: blockers.length > 0 ? '#fef2f2' : '#fffbeb',
+              border: `1px solid ${blockers.length > 0 ? '#fca5a5' : '#fde68a'}`,
+            }}>
+              <div style={{
+                fontSize: 10, fontWeight: 700,
+                color: blockers.length > 0 ? '#991b1b' : '#92400e',
+                textTransform: 'uppercase', letterSpacing: '.05em',
+                marginBottom: 6,
+              }}>
+                {blockers.length > 0
+                  ? `Fix before saving (${blockers.length})`
+                  : `Heads up (${warnings.length})`}
+              </div>
+              {blockers.map((b, i) => (
+                <div key={`b${i}`} style={{ display: 'flex', gap: 8, fontSize: 12, color: '#991b1b', lineHeight: 1.45, padding: '2px 0' }}>
+                  <span style={{ flexShrink: 0 }}>{b.icon}</span>
+                  <span>{b.label}</span>
+                </div>
+              ))}
+              {warnings.map((w, i) => (
+                <div key={`w${i}`} style={{ display: 'flex', gap: 8, fontSize: 12, color: '#92400e', lineHeight: 1.45, padding: '2px 0' }}>
+                  <span style={{ flexShrink: 0 }}>{w.icon}</span>
+                  <span>{w.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Status badge (view) or selector (edit) */}
           <div style={{ marginBottom: 12 }}>
@@ -2195,9 +2229,6 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                 style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px dashed #fde68a', background: '#fffbeb', color: '#92400e', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
                 + Create new client contact
               </button>
-              {contactError && (
-                <div style={{ fontSize: 11, color: '#b91c1c', marginTop: 6 }}>{contactError}</div>
-              )}
             </div>
           )}
           {!isView && !appt.clientId && newClientOpen && dupeCandidates && (
@@ -2638,9 +2669,20 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
           ) : (
             <>
               <button onClick={onClose} style={{ flex: 1, ...btnBase }}>Cancel</button>
-              <button onClick={submit} disabled={saving}
-                style={{ flex: 2, ...btnBase, background: '#3D95CE', color: '#fff', borderColor: '#3D95CE', opacity: saving ? .6 : 1 }}>
-                {saving ? 'Saving…' : isNew ? 'Book Appointment' : 'Save Changes'}
+              <button onClick={submit}
+                disabled={saving || blockers.length > 0}
+                title={blockers.length > 0 ? 'Resolve the items in the panel above first.' : ''}
+                style={{
+                  flex: 2, ...btnBase,
+                  background: blockers.length > 0 ? '#cbd5e1' : '#3D95CE',
+                  color: '#fff', borderColor: blockers.length > 0 ? '#cbd5e1' : '#3D95CE',
+                  opacity: saving ? .6 : 1,
+                  cursor: (saving || blockers.length > 0) ? 'default' : 'pointer',
+                }}>
+                {saving ? 'Saving…'
+                  : blockers.length > 0 ? 'Fix issues to save'
+                  : warnings.length > 0 ? (isNew ? 'Book anyway' : 'Save anyway')
+                  : (isNew ? 'Book Appointment' : 'Save Changes')}
               </button>
             </>
           )}
