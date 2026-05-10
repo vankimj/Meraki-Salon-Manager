@@ -2,7 +2,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text } from 'react-native';
 import ScheduleScreen from '../screens/ScheduleScreen';
-import ClientsScreen  from '../screens/ClientsScreen';
+import ClientsStack   from './ClientsStack';
 import EarningsScreen from '../screens/EarningsScreen';
 import ChatScreen     from '../screens/ChatScreen';
 import ProfileScreen  from '../screens/ProfileScreen';
@@ -55,7 +55,11 @@ export default function RootNav() {
       >
         <Tab.Screen name="Schedule" component={ScheduleScreen} options={{ title: 'Today' }} />
         <Tab.Screen name="Earnings" component={EarningsScreen} />
-        <Tab.Screen name="Clients"  component={ClientsScreen} />
+        <Tab.Screen
+          name="Clients"
+          component={ClientsStack}
+          options={{ headerShown: false /* the inner stack provides its own header */ }}
+        />
         <Tab.Screen name="Chat"     component={ChatScreen} options={{ title: 'Messages' }} />
         <Tab.Screen name="Profile"  component={ProfileScreen} />
       </Tab.Navigator>

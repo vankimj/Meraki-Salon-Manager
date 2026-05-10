@@ -1,18 +1,29 @@
-import { useState, useEffect, useMemo } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, RefreshControl } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { fetchClients } from '../lib/firestore';
 
 export default function ClientsScreen({ navigation }) {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [query,   setQuery]   = useState('');
 
-  useEffect(() => {
-    fetchClients()
-      .then(setClients)
-      .catch(() => setClients([]))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    try {
+      setClients(await fetchClients());
+    } catch {
+      setClients([]);
+    }
   }, []);
+
+  useEffect(() => {
+    load().finally(() => setLoading(false));
+  }, [load]);
+
+  // Refresh when the user returns to the list (e.g. after editing a
+  // client in the detail screen) so changes show without a hard reload.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const filtered = useMemo(() => {
     if (!query.trim()) return clients;
@@ -45,8 +56,23 @@ export default function ClientsScreen({ navigation }) {
             keyExtractor={c => c.id}
             contentContainerStyle={{ paddingBottom: 24 }}
             ListEmptyComponent={<Text style={styles.empty}>No clients found</Text>}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={async () => {
+                  setRefreshing(true);
+                  await load();
+                  setRefreshing(false);
+                }}
+                tintColor="#3D95CE"
+              />
+            }
             renderItem={({ item: c }) => (
-              <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+              <TouchableOpacity
+                style={styles.row}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('ClientDetail', { clientId: c.id, clientName: c.name })}
+              >
                 {c.picture
                   ? <Image source={{ uri: c.picture }} style={styles.avatar} />
                   : <View style={[styles.avatar, styles.avatarFallback]}>

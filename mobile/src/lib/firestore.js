@@ -76,10 +76,46 @@ export async function fetchClient(id) {
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
+export async function createClient(data) {
+  const ref = await addDoc(tenantCol('clients'), {
+    ...data,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  return ref.id;
+}
+
+export async function saveClient(id, data) {
+  await setDoc(doc(tenantCol('clients'), id),
+    { ...data, updatedAt: new Date().toISOString() },
+    { merge: true });
+}
+
+// Pull a client's appointment history. Same query the web ClientsAdmin
+// uses — appointments where clientId matches. Sorted newest first.
+export async function fetchClientAppointments(clientId) {
+  if (!clientId) return [];
+  const snap = await getDocs(query(tenantCol('appointments'), where('clientId', '==', clientId)));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => `${b.date} ${b.startTime}`.localeCompare(`${a.date} ${a.startTime}`));
+}
+
 // ── Employees ─────────────────────────────────────────
 export async function fetchEmployees() {
   const snap = await getDocs(query(tenantCol('employees'), orderBy('sortOrder')));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// Save editable fields on an employee doc. The Firestore rule for
+// employees/{id} requires admin to write the parent doc, so techs
+// can't actually persist self-edits today — we still ship the call
+// here and mock-update locally. A future rules change will let a tech
+// update their OWN doc (matched by email) for the editable fields,
+// which keeps comp data in employees/{id}/private/comp (admin-only).
+export async function saveEmployee(id, data) {
+  await setDoc(doc(tenantCol('employees'), id),
+    { ...data, updatedAt: new Date().toISOString() },
+    { merge: true });
 }
 
 // Look up the current user's employee record by email (employees doc
