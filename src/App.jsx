@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { BUILD_LABEL } from './lib/version';
 import { TENANT_ID } from './lib/tenant';
@@ -102,13 +102,43 @@ function AppShell() {
   const { slides, def, cur, magicLinkPending, handbookPending, isPortalUser, settings, updateSettings, isAdmin, gUser, pinPrompt, acceptPinPrompt, dismissPinPrompt } = useApp();
 
   if (isPortalUser) return <ClientPortal />;
-  const [view,      setView]      = useState('home'); // 'home' | 'tipflow' | 'schedule' | 'clients' | 'services' | 'employees'
+  const [view,      setViewState] = useState('home'); // 'home' | 'tipflow' | 'schedule' | 'clients' | 'services' | 'employees'
   const [showAdmin, setShowAdmin] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   // Cross-module deep-link: when set, clicking a client name in Schedule
   // jumps to the Clients module and auto-opens that client's profile.
   // ClientsAdmin clears it once it's consumed the value.
   const [openClientId, setOpenClientId] = useState(null);
+
+  // Browser back-button integration. The app uses internal `view` state
+  // for navigation (no URL changes), so the browser back button used to
+  // exit the app entirely. We push a history entry every time `view`
+  // changes from a user nav so back walks back through the stack, and
+  // listen for popstate to apply the prior state without re-pushing.
+  const skipPushRef = useRef(false);
+  const setView = useCallback((next) => {
+    setViewState(prev => {
+      const v = typeof next === 'function' ? next(prev) : next;
+      if (v !== prev && !skipPushRef.current) {
+        window.history.pushState({ view: v }, '', window.location.search);
+      }
+      skipPushRef.current = false;
+      return v;
+    });
+  }, []);
+  useEffect(() => {
+    if (!window.history.state || !window.history.state.view) {
+      window.history.replaceState({ view: 'home' }, '', window.location.search);
+    }
+    const onPopState = (e) => {
+      const v = e.state?.view || 'home';
+      skipPushRef.current = true;
+      setViewState(v);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   const openClientProfile = (id) => { if (!id) return; setOpenClientId(id); setView('clients'); };
 
   // Auto-open the first-login wizard once per fresh tenant. We trigger if
