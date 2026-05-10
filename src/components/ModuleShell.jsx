@@ -119,6 +119,8 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
         @media (max-width: 600px) {
           .ms-action-label { display: none; }
           .ms-action-btn { padding: 0 12px !important; }
+          .ms-preview-select { display: none !important; }
+          .ms-topnav-right { gap: 4px !important; }
           .ms-content { padding: 10px !important; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
         }
       `}</style>
@@ -156,7 +158,7 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
         </div>
 
         {/* Right side */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <div className="ms-topnav-right" style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           <div style={{ width: 8, height: 8, borderRadius: '50%', background: syncColor, transition: 'background .3s', animation: syncState === 'syncing' ? 'pulse .8s infinite' : 'none' }} />
           {realIsAdmin && viewAs && (
             <button onClick={() => setViewAs(null)} title="Exit preview"
@@ -172,6 +174,7 @@ export default function ModuleShell({ view, title, onHome, onAdmin, onNavigate, 
           )}
           {realIsAdmin && !viewAs && (
             <select value="" onChange={e => { const v = parsePreview(e.target.value); if (v) setViewAs(v); }}
+              className="ms-preview-select"
               style={{ height: 40, borderRadius: 20, border: '1px solid #e0e0e0', background: '#fafafa', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#888', fontFamily: 'inherit', padding: '0 12px', outline: 'none' }}>
               <option value="">👤 Preview as…</option>
               {techUsers.map(u => (
