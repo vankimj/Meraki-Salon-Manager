@@ -4,7 +4,7 @@ import { Text } from 'react-native';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import ClientsStack   from './ClientsStack';
 import EarningsScreen from '../screens/EarningsScreen';
-import ChatScreen     from '../screens/ChatScreen';
+import ChatStack      from './ChatStack';
 import ProfileScreen  from '../screens/ProfileScreen';
 import usePushRegistration from '../hooks/usePushRegistration';
 
@@ -60,7 +60,11 @@ export default function RootNav() {
           component={ClientsStack}
           options={{ headerShown: false /* the inner stack provides its own header */ }}
         />
-        <Tab.Screen name="Chat"     component={ChatScreen} options={{ title: 'Messages' }} />
+        <Tab.Screen
+          name="Chat"
+          component={ChatStack}
+          options={{ headerShown: false, title: 'Messages' }}
+        />
         <Tab.Screen name="Profile"  component={ProfileScreen} />
       </Tab.Navigator>
     </NavigationContainer>

@@ -1,6 +1,6 @@
 import {
   collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc,
-  query, where, orderBy, limit, onSnapshot,
+  query, where, orderBy, limit, onSnapshot, arrayUnion, increment,
 } from 'firebase/firestore';
 import { db, TENANT_ID } from './firebase';
 
@@ -167,4 +167,62 @@ export async function fetchServices() {
 export async function fetchSettings() {
   const snap = await getDoc(tenantDoc('settings'));
   return snap.exists() ? snap.data() : {};
+}
+
+// ── Client chat ───────────────────────────────────────
+// One document per client at chats/{clientId}; messages stored as an
+// array on the doc (matches the web Chat module's data model).
+const CHATS_COL = tenantCol('chats');
+
+export function subscribeToChats(cb) {
+  const q = query(CHATS_COL, orderBy('lastAt', 'desc'));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  }, (err) => {
+    console.warn('[firestore] subscribeToChats error:', err?.message);
+    cb([]);
+  });
+}
+
+export function subscribeToChat(clientId, cb) {
+  return onSnapshot(doc(CHATS_COL, clientId), (snap) => {
+    cb(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+  }, (err) => {
+    console.warn('[firestore] subscribeToChat error:', err?.message);
+    cb(null);
+  });
+}
+
+export async function sendChatMessage(clientId, clientInfo, message) {
+  const now = new Date().toISOString();
+  const chatRef = doc(CHATS_COL, clientId);
+  const snap = await getDoc(chatRef);
+  if (!snap.exists()) {
+    await setDoc(chatRef, {
+      clientId,
+      clientName:  clientInfo?.name  || 'Client',
+      clientEmail: clientInfo?.email || '',
+      messages:    [message],
+      lastMessage: message.text,
+      lastAt:      now,
+      unreadStaff: message.from === 'client' ? 1 : 0,
+      updatedAt:   now,
+    });
+  } else {
+    const updates = {
+      messages:    arrayUnion(message),
+      lastMessage: message.text,
+      lastAt:      now,
+      updatedAt:   now,
+    };
+    if (message.from === 'client') updates.unreadStaff = increment(1);
+    else                           updates.unreadStaff = 0;
+    await updateDoc(chatRef, updates);
+  }
+}
+
+export async function markChatRead(clientId) {
+  try {
+    await updateDoc(doc(CHATS_COL, clientId), { unreadStaff: 0 });
+  } catch {}
 }
