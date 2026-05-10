@@ -192,6 +192,47 @@ async function tenantFromAddress(db, tenantId) {
   return addr;
 }
 
+// ── Per-tenant brand fields (for email body / footer copy) ───────────────────
+// Returns the strings that show up inside outbound email templates, sourced
+// from the tenant doc + their public webfront config:
+//   salonName  — display name in greetings ("Hi Bella! Welcome back to {salonName}")
+//   addressLine — single-line collapsed address (multi-line `\n` form joined with ", ")
+//   footerLine — combined "{salonName} · {address}" or just "{salonName}" if no address
+//
+// Falls back to "your salon" / "Plume Nexus" when the tenant doc / webfront
+// config is missing, so a misconfigured tenant doesn't ship blank emails.
+//
+// Cached in-process by tenantId, same TTL as tenantFromAddress.
+const _brandCache = new Map();
+async function tenantBranding(db, tenantId) {
+  if (_brandCache.has(tenantId)) return _brandCache.get(tenantId);
+  let brand = {
+    salonName:   'your salon',
+    addressLine: '',
+    footerLine:  'Plume Nexus',
+  };
+  try {
+    const [tDoc, wfDoc] = await Promise.all([
+      db.doc(`tenants/${tenantId}`).get(),
+      db.doc(`tenants/${tenantId}/data/webfront`).get(),
+    ]);
+    const tData = tDoc.exists ? tDoc.data() : {};
+    const wf    = wfDoc.exists ? wfDoc.data() : {};
+    const salonName = (wf.salonName || tData.name || 'your salon').toString().slice(0, 80);
+    const addrLines = String(wf.address || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const addressLine = addrLines.join(', ').slice(0, 200);
+    brand = {
+      salonName,
+      addressLine,
+      footerLine: addressLine ? `${salonName} · ${addressLine}` : salonName,
+    };
+  } catch (e) {
+    console.warn(`[tenantBranding] tenant=${tenantId} lookup failed:`, e?.message);
+  }
+  _brandCache.set(tenantId, brand);
+  return brand;
+}
+
 // ── Multi-tenant iteration helper ─────────────────────────────────────────────
 // Cron jobs serving the SaaS fan out across every active tenant instead of the
 // legacy single-tenant `tenants/${TENANT_ID}/...` paths. Per-tenant failures
@@ -278,14 +319,14 @@ function buildSubject(changeType, clientName, date) {
   return subjects[changeType] || `Schedule update — ${d}`;
 }
 
-function buildHtml(data) {
+function buildHtml(data, brand) {
   const dateStr = `${esc(fmtDate(data.date))} at ${esc(fmtTime(data.startTime))}`;
   return `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Schedule Notification</div>
     </div>
     <div style="padding:24px;">
@@ -300,14 +341,14 @@ function buildHtml(data) {
       </div>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
 </html>`;
 }
 
-function buildHandbookReminderHtml(data, empName) {
+function buildHandbookReminderHtml(data, empName, brand) {
   const firstName = (empName || data.techName || 'Team').split(' ')[0];
   const title     = data.handbookTitle || 'Employee Handbook';
   const version   = data.version || '1.0';
@@ -316,22 +357,22 @@ function buildHandbookReminderHtml(data, empName) {
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Employee Handbook</div>
     </div>
     <div style="padding:24px;">
       <p style="font-size:15px;color:#222;margin:0 0 6px;font-weight:600;">Hi ${esc(firstName)}!</p>
       <p style="font-size:14px;line-height:1.65;color:#555;margin:0 0 20px;">
         The <strong>${esc(title)}</strong> (v${esc(version)}) has been updated and requires your acknowledgment.
-        Please log in to the Meraki Salon Manager app to read and sign the latest handbook.
+        Please log in to the salon manager app to read and sign the latest handbook.
       </p>
       <div style="background:#FEF9EC;border-radius:8px;padding:14px 16px;border:1px solid #fcd34d;">
         <div style="font-size:13px;color:#92400e;font-weight:600;">Action Required</div>
-        <div style="font-size:13px;color:#555;margin-top:4px;">Sign the ${esc(title)} v${esc(version)} in the Meraki app under HR → Handbook.</div>
+        <div style="font-size:13px;color:#555;margin-top:4px;">Sign the ${esc(title)} v${esc(version)} under HR → Handbook.</div>
       </div>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
@@ -360,6 +401,7 @@ exports.sendReceiptEmail = onDocumentCreated(
       const settingsSnap = await getFirestore().doc(`tenants/${tenantId}/data/settings`).get();
       if (settingsSnap.exists) googleReviewUrl = settingsSnap.data().googleReviewUrl || null;
     } catch { /* non-fatal */ }
+    const brand = await tenantBranding(getFirestore(), tenantId);
 
     const dateStr     = `${esc(fmtDate(date))}${startTime ? ' at ' + esc(fmtTime(startTime)) : ''}`;
     const firstName   = (clientName || 'there').split(' ')[0];
@@ -380,12 +422,12 @@ exports.sendReceiptEmail = onDocumentCreated(
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Receipt</div>
     </div>
     <div style="padding:24px;">
       <p style="font-size:15px;color:#222;margin:0 0 4px;font-weight:600;">Hi ${esc(firstName)}!</p>
-      <p style="font-size:13px;color:#888;margin:0 0 20px;">Thanks for visiting Meraki Nail Studio. Here's your receipt.</p>
+      <p style="font-size:13px;color:#888;margin:0 0 20px;">Thanks for visiting ${esc(brand.salonName)}. Here's your receipt.</p>
 
       <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#555;">
         <div>📅 ${dateStr}</div>
@@ -421,7 +463,7 @@ exports.sendReceiptEmail = onDocumentCreated(
       }
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
@@ -445,7 +487,7 @@ exports.sendReceiptEmail = onDocumentCreated(
   }
 );
 
-function buildMarketingHtml(bodyHtml, promoCode, promoLabel, ctaText, ctaUrl, unsubLink) {
+function buildMarketingHtml(bodyHtml, promoCode, promoLabel, ctaText, ctaUrl, unsubLink, brand) {
   // bodyHtml is pre-escaped by the caller (sendMarketingCampaign). The other
   // four inputs come straight from the campaign doc — escape every one and
   // restrict ctaUrl to http(s).
@@ -465,7 +507,7 @@ function buildMarketingHtml(bodyHtml, promoCode, promoLabel, ctaText, ctaUrl, un
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand?.salonName || 'your salon')}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Message from the team</div>
     </div>
     <div style="padding:24px;">
@@ -474,7 +516,7 @@ function buildMarketingHtml(bodyHtml, promoCode, promoLabel, ctaText, ctaUrl, un
       ${ctaBlock}
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand?.footerLine || 'Plume Nexus')}</p>
       <p style="font-size:10px;color:#ccc;margin:4px 0 0;">
         You're receiving this as a valued client.${unsubLink ? ` <a href="${esc(unsubLink)}" style="color:#888;text-decoration:underline;">Unsubscribe</a>` : ' Reply to this email to unsubscribe.'}
         &nbsp;·&nbsp; <a href="${esc(publicAppUrl.value() || '')}/?terms=1" style="color:#888;text-decoration:underline;">Terms</a>
@@ -524,6 +566,7 @@ async function processEmailCampaign(tenantId, docRef, data) {
 
   const resend = new Resend(apiKey);
   const fromAddr = await tenantFromAddress(getFirestore(), tenantId);
+  const brand    = await tenantBranding(getFirestore(), tenantId);
   const subject = data.subject || '';
   const body = data.body || '';
 
@@ -605,7 +648,7 @@ async function processEmailCampaign(tenantId, docRef, data) {
           from:    fromAddr,
           to:      email,
           subject: personalizedSubject,
-          html:    buildMarketingHtml(bodyHtml, promoCode, promoLabel, data.ctaText || null, data.ctaUrl || null, unsubUrl(tenantId, clientId)),
+          html:    buildMarketingHtml(bodyHtml, promoCode, promoLabel, data.ctaText || null, data.ctaUrl || null, unsubUrl(tenantId, clientId), brand),
         });
         if (result?.error) {
           // Resend returns { data: null, error: { name, message, ...} }
@@ -977,13 +1020,15 @@ exports.emailEmployeeInvite = onCall({ cors: true }, async (request) => {
   const resend = new Resend(apiKey);
 
   const firstName = (emp.name || 'there').split(' ')[0];
+  const brand = await tenantBranding(db, tenantId);
   const html = buildAutoEmail(
     `Welcome to ${salonName}`,
     firstName,
     `<p style="font-size:14px;color:#222;margin:0 0 12px;">${esc(salonName)} added you to their team on Plume Nexus — the salon's scheduling and earnings app.</p>
      <p style="font-size:13px;color:#555;margin:0 0 18px;">Click below to sign in with Google using <strong>${esc(email)}</strong>. You'll see your daily schedule, real-time tips and earnings, and your weekly take-home — all in one place.</p>`,
     'Sign in with Google',
-    signInUrl
+    signInUrl,
+    brand
   );
   await resend.emails.send({
     from:    await tenantFromAddress(db, tenantId),
@@ -1090,7 +1135,7 @@ exports.manageAppointment = onCall({ cors: true, secrets: [apptManageSecret] }, 
         hoursUntil: hUntil,
       },
       salon: {
-        name: settings.salonName || 'Meraki Nail Studio',
+        name: settings.salonName || (await tenantBranding(getFirestore(), tid)).salonName,
         phone: settings.contactPhone || settings.phone || '',
       },
     };
@@ -1217,18 +1262,20 @@ exports.sendReviewRequestEmail = onDocumentCreated(
     const firstName   = (clientName || 'there').split(' ')[0];
     const reqId       = snap.id;
     const trackUrl    = `https://us-central1-meraki-salon-manager.cloudfunctions.net/trackReviewClick?r=${encodeURIComponent(reqId)}`;
+    const db0 = getFirestore();
+    const brand = await tenantBranding(db0, tenantId);
     const html = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">We'd love your feedback</div>
     </div>
     <div style="padding:24px;">
       <p style="font-size:15px;color:#222;margin:0 0 6px;font-weight:600;">Hi ${esc(firstName)}! 💅</p>
       <p style="font-size:14px;line-height:1.7;color:#555;margin:0 0 24px;">
-        Thank you so much for visiting us at Meraki Nail Studio! We hope you loved your nails.
+        Thank you so much for visiting us at ${esc(brand.salonName)}! We hope you loved your nails.
         If you have a moment, leaving us a Google review would mean the world to us and helps
         other clients find us.
       </p>
@@ -1239,18 +1286,17 @@ exports.sendReviewRequestEmail = onDocumentCreated(
         <p style="font-size:11px;color:#bbb;margin:10px 0 0;">It only takes 30 seconds and helps us so much 🙏</p>
       </div>
       <p style="font-size:12px;color:#aaa;line-height:1.6;margin:0;">
-        We can't wait to see you again soon!<br>— The Meraki Nail Studio Team
+        We can't wait to see you again soon!<br>— The ${esc(brand.salonName)} Team
       </p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
 </html>`;
 
     try {
-      const db0 = getFirestore();
       const fromAddr = await tenantFromAddress(db0, tenantId);
       const resend = new Resend(apiKey);
       const { error } = await resend.emails.send({
@@ -1278,7 +1324,7 @@ exports.sendReviewRequestEmail = onDocumentCreated(
             html: `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Review Request Sent</div>
     </div>
     <div style="padding:24px;">
@@ -1292,7 +1338,7 @@ exports.sendReviewRequestEmail = onDocumentCreated(
       </div>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div></body></html>`,
           }).catch(e => console.error('[ReviewRequest] Tech notify failed:', e.message));
@@ -1329,13 +1375,14 @@ exports.sendAccessRequestNotification = onDocumentCreated(
 
     const resend = new Resend(apiKey);
     const name   = req.name || req.email;
+    const brand  = await tenantBranding(db, tenantId);
 
     const html = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">New Access Request</div>
     </div>
     <div style="padding:24px;">
@@ -1351,7 +1398,7 @@ exports.sendAccessRequestNotification = onDocumentCreated(
       </p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
@@ -1438,13 +1485,14 @@ exports.sendApptNotification = onDocumentCreated(
       }
 
       const resend   = new Resend(apiKey);
+      const brand    = await tenantBranding(db, tenantId);
       const isHandbookReminder = data.changeType === 'handbook_reminder';
       const subject  = isHandbookReminder
         ? `Action required: Sign the ${data.handbookTitle || 'Employee Handbook'}`
         : buildSubject(data.changeType, data.clientName, data.date);
       const html     = isHandbookReminder
-        ? buildHandbookReminderHtml(data, empSnap.docs[0].data().name)
-        : buildHtml(data);
+        ? buildHandbookReminderHtml(data, empSnap.docs[0].data().name, brand)
+        : buildHtml(data, brand);
       const { error } = await resend.emails.send({
         from:    await tenantFromAddress(db, tenantId),
         to:      email,
@@ -1474,7 +1522,7 @@ function tomorrowStr() {
   return d.toISOString().slice(0, 10);
 }
 
-function buildReminderHtml(appt, client, tenantId) {
+function buildReminderHtml(appt, client, tenantId, brand) {
   const dateStr  = `${esc(fmtDate(appt.date))} at ${esc(fmtTime(appt.startTime))}`;
   const services = (appt.services || []).map(s => s.name).filter(Boolean).join(', ') || 'Nail services';
   const duration = appt.duration ? `${appt.duration} min` : '';
@@ -1484,13 +1532,13 @@ function buildReminderHtml(appt, client, tenantId) {
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Appointment Reminder</div>
     </div>
     <div style="padding:24px;">
       <p style="font-size:15px;color:#222;margin:0 0 6px;font-weight:600;">Hi ${esc(client.name?.split(' ')[0] || client.name)}!</p>
       <p style="font-size:14px;line-height:1.65;color:#555;margin:0 0 20px;">
-        Just a reminder that you have an appointment <strong>tomorrow</strong> at Meraki Nail Studio.
+        Just a reminder that you have an appointment <strong>tomorrow</strong> at ${esc(brand.salonName)}.
       </p>
       <div style="background:#f8f9fa;border-radius:8px;padding:16px;border:1px solid #e8e8e8;">
         <div style="font-size:13px;color:#333;margin-bottom:8px;display:flex;gap:10px;">
@@ -1502,9 +1550,9 @@ function buildReminderHtml(appt, client, tenantId) {
         <div style="font-size:13px;color:#333;margin-bottom:8px;display:flex;gap:10px;">
           <span>👩‍💼</span><span>with ${esc(appt.techName)}</span>
         </div>
-        <div style="font-size:13px;color:#333;display:flex;gap:10px;">
-          <span>📍</span><span>Columbus, OH</span>
-        </div>
+        ${brand.addressLine ? `<div style="font-size:13px;color:#333;display:flex;gap:10px;">
+          <span>📍</span><span>${esc(brand.addressLine)}</span>
+        </div>` : ''}
       </div>
       ${manageLink ? `<div style="text-align:center;margin:18px 0 0;">
         <a href="${esc(manageLink)}" style="display:inline-block;background:#5b3b8c;color:#fff;font-size:13px;font-weight:600;padding:11px 24px;border-radius:10px;text-decoration:none;">
@@ -1516,14 +1564,14 @@ function buildReminderHtml(appt, client, tenantId) {
       </p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
 </html>`;
 }
 
-function buildMeetingReminderHtml(meeting, participantName, timeLabel) {
+function buildMeetingReminderHtml(meeting, participantName, timeLabel, brand) {
   const firstName = (participantName || 'Team').split(' ')[0];
   const dateStr   = `${esc(fmtDate(meeting.date))} at ${esc(fmtTime(meeting.startTime))}`;
   const durLabel  = meeting.duration ? `${meeting.duration} min` : '';
@@ -1537,7 +1585,7 @@ function buildMeetingReminderHtml(meeting, participantName, timeLabel) {
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Meeting Reminder — starting in ${esc(timeLabel)}</div>
     </div>
     <div style="padding:24px;">
@@ -1553,21 +1601,21 @@ function buildMeetingReminderHtml(meeting, participantName, timeLabel) {
       </div>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
 </html>`;
 }
 
-async function sendMeetingReminderBatch(resend, fromAddr, meeting, participants, timeLabel, ref, flag) {
+async function sendMeetingReminderBatch(resend, fromAddr, brand, meeting, participants, timeLabel, ref, flag) {
   const withEmail = (participants || []).filter(p => p.email);
   await Promise.all(withEmail.map(p =>
     resend.emails.send({
       from:    fromAddr,
       to:      p.email,
       subject: `Starting in ${timeLabel}: ${meeting.title}`,
-      html:    buildMeetingReminderHtml(meeting, p.name, timeLabel),
+      html:    buildMeetingReminderHtml(meeting, p.name, timeLabel, brand),
     }).catch(e => console.error('[MeetingReminders] Email to', p.email, 'failed:', e.message))
   ));
   await ref.update({ [`reminders.${flag}`]: true });
@@ -1586,6 +1634,7 @@ exports.sendMeetingReminders = onSchedule(
     await forEachActiveTenant('MeetingReminders', async (tenantId) => {
       const db = getFirestore();
       const fromAddr = await tenantFromAddress(db, tenantId);
+      const brand    = await tenantBranding(db, tenantId);
       const snap = await db.collection(`tenants/${tenantId}/meetings`)
         .where('date', '>=', today)
         .get();
@@ -1599,11 +1648,11 @@ exports.sendMeetingReminders = onSchedule(
         const diffMin = (startTimestamp - now) / 60000;
 
         if (diffMin >= 55 && diffMin <= 75 && !reminders.sent60) {
-          await sendMeetingReminderBatch(resend, fromAddr, meeting, participants, '1 hour',     docSnap.ref, 'sent60');
+          await sendMeetingReminderBatch(resend, fromAddr, brand, meeting, participants, '1 hour',     docSnap.ref, 'sent60');
           batchesSent++;
         }
         if (diffMin >= 10 && diffMin <= 25 && !reminders.sent15) {
-          await sendMeetingReminderBatch(resend, fromAddr, meeting, participants, '15 minutes', docSnap.ref, 'sent15');
+          await sendMeetingReminderBatch(resend, fromAddr, brand, meeting, participants, '15 minutes', docSnap.ref, 'sent15');
           batchesSent++;
         }
       }
@@ -1630,6 +1679,7 @@ exports.sendDailyReminders = onSchedule(
       const db = getFirestore();
       const tenantName = tData.name || tenantId;
       const fromAddr = await tenantFromAddress(db, tenantId);
+      const brand    = await tenantBranding(db, tenantId);
 
       const apptSnap = await db
         .collection(`tenants/${tenantId}/appointments`)
@@ -1664,7 +1714,7 @@ exports.sendDailyReminders = onSchedule(
             from:    fromAddr,
             to:      email,
             subject: `Reminder: Your appointment tomorrow at ${tenantName}`,
-            html:    buildReminderHtml(appt, client, tenantId),
+            html:    buildReminderHtml(appt, client, tenantId, brand),
           });
           if (error) throw new Error(error.message || JSON.stringify(error));
 
@@ -1718,6 +1768,7 @@ exports.sendTechAppointmentReminders = onSchedule(
       const tenantName = tData.name || tenantId;
       const tenantShort = String(tenantName).split(/\s+/)[0] || tenantName;
       const fromAddr = await tenantFromAddress(db, tenantId);
+      const brand    = await tenantBranding(db, tenantId);
 
       const sDoc = await db.doc(`tenants/${tenantId}/data/settings`).get();
       const cfg  = ((sDoc.exists ? sDoc.data() : {}).techReminders) || {};
@@ -1808,7 +1859,7 @@ exports.sendTechAppointmentReminders = onSchedule(
                  <tr><td style="padding:6px 0;color:#888;">Services</td><td style="padding:6px 0;">${services}</td></tr>
                  ${appt.notes ? `<tr><td style="padding:6px 0;color:#888;">Notes</td><td style="padding:6px 0;font-style:italic;">${String(appt.notes).slice(0, 280)}</td></tr>` : ''}
                </table>`,
-              null, null
+              null, null, brand
             );
             const { error } = await resend.emails.send({
               from: fromAddr,
@@ -1865,18 +1916,22 @@ exports.sendBookingConfirmation = onDocumentCreated(
     // an appointment doc). Every interpolation below MUST be HTML-escaped so
     // an attacker can't inject markup into mail sent from the verified domain.
     const resend    = new Resend(apiKey);
+    const brand     = await tenantBranding(db, tenantId);
     const firstName = (appt.clientName || 'there').split(' ')[0];
     const dateStr   = `${esc(fmtDate(appt.date))} at ${esc(fmtTime(appt.startTime))}`;
     const svcName   = appt.services?.[0]?.name || 'Nail service';
     const techLine  = appt.techName && appt.techName !== 'TBD' ? appt.techName : 'an available stylist';
     const manageLink = apptManageUrl(tenantId, event.params?.apptId || snap.id);
+    const locationLine = brand.addressLine
+      ? `${brand.salonName}, ${brand.addressLine}`
+      : brand.salonName;
 
     const clientHtml = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:-.3px;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">Booking Confirmation</div>
     </div>
     <div style="padding:24px;">
@@ -1888,7 +1943,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
         <div style="font-size:13px;color:#555;margin-bottom:8px;"><strong>📅</strong> ${dateStr}</div>
         <div style="font-size:13px;color:#555;margin-bottom:8px;"><strong>💅</strong> ${esc(svcName)}</div>
         <div style="font-size:13px;color:#555;margin-bottom:8px;"><strong>👩‍💼</strong> With ${esc(techLine)}</div>
-        <div style="font-size:13px;color:#555;"><strong>📍</strong> Meraki Nail Studio, Columbus OH</div>
+        <div style="font-size:13px;color:#555;"><strong>📍</strong> ${esc(locationLine)}</div>
       </div>
       ${manageLink ? `<div style="text-align:center;margin:18px 0 0;">
         <a href="${esc(manageLink)}" style="display:inline-block;background:#5b3b8c;color:#fff;font-size:13px;font-weight:600;padding:11px 24px;border-radius:10px;text-decoration:none;">
@@ -1898,7 +1953,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
       <p style="font-size:11px;color:#aaa;margin:14px 0 0;text-align:center;">Or reply to this email — we'll take care of you.</p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
@@ -1939,7 +1994,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">New Online Booking</div>
     </div>
     <div style="padding:24px;">
@@ -1954,7 +2009,7 @@ exports.sendBookingConfirmation = onDocumentCreated(
       </div>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body>
@@ -2019,12 +2074,17 @@ exports.generateAnnual1099s = onSchedule(
     const empMap = {};
     empSnaps.docs.forEach(d => { empMap[d.data().name] = d.data(); });
 
-    // Fetch settings for payer info
+    // Fetch settings for payer info. Defaults to the tenant doc's name +
+    // empty address if settings.salon* fields aren't set; if both are
+    // empty, the IRS form will surface the missing data on review rather
+    // than silently writing the wrong salon name. (generateAnnual1099s is
+    // still single-tenant — tracked in audit recommendations.)
     const settingsSnap = await db.doc(`tenants/${TENANT_ID}/data/settings`).get();
     const settings = settingsSnap.exists ? settingsSnap.data() : {};
+    const tenantBrand = await tenantBranding(db, TENANT_ID);
     const payer = {
-      name:    settings.salonName    || 'Meraki Nail Studio',
-      address: settings.salonAddress || 'Columbus, OH',
+      name:    settings.salonName    || tenantBrand.salonName,
+      address: settings.salonAddress || tenantBrand.addressLine || '',
       ein:     settings.ein          || '',
     };
 
@@ -2071,13 +2131,14 @@ exports.sendChatNotification = onDocumentCreated(
     if (!admins.length) return;
 
     const resend    = new Resend(apiKey);
+    const brand     = await tenantBranding(db, tenantId);
     const firstName = (data.clientName || 'A client').split(' ')[0];
     const preview   = (data.preview || '').slice(0, 120);
 
     const html = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">New Client Message</div>
     </div>
     <div style="padding:24px;">
@@ -2085,10 +2146,10 @@ exports.sendChatNotification = onDocumentCreated(
       <div style="background:#f8f9fa;border-radius:8px;padding:14px 16px;border:1px solid #e8e8e8;margin:12px 0;">
         <div style="font-size:13px;color:#555;font-style:italic;">"${esc(preview)}"</div>
       </div>
-      <p style="font-size:13px;color:#888;margin:0;">Open the Meraki app and go to <strong>Messages</strong> to reply.</p>
+      <p style="font-size:13px;color:#888;margin:0;">Open the salon manager app and go to <strong>Messages</strong> to reply.</p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div></body></html>`;
 
@@ -2124,11 +2185,12 @@ exports.sendReviewReceivedNotification = onDocumentCreated(
     const usersSnap   = await db.doc(`tenants/${tenantId}/data/users`).get();
     const adminEmails = usersSnap.exists ? (usersSnap.data().adminEmails || []) : [];
     const admins      = adminEmails.map(email => ({ email }));
+    const brand       = await tenantBranding(db, tenantId);
 
     const html = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#f59e0b,#f97316);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(brand.salonName)}</div>
       <div style="color:rgba(255,255,255,.85);font-size:12px;margin-top:2px;">New Google Review</div>
     </div>
     <div style="padding:24px;">
@@ -2138,10 +2200,10 @@ exports.sendReviewReceivedNotification = onDocumentCreated(
         ${data.techName ? `<div style="font-size:13px;color:#555;">Serviced by <strong>${esc(data.techName)}</strong></div>` : ''}
         ${data.date ? `<div style="font-size:12px;color:#aaa;margin-top:4px;">${esc(data.date)}</div>` : ''}
       </div>
-      <p style="font-size:13px;color:#888;margin:0;">Open the client's profile in the Meraki app to view the full review.</p>
+      <p style="font-size:13px;color:#888;margin:0;">Open the client's profile in the salon manager app to view the full review.</p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div></body></html>`;
 
@@ -2690,7 +2752,8 @@ exports.chatWithReports = onCall(
     const TOOL_DISPATCH = { queryAppointments, getRevenueSummary, getTopClients, getClientHistory, getNewClientsInRange };
 
     const today = new Date().toISOString().slice(0, 10);
-    const systemPrompt = `You are a read-only analytics assistant for Meraki Nail Studio (a nail salon in Columbus, OH).
+    const reportsBrand = await tenantBranding(db, tenantId);
+    const systemPrompt = `You are a read-only analytics assistant for ${reportsBrand.salonName}.
 
 You answer questions about salon data — appointments, revenue, clients, techs — using the tools provided. You CANNOT modify any record, send messages, or change any setting. If asked to do so, decline and explain you're read-only.
 
@@ -2985,7 +3048,8 @@ exports.voiceCommand = onCall(
 
     const TOOL_DISPATCH = { searchClients, listEmployees, listServices, viewSchedule, findAppointment, findOpenSlots, finalizeAction };
 
-    const systemPrompt = `You are a voice assistant for Meraki Nail Studio's front desk. The user just spoke a command into a phone microphone. Your job: parse intent, resolve entities, and call finalizeAction with a structured proposal that the user will confirm before any change happens.
+    const voiceBrand = await tenantBranding(db, tenantId);
+    const systemPrompt = `You are a voice assistant for ${voiceBrand.salonName}'s front desk. The user just spoke a command into a phone microphone. Your job: parse intent, resolve entities, and call finalizeAction with a structured proposal that the user will confirm before any change happens.
 
 Today is ${todayISO} (timezone America/New_York). When the user says "today" / "tomorrow" / "next Tuesday" / "this Friday", convert to explicit YYYY-MM-DD.
 
@@ -3242,12 +3306,13 @@ function isSafeCtaUrl(url, allowedHosts = null) {
   return true;
 }
 
-function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl) {
+function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl, brand) {
   const safeCta = isSafeCtaUrl(ctaUrl);
+  const safeBrand = brand || { salonName: 'your salon', footerLine: 'Plume Nexus' };
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:20px 24px;">
-      <div style="color:#fff;font-size:18px;font-weight:700;">Meraki Nail Studio</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;">${esc(safeBrand.salonName)}</div>
       <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px;">${headerSub}</div>
     </div>
     <div style="padding:24px;">
@@ -3256,10 +3321,10 @@ function buildAutoEmail(headerSub, firstName, bodyHtml, ctaText, ctaUrl) {
       ${safeCta ? `<div style="text-align:center;margin:24px 0;">
         <a href="${ctaUrl}" style="display:inline-block;background:#2D7A5F;color:#fff;font-size:14px;font-weight:700;padding:13px 32px;border-radius:10px;text-decoration:none;">${ctaText}</a>
       </div>` : ''}
-      <p style="font-size:12px;color:#aaa;margin:16px 0 0;">— The Meraki Nail Studio Team</p>
+      <p style="font-size:12px;color:#aaa;margin:16px 0 0;">— The ${esc(safeBrand.salonName)} Team</p>
     </div>
     <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(safeBrand.footerLine)}</p>
       <p style="font-size:10px;color:#ccc;margin:4px 0 0;">Reply to unsubscribe.</p>
     </div>
   </div></body></html>`;
@@ -3299,6 +3364,7 @@ exports.autoBirthdayCampaign = onSchedule(
       if (!targets.length) return;
 
       const fromAddr = await tenantFromAddress(db, tenantId);
+      const brand    = await tenantBranding(db, tenantId);
       let sent = 0;
       for (const client of targets) {
         const sentDocId   = `birthday_${year}_${client.id}`;
@@ -3306,13 +3372,14 @@ exports.autoBirthdayCampaign = onSchedule(
         if (alreadySent.exists) continue;
 
         const firstName  = (client.name || 'there').split(' ')[0];
-        const bookingUrl = settings.bookingUrl || 'https://meraki-salon-manager.web.app/?book';
+        const bookingUrl = settings.bookingUrl
+          || (tenantId === 'meraki' ? 'https://meraki-salon-manager.web.app/?book' : `https://${tenantId}.plumenexus.com/?book`);
         const body = `<p style="font-size:14px;line-height:1.7;color:#555;margin:0 0 8px;">
           🎉 Happy Birthday! We hope your special day is as fabulous as you are.
           As a little gift from all of us at ${esc(tenantShort)}, we'd love to treat you to something special this month.
           Come celebrate with us — you deserve it!
         </p>`;
-        const html = buildAutoEmail("Happy Birthday! 🎂", firstName, body, "Book Your Birthday Visit", bookingUrl);
+        const html = buildAutoEmail("Happy Birthday! 🎂", firstName, body, "Book Your Birthday Visit", bookingUrl, brand);
 
         try {
           const { error } = await resend.emails.send({
@@ -3375,6 +3442,7 @@ exports.autoLapsedCampaign = onSchedule(
       if (!lapsed.length) return;
 
       const fromAddr = await tenantFromAddress(db, tenantId);
+      const brand    = await tenantBranding(db, tenantId);
       let sent = 0;
       for (const client of lapsed) {
         const sentDocId = `lapsed_${client.id}`;
@@ -3382,13 +3450,14 @@ exports.autoLapsedCampaign = onSchedule(
         if (sentSnap.exists && sentSnap.data().sentAt > cutoffIso) continue;
 
         const firstName  = (client.name || 'there').split(' ')[0];
-        const bookingUrl = settings.bookingUrl || 'https://meraki-salon-manager.web.app/?book';
+        const bookingUrl = settings.bookingUrl
+          || (tenantId === 'meraki' ? 'https://meraki-salon-manager.web.app/?book' : `https://${tenantId}.plumenexus.com/?book`);
         const body = `<p style="font-size:14px;line-height:1.7;color:#555;margin:0 0 8px;">
           It's been a while since your last visit, and we genuinely miss you!
           We have exciting new styles and services waiting for you.
           Come back and let us take care of you — your nails (and you!) deserve it.
         </p>`;
-        const html = buildAutoEmail("We miss you! 💅", firstName, body, "Book Your Next Visit", bookingUrl);
+        const html = buildAutoEmail("We miss you! 💅", firstName, body, "Book Your Next Visit", bookingUrl, brand);
 
         try {
           const { error } = await resend.emails.send({
@@ -4235,13 +4304,15 @@ exports.emailMembershipPaymentLink = onCall({ cors: true }, async (request) => {
 
   const resend  = new Resend(apiKey);
   const firstName = (client.name || 'there').split(' ')[0];
+  const brand = await tenantBranding(db, tenantId);
   const html = buildAutoEmail(
     `${plan.name} membership`,
     firstName,
     `<p style="font-size:14px;color:#222;margin:0 0 12px;">You're all set to join the <strong>${esc(plan.name)}</strong> membership at $${plan.price}/${plan.billingPeriod === 'yearly' ? 'year' : 'month'}.</p>
      <p style="font-size:13px;color:#555;margin:0 0 18px;">Click the button below to add your payment method. Your subscription starts immediately and renews automatically. You can cancel anytime through your billing portal — we'll email you the link after sign-up.</p>`,
     'Complete sign-up',
-    url
+    url,
+    brand
   );
   await resend.emails.send({
     from:    await tenantFromAddress(db, tenantId),
@@ -4525,20 +4596,20 @@ function buildIcsForMeeting(meeting) {
   const dtEnd = endLocal.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const escape = s => (s || '').replace(/[\;,]/g, m => '\\' + m).replace(/\n/g, '\\n');
   return [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Meraki Nail Studio//Meetings//EN',
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Plume Nexus//Meetings//EN',
     'BEGIN:VEVENT',
-    `UID:meraki-meeting-${meeting.id || Date.now()}@meraki-salon-manager.web.app`,
+    `UID:meeting-${meeting.id || Date.now()}@plumenexus.com`,
     `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`,
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
-    `SUMMARY:${escape(meeting.title || 'Meraki meeting')}`,
+    `SUMMARY:${escape(meeting.title || 'Team meeting')}`,
     meeting.location    ? `LOCATION:${escape(meeting.location)}`    : '',
     meeting.description ? `DESCRIPTION:${escape(meeting.description)}` : '',
     'END:VEVENT', 'END:VCALENDAR',
   ].filter(Boolean).join('\r\n');
 }
 
-function meetingInviteHtml({ meeting, token, recipientName, baseUrl }) {
+function meetingInviteHtml({ meeting, token, recipientName, baseUrl, brand }) {
   const acceptUrl  = rsvpAppUrl({ meetingId: meeting.id, token, response: 'accept'  });
   const maybeUrl   = rsvpAppUrl({ meetingId: meeting.id, token, response: 'maybe'   });
   const declineUrl = rsvpAppUrl({ meetingId: meeting.id, token, response: 'decline' });
@@ -4556,7 +4627,7 @@ function meetingInviteHtml({ meeting, token, recipientName, baseUrl }) {
   <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#2D7A5F,#3D95CE);padding:24px 24px 20px;color:#fff;">
       <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.8;">Meeting invitation</div>
-      <div style="font-size:22px;font-weight:800;margin-top:4px;line-height:1.25;">${esc(meeting.title || 'Meraki team meeting')}</div>
+      <div style="font-size:22px;font-weight:800;margin-top:4px;line-height:1.25;">${esc(meeting.title || `${brand?.salonName || 'Team'} meeting`)}</div>
     </div>
     <div style="padding:22px 24px;color:#1a1a1a;">
       <p style="margin:0 0 14px;font-size:14px;line-height:1.6;">Hi ${esc(recipientName || 'there')},<br>You're invited to the following meeting. Please let us know if you can make it:</p>
@@ -4576,7 +4647,7 @@ function meetingInviteHtml({ meeting, token, recipientName, baseUrl }) {
       </div>
     </div>
     <div style="padding:14px 24px;background:#fafafa;border-top:1px solid #f0f0f0;text-align:center;font-size:11px;color:#aaa;">
-      Meraki Nail Studio · Sent from your salon's meeting tool
+      ${esc(brand?.salonName || 'Plume Nexus')} · Sent from your salon's meeting tool
     </div>
   </div>
 </body></html>`;
@@ -4608,6 +4679,7 @@ exports.sendMeetingInvites = onCall(async (request) => {
   const updated = [];
   let sent = 0, skipped = 0;
   const fromAddr = await tenantFromAddress(db, tenantId);
+  const brand    = await tenantBranding(db, tenantId);
 
   for (const p of participants) {
     const email = (p.email || '').trim();
@@ -4618,7 +4690,7 @@ exports.sendMeetingInvites = onCall(async (request) => {
         from:    fromAddr,
         to:      email,
         subject: `You're invited: ${meeting.title || 'meeting'} · ${fmtDate(meeting.date)}`,
-        html:    meetingInviteHtml({ meeting, token, recipientName: p.name }),
+        html:    meetingInviteHtml({ meeting, token, recipientName: p.name, brand }),
         attachments: [{
           filename: 'meeting.ics',
           content: icsB64,
@@ -4982,7 +5054,8 @@ exports.sendDirectEmail = onCall({ cors: true }, async (request) => {
   const email = (client.email || '').trim();
   if (!email) throw new HttpsError('failed-precondition', 'Client has no email on file');
 
-  const senderName = request.auth.token?.name || request.auth.token?.email?.split('@')[0] || 'Meraki';
+  const brand = await tenantBranding(db, tenantId);
+  const senderName = request.auth.token?.name || request.auth.token?.email?.split('@')[0] || brand.salonName;
   // Plain-text body wrapped in light HTML so line breaks render. Different
   // shape from marketing emails — this is meant to look like a real one-to-one
   // email from a staff member, not a campaign card.
@@ -4994,8 +5067,8 @@ exports.sendDirectEmail = onCall({ cors: true }, async (request) => {
 <div style="max-width:560px;margin:0 auto;">
 <p style="margin:0 0 14px;">${escaped}</p>
 <p style="margin:24px 0 0;font-size:12px;color:#888;border-top:1px solid #eee;padding-top:12px;">
-— ${esc(senderName)}, Meraki Nail Studio<br>
-${SALON_ADDRESS_HTML || 'Columbus, OH'}
+— ${esc(senderName)}, ${esc(brand.salonName)}<br>
+${esc(brand.addressLine || '')}
 </p>
 </div></body></html>`;
 
@@ -5040,8 +5113,8 @@ ${SALON_ADDRESS_HTML || 'Columbus, OH'}
   return { ok: true, resendId };
 });
 
-// Optional constant; some installs may want a more elaborate footer block.
-const SALON_ADDRESS_HTML = 'Meraki Nail Studio · Columbus, OH';
+// SALON_ADDRESS_HTML constant removed — sendDirectEmail now reads brand
+// fields from tenantBranding().
 
 // Gift card email — fires on giftCard doc creation. Marks emailStatus
 // pending → sending → sent (or failed), captures resendId / errorCode
@@ -5064,30 +5137,34 @@ async function processGiftCardEmail(tenantId, docRef, data) {
   await docRef.update({ emailStatus: 'sending', emailStartedAt: new Date().toISOString() });
 
   const resend = new Resend(apiKey);
+  const brand  = await tenantBranding(getFirestore(), tenantId);
   const recipientName = (data.recipientName || '').trim() || 'there';
   const code = data.code || '';
   const amount = Number(data.balance) || Number(data.originalAmount) || 0;
+  const bookingUrl = (publicAppUrl.value() && tenantId === 'meraki')
+    ? `${publicAppUrl.value()}/?book=1`
+    : `https://${tenantId}.plumenexus.com/?book=1`;
 
   const html = `<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:480px;margin:32px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
     <div style="background:linear-gradient(135deg,#7c3aed,#3D95CE);padding:24px;text-align:center;color:#fff;">
-      <div style="font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.9;">Meraki Nail Studio</div>
+      <div style="font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.9;">${esc(brand.salonName)}</div>
       <div style="font-size:22px;font-weight:700;margin-top:8px;">🎁 You've received a gift card!</div>
     </div>
     <div style="padding:24px;">
       <p style="font-size:15px;color:#222;margin:0 0 14px;">Hi ${esc(recipientName)},</p>
-      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 18px;">Someone has gifted you a Meraki Nail Studio gift card. Use the code below at checkout next time you visit us.</p>
+      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 18px;">Someone has gifted you a ${esc(brand.salonName)} gift card. Use the code below at checkout next time you visit us.</p>
       <div style="background:#f0faf6;border:2px dashed #7c3aed;border-radius:12px;padding:20px;text-align:center;margin:18px 0;">
         <div style="font-size:11px;color:#7c3aed;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px;">Your gift card code</div>
         <div style="font-size:26px;font-weight:800;color:#1a1a1a;letter-spacing:.16em;font-family:monospace,sans-serif;">${esc(code)}</div>
         <div style="font-size:14px;color:#7c3aed;font-weight:600;margin-top:10px;">$${amount.toFixed(2)} balance</div>
       </div>
       <p style="font-size:13px;line-height:1.6;color:#666;margin:0 0 8px;">Save this code — you'll need it at your next visit. Mention it to the front desk or enter it at checkout.</p>
-      <p style="font-size:13px;line-height:1.6;color:#666;margin:0;">Book your appointment any time at <a href="${esc(publicAppUrl.value() || '')}/?book=1" style="color:#2D7A5F;">our online booking page</a>.</p>
+      <p style="font-size:13px;line-height:1.6;color:#666;margin:0;">Book your appointment any time at <a href="${esc(bookingUrl)}" style="color:#2D7A5F;">our online booking page</a>.</p>
     </div>
     <div style="padding:14px 24px;text-align:center;border-top:1px solid #f0f0f0;">
-      <p style="font-size:11px;color:#bbb;margin:0;">Meraki Nail Studio · Columbus, OH</p>
+      <p style="font-size:11px;color:#bbb;margin:0;">${esc(brand.footerLine)}</p>
     </div>
   </div>
 </body></html>`;
