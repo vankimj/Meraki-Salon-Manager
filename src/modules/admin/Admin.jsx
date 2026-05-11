@@ -17,6 +17,7 @@ import { formatTime } from '../../utils/helpers';
 import { logActivity } from '../../lib/logger';
 import { seedFullDemo, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
 import FeedbackModal from '../../components/FeedbackModal';
+import NotificationsBell from '../../components/NotificationsBell';
 import CsvImportSection from '../../components/CsvImportSection';
 
 export default function Admin({ onClose }) {
@@ -141,6 +142,7 @@ export default function Admin({ onClose }) {
             style={{ height: 40, borderRadius: 20, border: 'none', background: '#EBF5FF', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 600, color: '#1a5f8a', fontFamily: 'inherit' }}>
             <span style={{ fontSize: 15 }}>💬</span> Feedback
           </button>
+          <NotificationsBell />
           {gUser?.photoURL && <img src={gUser.photoURL} alt="" style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: '1px solid #e8e8e8' }} />}
         </div>
       </div>
