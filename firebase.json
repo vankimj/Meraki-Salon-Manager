@@ -68,5 +68,11 @@
   ],
   "firestore": {
     "rules": "firestore.rules"
+  },
+  "extensions": {
+    "fs-bq-clients":      "firebase/firestore-bigquery-export@0.3.1",
+    "fs-bq-appointments": "firebase/firestore-bigquery-export@0.3.1",
+    "fs-bq-receipts":     "firebase/firestore-bigquery-export@0.3.1",
+    "fs-bq-employees":    "firebase/firestore-bigquery-export@0.3.1"
   }
 }
