@@ -1875,9 +1875,11 @@ exports.sendTechAppointmentReminders = onSchedule(
       const sDoc = await db.doc(`tenants/${tenantId}/data/settings`).get();
       const cfg  = ((sDoc.exists ? sDoc.data() : {}).techReminders) || {};
       if (cfg.enabled === false) return;
-      const leadMin = Number(cfg.leadMinutes) > 0 ? Number(cfg.leadMinutes) : 15;
-      const channel = cfg.channel || 'email';
-      const upperMins = nowMins + leadMin;
+      // Per-tech lead time + channel are now stored on the employee record.
+      // Window upper bound is the max plausible lead (60m), and we filter
+      // appt-by-appt against each tech's own preference inside the loop.
+      const MAX_LEAD = 60;
+      const upperMins = nowMins + MAX_LEAD;
 
       const apptSnap = await db
         .collection(`tenants/${tenantId}/appointments`)
@@ -1914,7 +1916,7 @@ exports.sendTechAppointmentReminders = onSchedule(
         return false;
       };
 
-      let emailsSent = 0, smsSent = 0, skipped = 0, skippedTimeOff = 0;
+      let emailsSent = 0, smsSent = 0, pushSent = 0, skipped = 0, skippedTimeOff = 0, skippedNotYet = 0;
 
       for (const appt of candidates) {
         const emp = empByName[appt.techName];
@@ -1937,6 +1939,16 @@ exports.sendTechAppointmentReminders = onSchedule(
         const [ah, am] = appt.startTime.split(':').map(Number);
         const apptMins = ah * 60 + am;
         const minutesAway = Math.max(0, apptMins - nowMins);
+
+        // Per-tech preferences. Defaults match the legacy tenant-wide
+        // values so a tech with no settings behaves identically to before.
+        const techLead    = Number(emp.techReminderLeadMinutes) > 0 ? Number(emp.techReminderLeadMinutes) : 15;
+        const techChannel = String(emp.techReminderChannel || 'email').toLowerCase();
+        // Skip if we're still outside this tech's reminder window. Window
+        // is left-open since the cron fires every 5 min — any appt
+        // whose lead-window started in the last 5 min should fire now.
+        if (minutesAway > techLead) { skippedNotYet++; continue; }
+
         const startLabel = (() => {
           const hh = ah > 12 ? ah - 12 : ah === 0 ? 12 : ah;
           const ampm = ah >= 12 ? 'PM' : 'AM';
@@ -1945,8 +1957,12 @@ exports.sendTechAppointmentReminders = onSchedule(
         const services = (appt.services || []).map(s => s.name).filter(Boolean).join(', ') || 'no services listed';
         const clientLabel = appt.clientName || 'Walk-in';
 
-        const wantsEmail = (channel === 'email' || channel === 'both');
-        const wantsSms   = (channel === 'sms'   || channel === 'both');
+        // Channel parser — 'email' / 'sms' / 'push' / 'email+sms' /
+        // 'sms+push' / 'email+push' / 'all', plus 'both' (legacy alias
+        // for email+sms).
+        const wantsEmail = techChannel === 'email' || techChannel.includes('email') || techChannel === 'both' || techChannel === 'all';
+        const wantsSms   = techChannel === 'sms'   || techChannel.includes('sms')   || techChannel === 'both' || techChannel === 'all';
+        const wantsPush  = techChannel === 'push'  || techChannel.includes('push')  || techChannel === 'all';
 
         if (wantsEmail && resend && emp.email) {
           try {
@@ -1989,13 +2005,26 @@ exports.sendTechAppointmentReminders = onSchedule(
           }
         }
 
+        if (wantsPush && emp.email) {
+          try {
+            await sendPushToEmail(db, tenantId, emp.email, {
+              title: `${clientLabel} at ${startLabel} (in ${minutesAway} min)`,
+              body:  services.slice(0, 140),
+              data:  { type: 'tech_reminder', apptId: appt.id, tenantId },
+            });
+            pushSent++;
+          } catch (e) {
+            console.error(`[TechReminders] Push failed for ${emp.name} (tenant=${tenantId}):`, e.message);
+          }
+        }
+
         await db.doc(`tenants/${tenantId}/appointments/${appt.id}`).update({
           techReminderSent: true,
           techReminderSentAt: new Date().toISOString(),
         });
       }
 
-      console.log(`[TechReminders] tenant=${tenantId} due=${candidates.length} emails=${emailsSent} sms=${smsSent} skipped=${skipped} skippedTimeOff=${skippedTimeOff}`);
+      console.log(`[TechReminders] tenant=${tenantId} due=${candidates.length} emails=${emailsSent} sms=${smsSent} push=${pushSent} skipped=${skipped} skippedTimeOff=${skippedTimeOff} skippedNotYet=${skippedNotYet}`);
     });
   }
 );

@@ -414,6 +414,49 @@ function EmployeeModal({ emp, services, isAdmin, onChange, onSave, onClose }) {
                 <input type="checkbox" checked={!!emp.extendedHoursAllowed} onChange={e => onChange({ extendedHoursAllowed: e.target.checked })} />
                 Available during appointment-only hours
               </label>
+
+              {/* ── Notifications (per-tech reminder prefs) ────────────
+                  Tenant-wide on/off switch lives in Admin → Settings →
+                  Tech Appointment Reminders. These three fields let each
+                  tech tune timing / channel / opt-out individually.
+                  Server-side `sendTechAppointmentReminders` reads these
+                  with fallback defaults: 15 min before, email. */}
+              <div style={{ marginTop: 18, padding: '12px 14px', background: '#fafafa', border: '1px solid #ececec', borderRadius: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#888', letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: 10 }}>🔔 Notifications</div>
+                <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={!!emp.techReminderOptOut}
+                    onChange={e => onChange({ techReminderOptOut: e.target.checked })} />
+                  Opt out of appointment reminders
+                </label>
+                {!emp.techReminderOptOut && (
+                  <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Lead time</div>
+                      <select value={emp.techReminderLeadMinutes ?? 15}
+                        onChange={e => onChange({ techReminderLeadMinutes: Number(e.target.value) })}
+                        style={{ ...inp, padding: '7px 10px' }}>
+                        {[5, 10, 15, 20, 30, 45, 60].map(n => (
+                          <option key={n} value={n}>{n} min before</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Channel</div>
+                      <select value={emp.techReminderChannel || 'email'}
+                        onChange={e => onChange({ techReminderChannel: e.target.value })}
+                        style={{ ...inp, padding: '7px 10px' }}>
+                        <option value="email">Email</option>
+                        <option value="sms">SMS</option>
+                        <option value="push">Push (mobile app)</option>
+                        <option value="email+push">Email + Push</option>
+                        <option value="sms+push">SMS + Push</option>
+                        <option value="email+sms">Email + SMS</option>
+                        <option value="all">All three</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
 
