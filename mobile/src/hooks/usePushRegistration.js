@@ -3,7 +3,8 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, arrayUnion, deleteField } from 'firebase/firestore';
-import { auth, db, TENANT_ID } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
+import { getCurrentTenant } from '../lib/currentTenant';
 
 // In Expo Go (SDK 53+) parts of expo-notifications are stubbed/removed.
 // We dynamic-import inside the effect AND wrap each call in try/catch so
@@ -87,7 +88,7 @@ async function registerForPushNotificationsAsync() {
 
 async function savePushTokenForUser(uid, email, token) {
   if (!uid || !token) return;
-  const ref = doc(db, 'tenants', TENANT_ID, 'userPushTokens', uid);
+  const ref = doc(db, 'tenants', getCurrentTenant(), 'userPushTokens', uid);
   await setDoc(ref, {
     email: (email || '').toLowerCase(),
     tokens: arrayUnion(token),
@@ -121,7 +122,7 @@ export default function usePushRegistration() {
 export async function clearPushTokenForUser(uid) {
   if (!uid) return;
   try {
-    const ref = doc(db, 'tenants', TENANT_ID, 'userPushTokens', uid);
+    const ref = doc(db, 'tenants', getCurrentTenant(), 'userPushTokens', uid);
     await setDoc(ref, { tokens: deleteField() }, { merge: true });
   } catch (e) {
     console.warn('[push] clear failed:', e?.message);

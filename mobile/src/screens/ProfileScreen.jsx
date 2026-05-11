@@ -6,11 +6,14 @@ import {
 import { auth } from '../lib/firebase';
 import { saveEmployee } from '../lib/firestore';
 import { clearPushTokenForUser } from '../hooks/usePushRegistration';
+import { clearCurrentTenant } from '../lib/currentTenant';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
+import useMyTenants from '../hooks/useMyTenants';
 
 export default function ProfileScreen({ navigation }) {
   const user = auth.currentUser;
   const { employee, loading: empLoading } = useCurrentEmployee();
+  const { tenants, current: currentTenant, switchTo, loading: tenantsLoading } = useMyTenants();
   const [draft,   setDraft]   = useState(null);
   const [editing, setEditing] = useState(false);
   const [saving,  setSaving]  = useState(false);
@@ -76,6 +79,7 @@ export default function ProfileScreen({ navigation }) {
 
   async function handleSignOut() {
     try { await clearPushTokenForUser(user?.uid); } catch {}
+    try { await clearCurrentTenant(); } catch {}
     await auth.signOut();
   }
 
@@ -126,6 +130,37 @@ export default function ProfileScreen({ navigation }) {
             <Field label="TikTok"    value={draft.tiktok}    onChange={v => setDraft({ ...draft, tiktok: v })}    editing={editing} placeholder="@handle" />
             <Field label="Venmo"     value={draft.venmo}     onChange={v => setDraft({ ...draft, venmo: v })}     editing={editing} placeholder="@username" />
             <Field label="Homepage"  value={draft.homepage}  onChange={v => setDraft({ ...draft, homepage: v })}  editing={editing} placeholder="https://" keyboard="url" />
+          </View>
+        )}
+
+        {/* Salon — visible only when the user has access to ≥1 tenant.
+            Single-tenant users still see their current salon name as a
+            confirmation. Multi-tenant users get a switcher. */}
+        {!tenantsLoading && tenants.length > 0 && (
+          <View style={{ marginTop: 18 }}>
+            <Text style={styles.sectionLabel}>
+              {tenants.length > 1 ? `Salon (${tenants.length})` : 'Salon'}
+            </Text>
+            {tenants.map(t => {
+              const isCurrent = t.id === currentTenant;
+              return (
+                <TouchableOpacity
+                  key={t.id}
+                  disabled={tenants.length === 1 || isCurrent}
+                  onPress={() => switchTo(t.id)}
+                  style={[styles.tenantRow, isCurrent && styles.tenantRowActive]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.tenantName}>{t.name}</Text>
+                    <Text style={styles.tenantMeta}>
+                      {t.role === 'admin' ? 'Admin' : 'Staff'}
+                      {t.plan ? ` · ${t.plan}` : ''}
+                    </Text>
+                  </View>
+                  {isCurrent && <Text style={styles.tenantCheck}>✓</Text>}
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
 
@@ -209,6 +244,12 @@ const styles = StyleSheet.create({
 
   cardRow:      { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
   settingsBody: { fontSize: 13, color: '#888', lineHeight: 19 },
+
+  tenantRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, marginBottom: 8 },
+  tenantRowActive: { backgroundColor: '#f0faf6', borderWidth: 1, borderColor: '#2D7A5F' },
+  tenantName:      { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
+  tenantMeta:      { fontSize: 12, color: '#888', marginTop: 2 },
+  tenantCheck:     { fontSize: 18, color: '#2D7A5F', fontWeight: '700' },
 
   signOutBtn:  { marginTop: 20, alignSelf: 'center', paddingVertical: 10, paddingHorizontal: 30, borderRadius: 22, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca' },
   signOutText: { color: '#ef4444', fontSize: 14, fontWeight: '600' },

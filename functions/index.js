@@ -992,6 +992,75 @@ exports.getMyTenantRole = onCall({ cors: true }, async (request) => {
   };
 });
 
+// Returns every tenant the signed-in user has staff/admin/owner access
+// to — used by the mobile app to populate its salon switcher. Scans
+// every `tenants/*/data/users.staffEmails` for the caller's email plus
+// every `tenants/*.ownerEmail` for tenant-owner relationships. Returns
+// a slim list with just enough to render a picker: id, salon name,
+// tier, and the caller's role within that tenant.
+//
+// Why a Cloud Function: rules let staff read their tenant's data/users
+// projection but NOT others' projections. So a client-side scan would
+// fail for every tenant the user isn't a member of. Server-side admin
+// SDK bypasses rules and can do the scan in one pass.
+exports.getMyTenants = onCall({ cors: true, timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
+  const callerEmail = String(request.auth.token.email || '').toLowerCase();
+  if (!callerEmail) throw new HttpsError('permission-denied', 'No email on token');
+
+  const db = getFirestore();
+  // Bootstrap admin (platform-founder) returns every active tenant —
+  // they can hop into anything for support purposes.
+  const isFounder = await isBootstrapAdmin(request);
+
+  const tenantsSnap = await db.collection('tenants').get();
+  const results = [];
+  for (const t of tenantsSnap.docs) {
+    const td = t.data() || {};
+    if (td.active === false) continue;
+    const tenantId = t.id;
+    const ownerEmailLower = (td.ownerEmail || '').toLowerCase();
+
+    let role = null;
+    if (isFounder) {
+      role = 'admin';
+    } else if (ownerEmailLower === callerEmail) {
+      role = 'admin'; // tenant owner
+    } else {
+      // Read the slim projection — staffEmails / adminEmails arrays.
+      try {
+        const projSnap = await db.doc(`tenants/${tenantId}/data/users`).get();
+        if (projSnap.exists) {
+          const proj = projSnap.data() || {};
+          const adminEmails = (proj.adminEmails || []).map(e => String(e).toLowerCase());
+          const staffEmails = (proj.staffEmails || []).map(e => String(e).toLowerCase());
+          if (adminEmails.includes(callerEmail))      role = 'admin';
+          else if (staffEmails.includes(callerEmail)) role = 'staff';
+        }
+      } catch (_) { /* projection unreadable — caller has no role here */ }
+    }
+
+    if (role) {
+      results.push({
+        id:         tenantId,
+        name:       td.name || tenantId,
+        plan:       td.plan || null,
+        subdomain:  td.subdomain || tenantId,
+        role,
+      });
+    }
+  }
+
+  // Sort: tenant where role is admin first, then by name.
+  results.sort((a, b) => {
+    if (a.role === 'admin' && b.role !== 'admin') return -1;
+    if (b.role === 'admin' && a.role !== 'admin') return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  return { tenants: results };
+});
+
 // Returns the CALLER's own client record for the public booking flow.
 // The clients/{id} collection is staff-read-only at the rules layer, so
 // the booking page can't read it directly. After the visitor authenticates

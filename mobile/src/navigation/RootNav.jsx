@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View } from 'react-native';
@@ -8,6 +9,7 @@ import EarningsScreen from '../screens/EarningsScreen';
 import ChatStack      from './ChatStack';
 import ProfileScreen  from '../screens/ProfileScreen';
 import usePushRegistration from '../hooks/usePushRegistration';
+import { getCurrentTenant, subscribeTenant } from '../lib/currentTenant';
 
 const Tab = createBottomTabNavigator();
 
@@ -43,8 +45,16 @@ export default function RootNav() {
   // value-add, not a blocker for sign-in).
   usePushRegistration();
 
+  // Re-mount the entire navigator when the user switches tenants. Every
+  // screen runs its own data-loading effects on mount, so keying the
+  // container by tenant ID is the simplest way to make multi-tenant
+  // switching force a fresh fetch across all tabs without each screen
+  // needing its own subscribeTenant subscription.
+  const [tenantId, setTenantId] = useState(getCurrentTenant());
+  useEffect(() => subscribeTenant(setTenantId), []);
+
   return (
-    <NavigationContainer>
+    <NavigationContainer key={tenantId}>
       <Tab.Navigator
         initialRouteName="Schedule"
         screenOptions={({ route }) => ({

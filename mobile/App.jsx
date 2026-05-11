@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './src/lib/firebase';
+import { loadInitialTenant } from './src/lib/currentTenant';
 import AuthScreen from './src/screens/AuthScreen';
 import RootNav    from './src/navigation/RootNav';
 
@@ -12,11 +13,18 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => {
-      setUser(u);
-      setLoading(false);
-    });
-    return unsub;
+    // Load the persisted tenant selection from AsyncStorage BEFORE any
+    // Firestore queries fire (every fetch reads getCurrentTenant() at
+    // call time, so it must be hydrated by then).
+    let unsub;
+    (async () => {
+      await loadInitialTenant();
+      unsub = onAuthStateChanged(auth, u => {
+        setUser(u);
+        setLoading(false);
+      });
+    })();
+    return () => { if (unsub) unsub(); };
   }, []);
 
   if (loading) {

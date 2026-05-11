@@ -2,19 +2,23 @@ import { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { fetchEmployeeByEmail } from '../lib/firestore';
+import { subscribeTenant } from '../lib/currentTenant';
 
 // Looks up the signed-in user's employee record (by email) so screens
 // can scope to "my appointments", "my earnings", etc. Returns null while
-// loading or when the user isn't an employee (e.g. owner-only admins).
+// loading or when the user isn't an employee in the current tenant.
 //
-// Refreshes when auth state changes; cached for the session otherwise.
+// Refreshes when:
+//   - auth state changes (sign-in / sign-out)
+//   - the current tenant changes (multi-tenant salon switcher)
 export default function useCurrentEmployee() {
   const [emp, setEmp] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    async function refetch() {
+      const user = auth.currentUser;
       if (cancelled) return;
       if (!user?.email) {
         setEmp(null);
@@ -31,8 +35,11 @@ export default function useCurrentEmployee() {
       } finally {
         if (!cancelled) setLoading(false);
       }
-    });
-    return () => { cancelled = true; unsub(); };
+    }
+
+    const unsubAuth   = onAuthStateChanged(auth, () => refetch());
+    const unsubTenant = subscribeTenant(() => refetch());
+    return () => { cancelled = true; unsubAuth(); unsubTenant(); };
   }, []);
 
   return { employee: emp, techName: emp?.name || null, loading };

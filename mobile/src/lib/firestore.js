@@ -2,10 +2,16 @@ import {
   collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc,
   query, where, orderBy, limit, onSnapshot, arrayUnion, increment,
 } from 'firebase/firestore';
-import { db, TENANT_ID } from './firebase';
+import { db } from './firebase';
+import { getCurrentTenant } from './currentTenant';
 
-const tenantCol = (path) => collection(db, 'tenants', TENANT_ID, path);
-const tenantDoc = (path) => doc(db, 'tenants', TENANT_ID, 'data', ...path.split('/'));
+// tenantCol/tenantDoc read getCurrentTenant() at CALL time so a tenant
+// switch in Profile re-routes subsequent queries without rebinding any
+// module-level state. The old hardcoded TENANT_ID export still exists
+// on firebase.js for the few places that import it directly (push
+// registration). Those are migrated below.
+const tenantCol = (path) => collection(db, 'tenants', getCurrentTenant(), path);
+const tenantDoc = (path) => doc(db, 'tenants', getCurrentTenant(), 'data', ...path.split('/'));
 
 // ── Appointments ───────────────────────────────────────
 export async function fetchAppointments(date) {
