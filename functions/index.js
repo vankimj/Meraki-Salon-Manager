@@ -3829,27 +3829,28 @@ exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
   const url  = `https://${tenantId}.plumenexus.com`;
   const planVal = ['starter', 'pro', 'enterprise'].includes(plan) ? plan : 'starter';
 
-  // Create registry doc + provision in parallel. Pre-populate the staffEmails
-  // array so isTenantStaff rule passes for the owner immediately (rules
-  // require the array form; saveUsers later re-derives it).
+  // Create registry doc + provision atomically via writeBatch. The previous
+  // Promise.all approach left a window where some docs (e.g. data/users
+  // staffEmails projection) could commit while others (data/usersFull)
+  // failed — exact failure mode that hit Meraki on 2026-05-10. A new
+  // tenant in that state would authorize as staff but have no rich users
+  // array, locking the owner out of their own Users tab.
   const ownerEmailLower = (ownerEmail || '').toLowerCase();
-  await Promise.all([
-    db.doc(`tenants/${tenantId}`).set({ name: salonName, ownerName: ownerName || '', ownerEmail, plan: planVal, active: true, createdAt: now }),
-    db.doc(`tenants/${tenantId}/data/settings`).set({ timeoutMin: 5, tier: 'free', createdAt: now }),
-    db.doc(`tenants/${tenantId}/data/slides`).set({ slides: [], def: 0, cur: 0 }),
-    // Slim projection — staff readable. Holds membership lists +
-    // The rich users[] array lives in data/usersFull (admin-only); the
-    // staff-readable projection only carries the membership arrays the
-    // Firestore rules need (isTenantStaff / isTenantAdmin).
-    db.doc(`tenants/${tenantId}/data/users`).set({
-      staffEmails: [ownerEmailLower],
-      adminEmails: [ownerEmailLower],
-    }),
-    // Rich users array — admin-only.
-    db.doc(`tenants/${tenantId}/data/usersFull`).set({
-      users: [{ email: ownerEmail, role: 'admin', uid: '', addedAt: now }],
-    }),
-  ]);
+  const batch = db.batch();
+  batch.set(db.doc(`tenants/${tenantId}`),
+    { name: salonName, ownerName: ownerName || '', ownerEmail, plan: planVal, active: true, createdAt: now });
+  batch.set(db.doc(`tenants/${tenantId}/data/settings`),
+    { timeoutMin: 5, tier: 'free', createdAt: now });
+  batch.set(db.doc(`tenants/${tenantId}/data/slides`),
+    { slides: [], def: 0, cur: 0 });
+  // Slim projection — staff readable. Holds membership lists the
+  // Firestore rules need (isTenantStaff / isTenantAdmin).
+  batch.set(db.doc(`tenants/${tenantId}/data/users`),
+    { staffEmails: [ownerEmailLower], adminEmails: [ownerEmailLower] });
+  // Rich users array — admin-only.
+  batch.set(db.doc(`tenants/${tenantId}/data/usersFull`),
+    { users: [{ email: ownerEmail, role: 'admin', uid: '', addedAt: now }] });
+  await batch.commit();
 
   // Send welcome email — always from the platform identity (the new
   // owner doesn't recognize their own salon as a sender yet).
@@ -4657,7 +4658,11 @@ exports.gustoOAuthCallback = onRequest({ cors: true }, async (req, res) => {
     // open the JS console and dump it). Public-facing connection metadata
     // (companyName, connectedAt) stays on `data/settings` so the HR tab
     // can show "Connected · Acme Salon" without hitting the private doc.
-    await db.doc(`tenants/${tenantId}/data/settingsPrivate`).set({
+    // Batched: a partial success would either store tokens with no public
+    // indicator (UI shows "not connected") or — worse — show "connected"
+    // with no actual tokens (every payroll API call breaks silently).
+    const oauthBatch = db.batch();
+    oauthBatch.set(db.doc(`tenants/${tenantId}/data/settingsPrivate`), {
       gusto: {
         accessToken:  tokens.access_token,
         refreshToken: tokens.refresh_token,
@@ -4665,7 +4670,7 @@ exports.gustoOAuthCallback = onRequest({ cors: true }, async (req, res) => {
         connectedAt:  new Date().toISOString(),
       },
     }, { merge: true });
-    await db.doc(`tenants/${tenantId}/data/settings`).set({
+    oauthBatch.set(db.doc(`tenants/${tenantId}/data/settings`), {
       gusto: {
         // Indicator only; never the access token.
         connected:    true,
@@ -4673,6 +4678,7 @@ exports.gustoOAuthCallback = onRequest({ cors: true }, async (req, res) => {
         connectedAt:  new Date().toISOString(),
       },
     }, { merge: true });
+    await oauthBatch.commit();
 
     res.send('<html><body><script>window.opener?.postMessage("gusto_connected","*");window.close();</script><p>Gusto connected! You can close this window.</p></body></html>');
   } catch (e) {
@@ -4696,17 +4702,19 @@ async function getGustoCredentials(db, tenantId) {
   const legacy = (await legacyRef.get()).data() || {};
   const legacyGusto = legacy.gusto;
   if (legacyGusto?.accessToken) {
-    await privateRef.set({ gusto: {
+    // Atomic migration: copy tokens to private doc AND purge from public
+    // doc together, or neither. A partial would leak tokens in the
+    // staff-readable doc (security regression) or strand them with no
+    // public indicator (UI thinks Gusto is disconnected).
+    const migrateBatch = db.batch();
+    migrateBatch.set(privateRef, { gusto: {
       accessToken:  legacyGusto.accessToken,
       refreshToken: legacyGusto.refreshToken || '',
       companyId:    legacyGusto.companyId || '',
       connectedAt:  legacyGusto.connectedAt || new Date().toISOString(),
       _migratedAt:  new Date().toISOString(),
     }}, { merge: true });
-    // Replace the staff-readable doc's gusto field with a connection
-    // indicator (no token). FieldValue.delete() on the access/refresh
-    // tokens specifically.
-    await legacyRef.set({ gusto: {
+    migrateBatch.set(legacyRef, { gusto: {
       connected:    true,
       companyName:  legacyGusto.companyName || '',
       connectedAt:  legacyGusto.connectedAt || new Date().toISOString(),
@@ -4715,6 +4723,7 @@ async function getGustoCredentials(db, tenantId) {
       refreshToken: FieldValue.delete(),
       companyId:    FieldValue.delete(),
     }}, { merge: true });
+    await migrateBatch.commit();
     return legacyGusto;
   }
   return null;
