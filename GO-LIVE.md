@@ -24,6 +24,19 @@ Switching Meraki Nail Studio off GlossGenius and onto this app. Items grouped by
 - [ ] **Tech assignment method**: confirmed `turnQueue` (Mango POS) is what you want.
 - [ ] **Branding**: salon name, tagline, theme — verify on `/?web` (public site) and inside the app.
 
+## T-7 to T-3 days — Customer-data defense-in-depth (LAUNCH-BLOCKING)
+
+**Principle:** losing customer data is unacceptable. The 2026-05-10 Meraki users incident (`data/usersFull` went silently missing for ~24h while `staffEmails` survived) was a near-miss with our own admin data — the same shape of failure on `clients`, `appointments`, or `receipts` would mean lost client history, lost revenue records, or lost tax data. Every item below is launch-blocking.
+
+- [ ] **Audit every multi-doc write for atomicity.** Grep `src/lib/firestore.js` and `functions/index.js` for `Promise.all([` followed by `setDoc`/`updateDoc`/`addDoc` calls. Each one is a partial-failure window. Convert to `writeBatch().commit()` or document why it's safe to be non-atomic. Already converted: `saveUsers`, `saveEmployee`, `createEmployee`, `ensureStaffEmailsBackfill` (see commit 1d02b36 + memory file `feedback_writebatch_for_split_writes.md`).
+- [ ] **Audit every hard delete.** Grep for `deleteDoc(` outside the `_demo: true` cleanup paths. Anything touching `clients/`, `appointments/`, `receipts/`, `memberships/`, `giftCards/` should be soft-delete (`_deleted: true, _deletedAt, _deletedBy`) with a separate cleanup job for ≥30-day-old tombstones. Hard delete = unrecoverable.
+- [ ] **Test the heal path under fault injection.** Manually delete `tenants/meraki/data/usersFull` from Firebase Console → sign in as admin → confirm `healUsersFullIfMissing` rebuilds the rich array on next load (look for `[healUsersFullIfMissing] rebuilt …` in console). If the heal doesn't fire, ship is blocked.
+- [ ] **Confirm Firestore daily backups are enabled.** Firebase Console → Firestore → Backups → daily schedule with ≥7-day retention. Without this, even soft-delete + writeBatch can't recover from a full-collection wipe.
+- [ ] **Recovery drill: pick one collection (e.g. `clients`) and restore yesterday's snapshot to a side database.** Verify the restore actually works end-to-end before launch — untested backups don't count as backups.
+- [ ] **Surface integrity invariants in Admin → Settings.** Build (or stub for now) a nightly scanner that reads `tenants/{id}/data/integrityReport` and shows a green/yellow/red badge: receipts ↔ appointments link rate, appointments ↔ clients link rate (non-walk-in), employees ↔ comp doc presence, users staffEmails ↔ usersFull match. Silent corruption must become visible.
+- [ ] **Document the restore script pattern** for one-off recoveries. `scripts/restore-meraki-users.cjs` (gitignored, kept local) is the template — read both sides, union the surviving signal with canonical mappings, write back atomically with `_healed: true` markers per row.
+- [ ] **Add a recovery runbook** to `ARCHITECTURE.md`: who to call if data is missing, where the backups live, how to invoke the restore scripts, expected RTO. Without a runbook, panic costs hours.
+
 ## T-7 days — Integrations
 
 - [ ] **Resend** (staff notifications, daily reminders, receipts) — verify API key in Functions config, send test from a Cloud Function.
