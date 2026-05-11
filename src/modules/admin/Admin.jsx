@@ -340,7 +340,7 @@ export default function Admin({ onClose }) {
                   style={{ width: 44, height: 34, border: '1px solid #d8d8d8', borderRadius: 8, cursor: 'pointer', padding: 2, background: '#fff' }} />
               </div>
               <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
-                <Btn color="#3D95CE" onClick={async () => {
+                <Btn color="#3D95CE" savedLabel="✓ Saved" onClick={async () => {
                   const sName = salonName.trim()      || null;
                   const bName = brandName.trim()      || null;
                   const bTag  = brandTagline.trim()   || null;
@@ -415,7 +415,7 @@ export default function Admin({ onClose }) {
                   style={{ width: 140, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
               <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
-                <Btn color="#3D95CE" onClick={() => updateSettings({ ...settings, timeoutMin: timeout, adminPin: pin || null, googleReviewUrl: reviewUrl.trim() || null, ein: ein.trim() || null })}>Save</Btn>
+                <Btn color="#3D95CE" savedLabel="✓ Saved" onClick={() => updateSettings({ ...settings, timeoutMin: timeout, adminPin: pin || null, googleReviewUrl: reviewUrl.trim() || null, ein: ein.trim() || null })}>Save</Btn>
               </div>
             </Section>
             <Section title="💰 Financial">
@@ -1141,10 +1141,38 @@ function RoleBadge({ role }) {
   return <span style={{ display: 'inline-block', fontSize: 9, fontWeight: 600, padding: '2px 7px', borderRadius: 20, letterSpacing: '.04em', textTransform: 'uppercase', background: bg, color: fg }}>{role}</span>;
 }
 
-function Btn({ onClick, color, children }) {
+function Btn({ onClick, color, children, disabled, savedLabel }) {
+  const [phase, setPhase] = useState('idle');
+  const busy  = !!savedLabel && phase !== 'idle';
+  const label = phase === 'saving' ? 'Saving…' : phase === 'saved' ? savedLabel : children;
+  const bg    = phase === 'saved' ? '#10B981' : (color || '#e8e8e8');
+  const fg    = (phase === 'saved' || color) ? '#fff' : '#666';
+
+  const handleClick = async (e) => {
+    if (!savedLabel) return onClick?.(e);
+    if (phase !== 'idle') return;
+    setPhase('saving');
+    try {
+      await onClick?.(e);
+      setPhase('saved');
+      setTimeout(() => setPhase('idle'), 1800);
+    } catch (err) {
+      setPhase('idle');
+      throw err;
+    }
+  };
+
   return (
-    <button onClick={onClick} style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, border: 'none', background: color || '#e8e8e8', color: color ? '#fff' : '#666', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500 }}>
-      {children}
+    <button onClick={handleClick} disabled={disabled || busy}
+      style={{
+        fontSize: 11, padding: '4px 8px', borderRadius: 6, border: 'none',
+        background: bg, color: fg,
+        cursor: disabled || busy ? 'default' : 'pointer',
+        fontFamily: 'inherit', fontWeight: 500,
+        opacity: disabled ? 0.5 : 1,
+        transition: 'background .25s ease',
+      }}>
+      {label}
     </button>
   );
 }
