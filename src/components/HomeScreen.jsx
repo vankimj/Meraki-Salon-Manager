@@ -229,28 +229,11 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
           </div>
         )}
 
-        {/* Kiosk launchers — not shown to techs or schedulers */}
-        {!isTech && !isScheduler && (
-          <div style={{ marginBottom: 24 }}>
-            <SectionLabel>Kiosk</SectionLabel>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <KioskCard
-                Icon={IconLightbulb}
-                label="Tip Flow"
-                background="var(--tm-grad)"
-                ArrowIcon={IconChevronRight}
-                onClick={() => navigate('tipflow')}
-              />
-              <KioskCard
-                Icon={IconChair}
-                label="Walk-in Queue"
-                background="var(--tm-grad-dark)"
-                ArrowIcon={IconArrowUpRight}
-                onClick={() => window.open('/?queue', '_blank')}
-              />
-            </div>
-          </div>
-        )}
+        {/* Kiosk launchers moved to dedicated bookmarkable URLs:
+            /tipflow and /queue. Bookmark them on the front-desk and
+            walk-in iPads so the kiosks open directly without going
+            through the admin home screen. See ARCHITECTURE.md →
+            Client surfaces for the full URL inventory. */}
       </div>
 
 

@@ -98,11 +98,11 @@ function MagicLinkPrompt() {
   );
 }
 
-function AppShell() {
+function AppShell({ initialView = 'home' }) {
   const { slides, def, cur, magicLinkPending, handbookPending, isPortalUser, settings, updateSettings, isAdmin, gUser, pinPrompt, acceptPinPrompt, dismissPinPrompt } = useApp();
 
   if (isPortalUser) return <ClientPortal />;
-  const [view,      setViewState] = useState('home'); // 'home' | 'tipflow' | 'schedule' | 'clients' | 'services' | 'employees'
+  const [view,      setViewState] = useState(initialView); // 'home' | 'tipflow' | 'schedule' | 'clients' | 'services' | 'employees'
   const [showAdmin, setShowAdmin] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   // Cross-module deep-link: when set, clicking a client name in Schedule
@@ -318,9 +318,15 @@ export default function App() {
     content = <TipFlowLanding />;
   } else {
     const params = new URLSearchParams(window.location.search);
+    const path   = (window.location.pathname || '/').toLowerCase();
     const checkinId = params.get('checkin');
     const isBooking  = params.has('book');
-    const isQueue    = params.has('queue');
+    // Queue + TipFlow routes — accept either `?queue` / `?tipflow` query
+    // params OR clean paths `/queue` / `/tipflow`. The path forms read
+    // better as kiosk-iPad bookmarks; the query forms keep working for
+    // any existing internal links.
+    const isQueue    = params.has('queue')   || path === '/queue';
+    const isTipFlow  = params.has('tipflow') || path === '/tipflow';
     const isWeb      = params.has('web') || window.location.search === '?web';
     const isSignup   = params.has('signup');
     const isRsvp     = params.has('rsvp');
@@ -342,7 +348,7 @@ export default function App() {
       <AppProvider>
         <ThemeProvider>
           <div style={{ width: '100vw', height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#eef0f3', overflow: 'hidden' }}>
-            <AppShell />
+            <AppShell initialView={isTipFlow ? 'tipflow' : 'home'} />
           </div>
         </ThemeProvider>
       </AppProvider>
