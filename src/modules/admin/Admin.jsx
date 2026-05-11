@@ -16,6 +16,7 @@ import { MODULES, effectivePlan, isModuleAvailableForPlan, PLAN_RANK } from '../
 import { formatTime } from '../../utils/helpers';
 import { logActivity } from '../../lib/logger';
 import { seedFullDemo, clearDemoData, addFutureAppointments } from '../../data/seedDemo';
+import { fetchSeedState } from '../../lib/firestore';
 import FeedbackModal from '../../components/FeedbackModal';
 import NotificationsBell from '../../components/NotificationsBell';
 import CsvImportSection from '../../components/CsvImportSection';
@@ -1283,14 +1284,32 @@ function BackupRestoreSection() {
 }
 
 function DemoSeedSection() {
-  const { gUser, settings, updateSettings } = useApp();
+  const { gUser, settings, updateSettings, pauseLogoutTimer, resumeLogoutTimer } = useApp();
   const [status,  setStatus]  = useState('');
   const [running, setRunning] = useState(false);
   const [phase,   setPhase]   = useState('idle');
+  const [seedState, setSeedState] = useState(null);
+
+  // Refresh checkpoint state on mount + after every seed/clear so the
+  // resume banner shows the current truth.
+  async function refreshSeedState() {
+    setSeedState(await fetchSeedState());
+  }
+  useEffect(() => { refreshSeedState(); }, []);
 
   async function runSeed() {
-    if (!confirm('Populate the demo tenant with: 25 retail products · 1,000 clients · ~2,500 appointments · receipts (with cancellations + no-shows + gift cards + retail sales) · 6 promo codes · 1 membership plan + 20 active members · 5 time-off entries · 8 Google reviews · 5 HR bonuses · 20 walk-in queue history entries · 3 marketing campaigns · admin-as-tech employee + contact/TIN backfill on every tech. Takes 10–15 min. Continue?')) return;
-    setRunning(true); setPhase('idle'); setStatus('');
+    const cur = await fetchSeedState();
+    const isResume = cur?.phase === 'running' || cur?.phase === 'failed';
+    const completedCount = cur?.completedSteps?.length || 0;
+    const totalSteps = 11;
+
+    const prompt = isResume
+      ? `Resume previous seed (paused at step ${completedCount + 1}/${totalSteps})? Already-completed steps will be skipped to avoid duplicates.`
+      : 'Populate the demo tenant with: 25 retail products · 1,000 clients · ~2,500 appointments · receipts · 6 promos · 1 membership plan + 20 members · 5 time-off · 8 reviews · 5 bonuses · 20 walk-ins · 3 campaigns · admin-as-tech + contact/TIN backfill. Takes 10–15 min. Continue?';
+    if (!confirm(prompt)) return;
+
+    setRunning(true); setPhase('idle'); setStatus(isResume ? 'Resuming previous seed…' : '');
+    pauseLogoutTimer?.();  // 10-15 min job vs. 5-min default timeout — pause so we don't get logged out mid-flight
     try {
       const stats = await seedFullDemo(msg => setStatus(msg), { gUser, settings, updateSettings });
       const adminTechNote = stats.adminAsTech === 'created' ? ' · admin-as-tech created' : stats.adminAsTech === 'already_existed' ? ' · admin-as-tech existed' : '';
@@ -1298,8 +1317,12 @@ function DemoSeedSection() {
       setPhase('seeded');
       logActivity('demo_seeded', `full seed: ${JSON.stringify(stats)}`);
     } catch (e) {
-      setStatus('Error: ' + e.message); setPhase('error');
-    } finally { setRunning(false); }
+      setStatus('Error: ' + e.message + ' — re-click "Resume seed" to pick up from this step'); setPhase('error');
+    } finally {
+      setRunning(false);
+      resumeLogoutTimer?.();
+      await refreshSeedState();
+    }
   }
 
   async function runAddFuture() {
@@ -1316,6 +1339,7 @@ function DemoSeedSection() {
   async function runClear() {
     if (!confirm('Permanently delete ALL demo data: clients · appointments · receipts · gift cards · products · promos · memberships · time off · bonuses · waitlist · campaigns · cached Google reviews?')) return;
     setRunning(true); setPhase('idle'); setStatus('');
+    pauseLogoutTimer?.();
     try {
       const r = await clearDemoData(msg => setStatus(msg));
       setStatus(`Removed: ${r.clients}c · ${r.appointments}a · ${r.receipts}r · ${r.giftCards}gc · ${r.products}prod · ${r.promos}promo · ${r.memberships}m · ${r.memPlans}plans · ${r.timeOff}to · ${r.bonuses}b · ${r.waitlist}wl · ${r.campaigns}camp · ${r.reviews}rev.`);
@@ -1323,10 +1347,16 @@ function DemoSeedSection() {
       logActivity('demo_cleared', JSON.stringify(r));
     } catch (e) {
       setStatus('Error: ' + e.message); setPhase('error');
-    } finally { setRunning(false); }
+    } finally {
+      setRunning(false);
+      resumeLogoutTimer?.();
+      await refreshSeedState();
+    }
   }
 
   const busy = running && phase === 'idle';
+  const interrupted = (seedState?.phase === 'running' || seedState?.phase === 'failed') && !running;
+  const completedCount = seedState?.completedSteps?.length || 0;
 
   return (
     <Section title="🧪 Demo Data">
@@ -1334,20 +1364,29 @@ function DemoSeedSection() {
         <div style={{ fontSize: 12, color: '#555', marginBottom: 10 }}>
           One-click populate every module with realistic sample data: clients, appointments, receipts, products, promo codes, memberships, time off, Google reviews, HR bonuses, walk-in queue, and marketing campaigns. Use this to show the platform off without exposing real customer data.
         </div>
+        {interrupted && (
+          <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 12, color: '#92400e' }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              ⚠ Previous seed was interrupted at step {completedCount + 1}/11{seedState?.currentStep ? ` (${seedState.currentStep})` : ''}
+            </div>
+            <div>Started by {seedState?.startedBy || 'unknown'} at {seedState?.startedAt ? new Date(seedState.startedAt).toLocaleString() : '—'}. {seedState?.lastError ? `Error: ${seedState.lastError}` : ''}</div>
+            <div style={{ marginTop: 4, color: '#78350f' }}>Resume below — already-completed steps will be skipped.</div>
+          </div>
+        )}
         {status && (
           <div style={{ fontSize: 12, color: phase === 'error' ? '#ef4444' : phase === 'cleared' || phase === 'seeded' ? '#16a34a' : '#888', marginBottom: 10, fontStyle: 'italic' }}>
             {status}
           </div>
         )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Btn color="#f59e0b" onClick={runSeed} disabled={running}>
-            {busy ? 'Running…' : '↓ Seed Full Demo'}
+          <Btn color={interrupted ? '#f59e0b' : '#f59e0b'} onClick={runSeed} disabled={running}>
+            {busy ? 'Running…' : interrupted ? `▶ Resume seed (${completedCount}/11 done)` : '↓ Seed Full Demo'}
           </Btn>
           <Btn color="#3D95CE" onClick={runAddFuture} disabled={running}>
             {busy ? 'Running…' : '+ Top-up Future Appts'}
           </Btn>
           <Btn color="#ef4444" onClick={runClear} disabled={running}>
-            {busy ? 'Removing…' : '× Remove All Demo'}
+            {busy ? 'Removing…' : interrupted ? '× Start Over (Clear)' : '× Remove All Demo'}
           </Btn>
         </div>
       </div>

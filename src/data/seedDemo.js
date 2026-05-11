@@ -14,6 +14,7 @@ import {
   addToWaitlist,
   createCampaign,
   fetchEmployeesWithComp, saveEmployee, fetchEmployees, createEmployee,
+  fetchSeedState, saveSeedState, clearSeedState,
 } from '../lib/firestore';
 import { db } from '../lib/firebase';
 import { TENANT_ID } from '../lib/tenant';
@@ -1589,70 +1590,99 @@ export async function seedAdminAsTechEmployee(gUser, onProgress) {
   return { created: true, employee: { id, ...data } };
 }
 
-export async function seedFullDemo(onProgress, opts = {}) {
+// Ordered list of seed steps. Each runs at most once per checkpoint
+// cycle — if seedFullDemo is interrupted (auto-logout, tab close, crash)
+// and re-invoked, completed steps are skipped via the state doc at
+// tenants/{id}/data/seedState. Adding a step? Append to this list and
+// return its stats fragment from `run`.
+//
+// Order matters: employees first (appointments need a tech roster);
+// products before receipts (retail sales reference product ids);
+// memberships/waitlist refetch clients fresh inside their step since
+// clients are written in an earlier step.
+function seedSteps(opts) {
   const { gUser, settings, updateSettings } = opts;
-  const stats = {};
+  return [
+    { key: 'adminAsTech',  label: 'Ensuring admin-as-tech employee record',   run: async (op) => { const r = await seedAdminAsTechEmployee(gUser, op); return { adminAsTech: r.created ? 'created' : (r.employee ? 'already_existed' : 'skipped_no_user') }; } },
+    { key: 'contactInfo',  label: 'Filling demo contact/TIN on all techs',    run: async (op) => { const r = await seedDemoEmployeeContactInfo(op, { settings, updateSettings }); return { employeesFilled: r.patched, fieldsFilled: r.fieldsFilled, salonFilled: r.salonFilled }; } },
+    { key: 'products',     label: 'Seeding products',                         run: async (op) => { await seedProductCatalog(op); return { products: 25 }; } },
+    { key: 'baseClients',  label: 'Seeding clients + appointments',           run: async (op) => { const r = await seedDemoData(op); return { clients: r.clients, appointments: r.appointments }; } },
+    { key: 'receipts',     label: 'Backfilling receipts (services + retail)', run: async (op) => { const r = await backfillDemoTransactions(op); return { receipts: r.receipts, cancelled: r.cancelled, noShow: r.noShow, giftCardSales: r.giftCardSales || 0, productSales: r.productSales || 0 }; } },
+    { key: 'promos',       label: 'Seeding promo codes',                      run: async (op) => ({ promos: await seedDemoPromos(op) }) },
+    { key: 'memberships',  label: 'Seeding memberships',                      run: async (op) => { const clients = await fetchDemoClients(); const r = await seedDemoMemberships(op, clients); return { memberships: r.members }; } },
+    { key: 'timeOff',      label: 'Seeding time off',                         run: async (op) => ({ timeOff: await seedDemoTimeOff(op) }) },
+    { key: 'reviews',      label: 'Seeding Google reviews',                   run: async (op) => ({ reviews: await seedDemoReviews(op) }) },
+    { key: 'bonuses',      label: 'Seeding HR bonuses',                       run: async (op) => ({ bonuses: await seedDemoBonuses(op) }) },
+    { key: 'waitlistAndCampaigns', label: 'Seeding walk-in queue + marketing campaigns', run: async (op) => { const clients = await fetchDemoClients(); return { waitlist: await seedDemoWaitlist(op, clients), campaigns: await seedDemoCampaigns(op) }; } },
+  ];
+}
 
-  // Employees first — appointments need a real tech roster to land in
-  // calendar columns. Admin-as-tech runs before contact-fill so the
-  // founder's new record gets the same backfill treatment as the others.
-  onProgress?.('Step 1/11 · Ensuring admin-as-tech employee record…');
-  const adminTech = await seedAdminAsTechEmployee(gUser, onProgress);
-  stats.adminAsTech = adminTech.created ? 'created' : (adminTech.employee ? 'already_existed' : 'skipped_no_user');
+// Runs each step in order, checkpointing to data/seedState after each
+// success. Re-invocations after an interrupted run reload the checkpoint
+// and skip already-completed steps. On failure: state.phase='failed'
+// with the lastError; on success of every step: phase='complete'.
+export async function seedFullDemo(onProgress, opts = {}) {
+  const steps = seedSteps(opts);
+  const total = steps.length;
+  const existing = await fetchSeedState();
+  const completed = new Set(existing?.completedSteps || []);
+  const stats = { ...(existing?.stats || {}) };
 
-  onProgress?.('Step 2/11 · Filling demo contact/TIN for all techs + salon defaults…');
-  const contact = await seedDemoEmployeeContactInfo(onProgress, { settings, updateSettings });
-  stats.employeesFilled = contact.patched;
-  stats.fieldsFilled    = contact.fieldsFilled;
-  stats.salonFilled     = contact.salonFilled;
+  await saveSeedState({
+    phase:          'running',
+    completedSteps: [...completed],
+    currentStep:    null,
+    startedAt:      existing?.startedAt || new Date().toISOString(),
+    startedBy:      existing?.startedBy || opts.gUser?.email || null,
+    stats,
+    lastError:      null,
+  });
 
-  onProgress?.('Step 3/11 · Seeding products…');
-  await seedProductCatalog(onProgress);
-  stats.products = 25;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const stepLabel = `Step ${i + 1}/${total} · ${step.label}`;
+    if (completed.has(step.key)) {
+      onProgress?.(`${stepLabel} — already done, skipping`);
+      continue;
+    }
+    onProgress?.(`${stepLabel}…`);
+    try {
+      await saveSeedState({ currentStep: step.key });
+      const fragment = await step.run(onProgress);
+      Object.assign(stats, fragment || {});
+      completed.add(step.key);
+      await saveSeedState({
+        completedSteps: [...completed],
+        currentStep:    null,
+        stats,
+      });
+    } catch (e) {
+      await saveSeedState({
+        phase:       'failed',
+        currentStep: step.key,
+        lastError:   e?.message || String(e),
+        stats,
+      });
+      throw e;
+    }
+  }
 
-  onProgress?.('Step 4/11 · Seeding clients + appointments…');
-  const base = await seedDemoData(onProgress);
-  stats.clients      = base.clients;
-  stats.appointments = base.appointments;
-
-  // Re-fetch clients now that they're in Firestore — the auxiliary
-  // seeders need real ids.
-  const allClients = await fetchDemoClients();
-
-  onProgress?.('Step 5/11 · Backfilling receipts (services, gift cards, retail)…');
-  const tx = await backfillDemoTransactions(onProgress);
-  stats.receipts        = tx.receipts;
-  stats.cancelled       = tx.cancelled;
-  stats.noShow          = tx.noShow;
-  stats.giftCardSales   = tx.giftCardSales || 0;
-  stats.productSales    = tx.productSales || 0;
-
-  onProgress?.('Step 6/11 · Seeding promo codes…');
-  stats.promos = await seedDemoPromos(onProgress);
-
-  onProgress?.('Step 7/11 · Seeding memberships…');
-  const mem = await seedDemoMemberships(onProgress, allClients);
-  stats.memberships = mem.members;
-
-  onProgress?.('Step 8/11 · Seeding time off…');
-  stats.timeOff = await seedDemoTimeOff(onProgress);
-
-  onProgress?.('Step 9/11 · Seeding Google reviews…');
-  stats.reviews = await seedDemoReviews(onProgress);
-
-  onProgress?.('Step 10/11 · Seeding HR bonuses…');
-  stats.bonuses = await seedDemoBonuses(onProgress);
-
-  onProgress?.('Step 11/11 · Seeding walk-in queue history + marketing campaigns…');
-  stats.waitlist  = await seedDemoWaitlist(onProgress, allClients);
-  stats.campaigns = await seedDemoCampaigns(onProgress);
-
+  await saveSeedState({
+    phase:       'complete',
+    currentStep: null,
+    completedAt: new Date().toISOString(),
+    stats,
+  });
   onProgress?.('Done!');
   return stats;
 }
 
 // ── Clear ──────────────────────────────────────────────
 export async function clearDemoData(onProgress) {
+  // Wipe the seed-state checkpoint so the next seed starts fresh.
+  // Without this, after clearing demo data the next "Seed Full Demo"
+  // click would see a stale state doc and skip steps it should re-run.
+  await clearSeedState();
   onProgress?.('Finding demo clients…');
   const demoClients = await fetchDemoClients();
   onProgress?.(`Removing ${demoClients.length} clients…`);

@@ -177,6 +177,15 @@ export function AppProvider({ children }) {
     if (gUser) startLogoutTimer(gUser, settings.timeoutMin);
   }, [gUser, settings.timeoutMin, startLogoutTimer]);
 
+  // Pause/resume the auto-logout timer entirely. Used by long-running
+  // admin operations (demo seed, big imports) so a 10-15-minute job
+  // doesn't get killed by the default 5-minute inactivity timeout.
+  // The standard reset-on-interaction path is also a no-op while
+  // paused (resetLogoutTimer is a no-op when there's no live timer to
+  // reset, which is the state pauseLogoutTimer leaves us in).
+  const pauseLogoutTimer  = useCallback(() => { clearTimeout(logoutTimer.current); logoutTimer.current = null; }, []);
+  const resumeLogoutTimer = useCallback(() => { if (gUser) startLogoutTimer(gUser, settings.timeoutMin); }, [gUser, settings.timeoutMin, startLogoutTimer]);
+
   // ── Firestore load ─────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -613,7 +622,7 @@ export function AppProvider({ children }) {
       gUser, syncState, toast, toastAction, loaded, isOnline,
       isAdmin, isReadOnly, isTech, isScheduler, myTechName, realIsAdmin, viewAs, setViewAs,
       isPortalUser, portalClientId,
-      showToast, resetInactivity, resetLogoutTimer,
+      showToast, resetInactivity, resetLogoutTimer, pauseLogoutTimer, resumeLogoutTimer,
       addSlide, updateSlide, deleteSlide, setDefault,
       grantAccess, grantPendingAccess, addTechUsersForEmployees, loadPendingRequests, updateSettings,
       signIn, signOut, switchAccount, sendMagicLink, completeMagicLink, magicLinkPending,

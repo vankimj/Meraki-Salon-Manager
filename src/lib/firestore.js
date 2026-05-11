@@ -52,6 +52,26 @@ const SLIDES_REF      = tenantDoc('slides');
 const USERS_REF       = tenantDoc('users');     // slim projection (staff readable)
 const USERS_FULL_REF  = tenantDoc('usersFull'); // rich users[] (admin only)
 const SETTINGS_REF    = tenantDoc('settings');
+const SEED_STATE_REF  = tenantDoc('seedState'); // demo-seed checkpoint (resume support)
+
+// ── Demo-seed checkpoint state ─────────────────────────
+// Read by Admin.jsx on mount to detect interrupted seeds. Written by
+// seedFullDemo after each step so a logout / tab-close / crash can be
+// resumed from the next pending step instead of doubling up records.
+// Shape: { phase: 'running'|'complete'|'failed', completedSteps: [...],
+//          currentStep, startedAt, updatedAt, startedBy, stats }
+export async function fetchSeedState() {
+  try {
+    const snap = await getDoc(SEED_STATE_REF);
+    return snap.exists() ? snap.data() : null;
+  } catch (_) { return null; }
+}
+export async function saveSeedState(state) {
+  await setDoc(SEED_STATE_REF, { ...state, updatedAt: new Date().toISOString() }, { merge: true });
+}
+export async function clearSeedState() {
+  try { await deleteDoc(SEED_STATE_REF); } catch (_) {}
+}
 const LOGS_COL     = tenantCol('logs');
 const SERVICES_COL = tenantCol('services');
 
