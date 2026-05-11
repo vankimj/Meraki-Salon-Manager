@@ -3,9 +3,42 @@ import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
   Modal, TextInput, ScrollView, Alert, RefreshControl,
 } from 'react-native';
-import { subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes, fetchAppointmentsByRange } from '../lib/firestore';
+import {
+  subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes,
+  fetchAppointmentsByRange, createAppointment, fetchClients, fetchServices,
+} from '../lib/firestore';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
 import Icon from '../components/Icon';
+
+// Salon hours + slot grid. Matches the web SLOT_H=40 / 9am-8pm convention
+// from CLAUDE.md so the day view feels familiar across devices.
+const SLOT_MINUTES = 30;
+const DAY_START_MIN = 9 * 60;       // 9 AM
+const DAY_END_MIN   = 20 * 60;      // 8 PM
+const SLOT_PX       = 50;           // taller than web for finger-tap accuracy
+const SLOT_COUNT    = (DAY_END_MIN - DAY_START_MIN) / SLOT_MINUTES;
+
+function minToHHMM(min) {
+  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+}
+function hhmmToMin(t) {
+  if (!t) return 0;
+  const [h, m] = t.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+// Sunday-anchored start-of-week (matches the WEEKDAY_LABELS array
+// below and feels right for US salon scheduling — most salons treat
+// Sunday as either closed or a fresh week start).
+function startOfWeek(d) {
+  const x = new Date(d);
+  x.setHours(12, 0, 0, 0);
+  x.setDate(x.getDate() - x.getDay());
+  return x;
+}
+function isoFromDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 function todayStr() {
   const d = new Date();
@@ -34,7 +67,8 @@ export default function ScheduleScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showAll, setShowAll] = useState(false); // admins / floor-view toggle
   const [detail,  setDetail]  = useState(null);  // selected appt for the modal
-  const [view,    setView]    = useState('day'); // 'day' | 'month'
+  const [view,    setView]    = useState('day'); // 'day' | 'week' | 'month'
+  const [createPrefill, setCreatePrefill] = useState(null);  // { date, startTime, techName } or null
 
   // Live subscription so an iPad check-in (or another tech editing) shows
   // up here immediately. Re-subscribes when `date` changes.
@@ -59,21 +93,42 @@ export default function ScheduleScreen() {
     setDate(d.toISOString().slice(0, 10));
   }
 
+  function shiftWeek(delta) {
+    shiftDate(delta * 7);
+  }
+
+  function navShift(delta) {
+    if (view === 'month') return shiftMonth(delta);
+    if (view === 'week')  return shiftWeek(delta);
+    return shiftDate(delta);
+  }
+
   const filtered = useMemo(() => {
     if (showAll || !techName) return appts;
     return appts.filter(a => (a.techName || '') === techName);
   }, [appts, showAll, techName]);
 
   const isToday = date === todayStr();
-  const displayDate = view === 'month'
-    ? new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-    : new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const displayDate = (() => {
+    const anchor = new Date(date + 'T12:00:00');
+    if (view === 'month') return anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    if (view === 'week') {
+      const start = startOfWeek(anchor);
+      const end = new Date(start); end.setDate(start.getDate() + 6);
+      const sameMonth = start.getMonth() === end.getMonth();
+      const opts = { month: 'short', day: 'numeric' };
+      return sameMonth
+        ? `${start.toLocaleDateString('en-US', { month: 'long' })} ${start.getDate()}–${end.getDate()}`
+        : `${start.toLocaleDateString('en-US', opts)} – ${end.toLocaleDateString('en-US', opts)}`;
+    }
+    return anchor.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  })();
 
   return (
     <View style={styles.container}>
       {/* Date nav row */}
       <View style={styles.dateRow}>
-        <TouchableOpacity style={styles.navBtn} onPress={() => view === 'month' ? shiftMonth(-1) : shiftDate(-1)}>
+        <TouchableOpacity style={styles.navBtn} onPress={() => navShift(-1)}>
           <Text style={styles.navBtnText}>‹</Text>
         </TouchableOpacity>
         <View style={styles.dateCenter}>
@@ -85,7 +140,7 @@ export default function ScheduleScreen() {
             </Text>
           )}
         </View>
-        <TouchableOpacity style={styles.navBtn} onPress={() => view === 'month' ? shiftMonth(1) : shiftDate(1)}>
+        <TouchableOpacity style={styles.navBtn} onPress={() => navShift(1)}>
           <Text style={styles.navBtnText}>›</Text>
         </TouchableOpacity>
       </View>
@@ -93,14 +148,14 @@ export default function ScheduleScreen() {
       {/* View + filter toggles */}
       <View style={styles.toggleRow}>
         <View style={styles.viewSwitch}>
-          {['day', 'month'].map(m => (
+          {['day', 'week', 'month'].map(m => (
             <TouchableOpacity
               key={m}
               onPress={() => setView(m)}
               style={[styles.viewSwitchBtn, view === m && styles.viewSwitchBtnActive]}
             >
               <Text style={[styles.viewSwitchText, view === m && styles.viewSwitchTextActive]}>
-                {m === 'day' ? 'Day' : 'Month'}
+                {m === 'day' ? 'Day' : m === 'week' ? 'Week' : 'Month'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -110,7 +165,7 @@ export default function ScheduleScreen() {
             <Text style={styles.chipBlueText}>Today</Text>
           </TouchableOpacity>
         )}
-        {techName && view === 'day' && (
+        {techName && (
           <TouchableOpacity
             style={[styles.chip, showAll ? styles.chipBlue : styles.chipMuted]}
             onPress={() => setShowAll(v => !v)}
@@ -131,64 +186,31 @@ export default function ScheduleScreen() {
         />
       )}
 
-      {view === 'day' && (
-      (empLoading || loading) ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color="#3D95CE" />
-      ) : filtered.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Icon name="calendar" size={56} color="#cbd0d6" strokeWidth={1.5} />
-          <Text style={[styles.emptyTitle, { marginTop: 14 }]}>Nothing on the books</Text>
-          <Text style={styles.emptyBody}>
-            {showAll ? 'No appointments this day.' : `No appointments for ${techName || 'you'} this day.`}
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={filtered}
-          keyExtractor={a => a.id}
-          contentContainerStyle={{ padding: 16, gap: 10 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                // Live subscription already keeps data fresh; pull-to-refresh
-                // is mostly for tactile feedback.
-                setRefreshing(true);
-                setTimeout(() => setRefreshing(false), 600);
-              }}
-              tintColor="#3D95CE"
-            />
-          }
-          renderItem={({ item: a }) => {
-            const meta = STATUS_META[a.status] || STATUS_META.scheduled;
-            return (
-              <TouchableOpacity style={styles.apptCard} onPress={() => setDetail(a)} activeOpacity={0.7}>
-                <View style={styles.apptTime}>
-                  <Text style={styles.apptTimeText}>{fmtTime(a.startTime)}</Text>
-                  {a.duration ? <Text style={styles.apptDuration}>{a.duration}m</Text> : null}
-                </View>
-                <View style={styles.apptInfo}>
-                  <Text style={styles.clientName} numberOfLines={1}>
-                    {a.clientName || 'Walk-in'}
-                  </Text>
-                  <Text style={styles.techService} numberOfLines={1}>
-                    {showAll ? `${a.techName} · ` : ''}
-                    {(a.services || []).map(s => s.name).filter(Boolean).join(', ')
-                      || a.serviceName
-                      || ''}
-                  </Text>
-                </View>
-                <View style={styles.apptRight}>
-                  {a.checkedInAt && <View style={styles.checkedInBadge}><Text style={styles.checkedInText}>✓</Text></View>}
-                  <View style={[styles.statusPill, { backgroundColor: meta.bg }]}>
-                    <Text style={[styles.statusPillText, { color: meta.color }]}>{meta.label}</Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            );
-          }}
+      {view === 'week' && (
+        <WeekView
+          date={date}
+          techName={techName}
+          showAll={showAll}
+          onTapAppt={(a) => setDetail(a)}
+          onTapEmpty={(d, startTime) => setCreatePrefill({ date: d, startTime, techName: showAll ? '' : (techName || '') })}
+          onPickDay={(d) => { setDate(d); setView('day'); }}
         />
-      )
+      )}
+
+      {view === 'day' && (
+        (empLoading || loading) ? (
+          <ActivityIndicator style={{ marginTop: 40 }} color="#3D95CE" />
+        ) : (
+          <DayTimelineView
+            appts={filtered}
+            date={date}
+            showAll={showAll}
+            refreshing={refreshing}
+            onRefresh={() => { setRefreshing(true); setTimeout(() => setRefreshing(false), 600); }}
+            onTapAppt={(a) => setDetail(a)}
+            onTapEmpty={(startTime) => setCreatePrefill({ date, startTime, techName: showAll ? '' : (techName || '') })}
+          />
+        )
       )}
 
       <ApptDetailModal
@@ -200,9 +222,359 @@ export default function ScheduleScreen() {
           setDetail(prev => prev ? { ...prev, ...patch } : null);
         }}
       />
+
+      <CreateApptModal
+        prefill={createPrefill}
+        onClose={() => setCreatePrefill(null)}
+        onCreated={() => setCreatePrefill(null)}
+      />
     </View>
   );
 }
+
+// ── Day timeline view ──────────────────────────────────
+// Shows every 30-min slot from 9 AM to 8 PM as a tappable row. Empty
+// rows surface a faint "+ Add" hint and create a new appt prefilled
+// to that slot. Filled rows render the appt block sized to its
+// duration (1 SLOT_PX per 30 min). Multi-tech overlaps are stacked
+// horizontally; "Just me" mode never overlaps so most days are clean.
+function DayTimelineView({ appts, date, showAll, refreshing, onRefresh, onTapAppt, onTapEmpty }) {
+  // Build a map of slot-index → appts that START in that slot, so
+  // we can render appts overlaid on top of the slot grid.
+  const slotAppts = useMemo(() => {
+    const map = {};
+    appts.forEach(a => {
+      const startMin = hhmmToMin(a.startTime);
+      if (startMin < DAY_START_MIN || startMin >= DAY_END_MIN) return;
+      const idx = Math.floor((startMin - DAY_START_MIN) / SLOT_MINUTES);
+      if (!map[idx]) map[idx] = [];
+      map[idx].push(a);
+    });
+    return map;
+  }, [appts]);
+
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: '#fff' }}
+      contentContainerStyle={{ paddingBottom: 40 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3D95CE" />}
+    >
+      {Array.from({ length: SLOT_COUNT }).map((_, idx) => {
+        const slotMin = DAY_START_MIN + idx * SLOT_MINUTES;
+        const startTime = minToHHMM(slotMin);
+        const slotAppt = (slotAppts[idx] || [])[0];   // primary appt — overlap UI deferred
+        const overlapCount = (slotAppts[idx] || []).length;
+        const isHourMark = slotMin % 60 === 0;
+        return (
+          <TouchableOpacity
+            key={idx}
+            onPress={() => slotAppt ? onTapAppt(slotAppt) : onTapEmpty(startTime)}
+            activeOpacity={0.6}
+            style={[styles.dayTimelineRow, { height: SLOT_PX }]}
+          >
+            <View style={styles.dayTimeLabel}>
+              {isHourMark && <Text style={styles.dayTimeLabelText}>{fmtTime(startTime)}</Text>}
+            </View>
+            <View style={[styles.dayTimelineSlot, isHourMark && styles.dayTimelineSlotHour]}>
+              {slotAppt ? (
+                <View style={[styles.dayApptBlock, { height: Math.max(SLOT_PX - 4, ((slotAppt.duration || 30) / SLOT_MINUTES) * SLOT_PX - 4) }]}>
+                  <Text style={styles.dayApptClient} numberOfLines={1}>
+                    {slotAppt.clientName || 'Walk-in'}
+                    {overlapCount > 1 ? ` +${overlapCount - 1}` : ''}
+                  </Text>
+                  <Text style={styles.dayApptMeta} numberOfLines={1}>
+                    {showAll ? `${slotAppt.techName} · ` : ''}
+                    {(slotAppt.services || []).map(s => s.name).filter(Boolean).join(', ') || ''}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.dayEmptyHint}>＋</Text>
+              )}
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// ── Week view ──────────────────────────────────────────
+// 7-day strip — each day is a tappable column showing appt blocks
+// stacked vertically (no time grid; just the count + service summary).
+// Tapping an empty area on a day prefills create modal at the next
+// open hour, tap a block opens the detail modal.
+const WEEK_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function WeekView({ date, techName, showAll, onTapAppt, onTapEmpty, onPickDay }) {
+  const [byDay, setByDay] = useState({});  // 'YYYY-MM-DD' → appts[]
+  const [loading, setLoading] = useState(true);
+
+  const weekStart = useMemo(() => startOfWeek(new Date(date + 'T12:00:00')), [date]);
+  const days = useMemo(() => Array.from({ length: 7 }).map((_, i) => {
+    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
+    return { iso: isoFromDate(d), dow: WEEK_DAY_LABELS[i], dayNum: d.getDate(), full: d };
+  }), [weekStart]);
+
+  const startIso = days[0].iso;
+  const endIso   = days[6].iso;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchAppointmentsByRange(startIso, endIso)
+      .then(list => {
+        if (cancelled) return;
+        const filtered = (showAll || !techName)
+          ? list
+          : list.filter(a => (a.techName || '') === techName);
+        const map = {};
+        filtered.forEach(a => {
+          if (!a.date) return;
+          if (!map[a.date]) map[a.date] = [];
+          map[a.date].push(a);
+        });
+        Object.values(map).forEach(arr => arr.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || '')));
+        setByDay(map);
+      })
+      .catch(() => { if (!cancelled) setByDay({}); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [startIso, endIso, techName, showAll]);
+
+  const today = todayStr();
+
+  return (
+    <ScrollView style={{ flex: 1, backgroundColor: '#f5f7fa' }} contentContainerStyle={{ padding: 8 }}>
+      {loading && <ActivityIndicator style={{ marginTop: 12 }} color="#3D95CE" />}
+      {days.map(d => {
+        const appts = byDay[d.iso] || [];
+        const isToday = d.iso === today;
+        return (
+          <View key={d.iso} style={[styles.weekDayCard, isToday && styles.weekDayCardToday]}>
+            <TouchableOpacity onPress={() => onPickDay(d.iso)} style={styles.weekDayHeader} activeOpacity={0.7}>
+              <Text style={[styles.weekDayDow, isToday && styles.weekDayDowToday]}>{d.dow}</Text>
+              <Text style={[styles.weekDayNum, isToday && styles.weekDayNumToday]}>{d.dayNum}</Text>
+              <Text style={styles.weekDayCount}>{appts.length} appt{appts.length !== 1 ? 's' : ''}</Text>
+            </TouchableOpacity>
+            {appts.length === 0 ? (
+              <TouchableOpacity
+                style={styles.weekDayEmpty}
+                onPress={() => onTapEmpty(d.iso, '10:00')}
+                activeOpacity={0.6}
+              >
+                <Text style={styles.weekDayEmptyText}>＋ Add appointment</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
+                {appts.map(a => (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={styles.weekApptBlock}
+                    onPress={() => onTapAppt(a)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.weekApptTime}>{fmtTime(a.startTime)}</Text>
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={styles.weekApptClient} numberOfLines={1}>{a.clientName || 'Walk-in'}</Text>
+                      <Text style={styles.weekApptMeta} numberOfLines={1}>
+                        {showAll ? `${a.techName} · ` : ''}
+                        {(a.services || []).map(s => s.name).filter(Boolean).join(', ')}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity
+                  style={[styles.weekDayEmpty, { marginTop: 6 }]}
+                  onPress={() => onTapEmpty(d.iso, '10:00')}
+                  activeOpacity={0.6}
+                >
+                  <Text style={styles.weekDayEmptyText}>＋ Add</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// ── Create appointment modal ───────────────────────────
+// Minimum-viable create flow. Pre-fills date/time/tech from where the
+// user tapped. Lets them pick a client (search), service(s) from the
+// catalog, and a duration. Save → createAppointment → live sub
+// reconciles. Walk-ins are supported via the "No client (walk-in)"
+// row at the top of the client picker.
+function CreateApptModal({ prefill, onClose, onCreated }) {
+  const [clients, setClients] = useState([]);
+  const [services, setServices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+
+  const [pickedClient, setPickedClient] = useState(null);  // { id, name } or null
+  const [clientQuery, setClientQuery] = useState('');
+  const [pickedServices, setPickedServices] = useState([]); // [{ id, name, duration, price }]
+
+  useEffect(() => {
+    if (!prefill) return;
+    setLoading(true);
+    Promise.all([fetchClients(), fetchServices()])
+      .then(([cs, svc]) => {
+        setClients(cs || []);
+        setServices(svc || []);
+      })
+      .catch(() => { setClients([]); setServices([]); })
+      .finally(() => setLoading(false));
+    setPickedClient(null);
+    setClientQuery('');
+    setPickedServices([]);
+  }, [prefill?.date, prefill?.startTime]);
+
+  if (!prefill) return null;
+
+  const totalDuration = pickedServices.reduce((s, sv) => s + (Number(sv.duration) || 30), 0) || 30;
+  const filteredClients = useMemoSafe(() => {
+    const q = clientQuery.trim().toLowerCase();
+    if (!q) return clients.slice(0, 30);
+    return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 30);
+  }, [clientQuery, clients]);
+
+  function toggleService(svc) {
+    setPickedServices(prev => prev.some(s => s.id === svc.id)
+      ? prev.filter(s => s.id !== svc.id)
+      : [...prev, { id: svc.id, name: svc.name, duration: svc.duration || 30, price: Number(svc.price) || 0 }]);
+  }
+
+  async function save() {
+    if (working) return;
+    if (pickedServices.length === 0) {
+      Alert.alert('Add at least one service', 'Pick the service(s) the client is booking.');
+      return;
+    }
+    setWorking(true);
+    try {
+      await createAppointment({
+        date:      prefill.date,
+        startTime: prefill.startTime,
+        techName:  prefill.techName || '',
+        clientId:  pickedClient?.id || '',
+        clientName: pickedClient?.name || 'Walk-in',
+        services:  pickedServices,
+        duration:  totalDuration,
+        status:    'scheduled',
+        notes:     '',
+        techRequestType: 'scheduler',
+      });
+      onCreated?.();
+    } catch (e) {
+      Alert.alert('Couldn\'t create appointment', e?.message || 'Please try again.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal visible={!!prefill} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>New appointment</Text>
+              <Text style={styles.modalSubtitle}>
+                {new Date(prefill.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                {' · '}{fmtTime(prefill.startTime)}
+                {prefill.techName ? ` · ${prefill.techName}` : ' · (no tech assigned)'}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={styles.modalClose}>
+              <Text style={styles.modalCloseText}>×</Text>
+            </TouchableOpacity>
+          </View>
+
+          {loading ? (
+            <ActivityIndicator style={{ marginTop: 30 }} color="#3D95CE" />
+          ) : (
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+              <Text style={styles.sectionLabel}>Client</Text>
+              {pickedClient ? (
+                <TouchableOpacity onPress={() => setPickedClient(null)} style={styles.pickedChip}>
+                  <Text style={styles.pickedChipText}>{pickedClient.name}</Text>
+                  <Text style={styles.pickedChipX}>×</Text>
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search clients…  (or leave blank for walk-in)"
+                    placeholderTextColor="#bbb"
+                    value={clientQuery}
+                    onChangeText={setClientQuery}
+                  />
+                  <View style={styles.clientList}>
+                    <TouchableOpacity
+                      style={styles.clientRow}
+                      onPress={() => setPickedClient({ id: '', name: 'Walk-in' })}
+                    >
+                      <Text style={styles.clientRowName}>👤 Walk-in</Text>
+                    </TouchableOpacity>
+                    {filteredClients.map(c => (
+                      <TouchableOpacity
+                        key={c.id}
+                        style={styles.clientRow}
+                        onPress={() => setPickedClient({ id: c.id, name: c.name })}
+                      >
+                        <Text style={styles.clientRowName}>{c.name}</Text>
+                        {c.phone ? <Text style={styles.clientRowMeta}>{c.phone}</Text> : null}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
+
+              <Text style={[styles.sectionLabel, { marginTop: 18 }]}>
+                Services ({pickedServices.length} · {totalDuration} min)
+              </Text>
+              <View style={styles.serviceGrid}>
+                {services.map(svc => {
+                  const active = pickedServices.some(s => s.id === svc.id);
+                  return (
+                    <TouchableOpacity
+                      key={svc.id}
+                      onPress={() => toggleService(svc)}
+                      style={[styles.serviceChip, active && styles.serviceChipActive]}
+                    >
+                      <Text style={[styles.serviceChipName, active && styles.serviceChipNameActive]}>
+                        {svc.name}
+                      </Text>
+                      <Text style={[styles.serviceChipMeta, active && styles.serviceChipMetaActive]}>
+                        {svc.duration || 30}m · ${Number(svc.price) || 0}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, (working || pickedServices.length === 0) && { opacity: 0.5 }, { marginTop: 22 }]}
+                onPress={save}
+                disabled={working || pickedServices.length === 0}
+              >
+                <Text style={styles.primaryBtnText}>
+                  {working ? 'Creating…' : `Create appointment (${totalDuration} min)`}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// useMemo wrapper that lets us call hooks inside a guarded sub-render.
+// React Hooks rules require unconditional calls; useMemoSafe just
+// renames useMemo for readability where the dep array drives the work.
+function useMemoSafe(fn, deps) { return useMemo(fn, deps); }
 
 // ── Month grid view ────────────────────────────────────
 // Lightweight bird's-eye view: grid of day cells for the displayed
@@ -495,6 +867,50 @@ const styles = StyleSheet.create({
   viewSwitchBtnActive:  { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
   viewSwitchText:       { fontSize: 12, color: '#666', fontWeight: '500' },
   viewSwitchTextActive: { color: '#1a1a1a', fontWeight: '700' },
+
+  // Day timeline
+  dayTimelineRow:     { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: '#f0f0f0' },
+  dayTimeLabel:       { width: 56, paddingLeft: 8, paddingTop: 2 },
+  dayTimeLabelText:   { fontSize: 11, color: '#888', fontWeight: '600' },
+  dayTimelineSlot:    { flex: 1, paddingVertical: 2, paddingRight: 8, justifyContent: 'flex-start', alignItems: 'stretch' },
+  dayTimelineSlotHour:{ borderTopWidth: 0.5, borderTopColor: '#dadcdf' },
+  dayApptBlock:       { backgroundColor: '#EBF4FB', borderLeftWidth: 3, borderLeftColor: '#3D95CE', borderRadius: 6, padding: 8, justifyContent: 'center' },
+  dayApptClient:      { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
+  dayApptMeta:        { fontSize: 11, color: '#666', marginTop: 2 },
+  dayEmptyHint:       { fontSize: 14, color: '#dadcdf', textAlign: 'center', lineHeight: 18 },
+
+  // Week strip
+  weekDayCard:        { backgroundColor: '#fff', borderRadius: 12, marginBottom: 8, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1 },
+  weekDayCardToday:   { borderWidth: 1.5, borderColor: '#3D95CE' },
+  weekDayHeader:      { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fafafa', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  weekDayDow:         { fontSize: 12, fontWeight: '700', color: '#888', letterSpacing: 0.4, textTransform: 'uppercase' },
+  weekDayDowToday:    { color: '#1a5f8a' },
+  weekDayNum:         { fontSize: 20, fontWeight: '700', color: '#1a1a1a' },
+  weekDayNumToday:    { color: '#1a5f8a' },
+  weekDayCount:       { fontSize: 11, color: '#aaa', marginLeft: 'auto' },
+  weekDayEmpty:       { padding: 14, alignItems: 'center', borderRadius: 8, backgroundColor: '#f7f8fa', marginHorizontal: 8, marginBottom: 8, marginTop: 8 },
+  weekDayEmptyText:   { fontSize: 12, color: '#888', fontWeight: '500' },
+  weekApptBlock:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#f7fbfd', borderLeftWidth: 3, borderLeftColor: '#3D95CE', borderRadius: 6, marginTop: 6 },
+  weekApptTime:       { fontSize: 11, fontWeight: '700', color: '#3D95CE', minWidth: 56 },
+  weekApptClient:     { fontSize: 13, fontWeight: '600', color: '#1a1a1a' },
+  weekApptMeta:       { fontSize: 11, color: '#888', marginTop: 1 },
+
+  // Create appt modal
+  searchInput:        { backgroundColor: '#fafafa', borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#1a1a1a' },
+  clientList:         { marginTop: 8, backgroundColor: '#fafafa', borderRadius: 8, maxHeight: 180 },
+  clientRow:          { paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: 0.5, borderBottomColor: '#eee' },
+  clientRowName:      { fontSize: 14, color: '#1a1a1a' },
+  clientRowMeta:      { fontSize: 11, color: '#888', marginTop: 2 },
+  pickedChip:         { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EBF4FB', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, alignSelf: 'flex-start' },
+  pickedChipText:     { fontSize: 13, color: '#1a5f8a', fontWeight: '600' },
+  pickedChipX:        { fontSize: 18, color: '#1a5f8a', marginLeft: 8, lineHeight: 18 },
+  serviceGrid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  serviceChip:        { borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#fff', minWidth: '47%' },
+  serviceChipActive:  { borderColor: '#3D95CE', backgroundColor: '#EBF4FB' },
+  serviceChipName:    { fontSize: 12, fontWeight: '600', color: '#1a1a1a' },
+  serviceChipNameActive: { color: '#1a5f8a' },
+  serviceChipMeta:    { fontSize: 10, color: '#888', marginTop: 2 },
+  serviceChipMetaActive: { color: '#3D95CE' },
 
   monthScroll:        { flex: 1, backgroundColor: '#f5f7fa' },
   monthWeekdayRow:    { flexDirection: 'row', backgroundColor: '#fff', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#ebebeb' },
