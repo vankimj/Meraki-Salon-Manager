@@ -1,26 +1,25 @@
-import { C } from '../theme.js';
-
-// "Plume" feather + Nexus circuit-node monogram. Rendered as SVG so it scales.
-export default function Logo({ size = 36, color }) {
-  const grad = `pn-grad-${size}`;
+// Plume Nexus brand mark: a 5-petal camellia with a gold pistil center.
+// Original artwork — generic floral, no third-party trademarks.
+export default function Logo({ size = 36 }) {
+  const grad = `pn-camellia-${size}`;
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" aria-label="Plume Nexus" style={{ flexShrink: 0 }}>
       <defs>
-        <linearGradient id={grad} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor={color || C.plum} />
-          <stop offset="100%" stopColor={color || C.blue} />
-        </linearGradient>
+        <radialGradient id={grad} cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stopColor="#c19a4a" stopOpacity="0.28" />
+          <stop offset="55%"  stopColor="#a288c9" />
+          <stop offset="100%" stopColor="#5b3b8c" />
+        </radialGradient>
       </defs>
-      <rect width="64" height="64" rx="14" fill={`url(#${grad})`} />
-      {/* Plume / drop silhouette */}
-      <path
-        d="M32 12 C24 24, 19 33, 19 42 C19 49, 24 53, 32 53 C40 53, 45 49, 45 42 C45 33, 40 24, 32 12 Z"
-        fill="#fff"
-        opacity="0.96"
-      />
-      {/* Nexus connecting node */}
-      <circle cx="32" cy="42" r="3.5" fill={color || C.plum} />
-      <circle cx="32" cy="42" r="6.5" fill="none" stroke="#fff" strokeWidth="1.2" opacity="0.7" />
+      <g fill={`url(#${grad})`} opacity="0.96">
+        <ellipse cx="32" cy="18" rx="7.5" ry="11.7"/>
+        <g transform="rotate(72 32 32)"><ellipse cx="32" cy="18" rx="7.5" ry="11.7"/></g>
+        <g transform="rotate(144 32 32)"><ellipse cx="32" cy="18" rx="7.5" ry="11.7"/></g>
+        <g transform="rotate(216 32 32)"><ellipse cx="32" cy="18" rx="7.5" ry="11.7"/></g>
+        <g transform="rotate(288 32 32)"><ellipse cx="32" cy="18" rx="7.5" ry="11.7"/></g>
+      </g>
+      <circle cx="32" cy="32" r="5.9" fill="#ffffff" opacity="0.95"/>
+      <circle cx="32" cy="32" r="2.7" fill="#c19a4a"/>
     </svg>
   );
 }

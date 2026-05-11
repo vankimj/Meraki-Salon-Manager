@@ -1,0 +1,56 @@
+<!--
+  Plume Nexus brand master — 1024×1024 square, dark canvas, Camellia centered.
+
+  Convert this to PNG at the sizes listed below. Any free tool works:
+    https://cloudconvert.com/svg-to-png    (set width=N, transparent off)
+    https://svgtopng.com/                  (or similar)
+    macOS:   `qlmanage -t -s 1024 -o . brand-master.svg`  (Quick Look CLI)
+
+  TARGET FILES (overwrite each in place):
+  ──────────────────────────────────────────
+  plumenexus/public/icon-192.png          @ 192×192
+  plumenexus/public/icon-512.png          @ 512×512
+  plumenexus/public/apple-touch-icon.png  @ 180×180
+  public/icon-192.png                     @ 192×192
+  public/icon-512.png                     @ 512×512
+  public/apple-touch-icon.png             @ 180×180
+  mobile/assets/icon.png                  @ 512×512   (or 1024 for App Store)
+  mobile/assets/adaptive-icon.png         @ 512×512   (full bleed OK; Android masks it)
+  mobile/assets/splash.png                @ 512×512   (same square is fine)
+  mobile/assets/notification-icon.png     @ 192×192   (monochrome variant ideal on Android — see notif-master.svg if you want one)
+
+  For og-image.png (1200×630, marketing only) export plumenexus/public/og-image.svg
+  directly instead of this file — that one already has the full marketing lockup.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="65%">
+      <stop offset="0%"   stop-color="#1a1b35"/>
+      <stop offset="55%"  stop-color="#0f1923"/>
+      <stop offset="100%" stop-color="#06090e"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="42%">
+      <stop offset="0%"   stop-color="rgba(91,59,140,0.55)"/>
+      <stop offset="55%"  stop-color="rgba(61,149,206,0.18)"/>
+      <stop offset="100%" stop-color="rgba(91,59,140,0)"/>
+    </radialGradient>
+    <radialGradient id="petal" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#c19a4a" stop-opacity="0.32"/>
+      <stop offset="55%"  stop-color="#a288c9"/>
+      <stop offset="100%" stop-color="#5b3b8c"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+
+  <g fill="url(#petal)" opacity="0.96">
+    <ellipse cx="512" cy="288" rx="120" ry="187"/>
+    <g transform="rotate(72 512 512)"><ellipse cx="512" cy="288" rx="120" ry="187"/></g>
+    <g transform="rotate(144 512 512)"><ellipse cx="512" cy="288" rx="120" ry="187"/></g>
+    <g transform="rotate(216 512 512)"><ellipse cx="512" cy="288" rx="120" ry="187"/></g>
+    <g transform="rotate(288 512 512)"><ellipse cx="512" cy="288" rx="120" ry="187"/></g>
+  </g>
+  <circle cx="512" cy="512" r="94" fill="#ffffff" opacity="0.95"/>
+  <circle cx="512" cy="512" r="43" fill="#c19a4a"/>
+</svg>
