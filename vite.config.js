@@ -18,6 +18,27 @@ export default defineConfig({
     __BUILD_DATE__:  JSON.stringify(buildStamp),
     __BUILD_SHA__:   JSON.stringify(gitSha),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Vite 8 / Rolldown was splitting Firebase into multiple chunks
+        // whose load order broke the service registration at runtime
+        // ("Ap is not a constructor" + "Service firestore is not
+        // available" — the firestore chunk was loading before the app
+        // chunk had registered the component factory). Force every
+        // firebase-* module into a single chunk so the SDK initializes
+        // with all services registered together. Rolldown requires the
+        // function form (object form is rejected at config validation).
+        manualChunks(id) {
+          if (id.includes('node_modules/firebase') ||
+              id.includes('node_modules/@firebase')) {
+            return 'firebase';
+          }
+          return null;
+        },
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({

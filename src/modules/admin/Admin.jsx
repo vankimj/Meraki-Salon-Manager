@@ -27,9 +27,10 @@ export default function Admin({ onClose }) {
   const [pin,            setPin]           = useState(settings.adminPin || '');
   const [reviewUrl,      setReviewUrl]     = useState(settings.googleReviewUrl || '');
   const [ein,            setEin]           = useState(settings.ein || '');
-  const [salonName,      setSalonName]     = useState(settings.salonName    || '');
-  const [brandName,      setBrandName]     = useState(settings.brandName    || '');
-  const [brandTagline,   setBrandTagline]  = useState(settings.brandTagline || '');
+  const [salonName,        setSalonName]        = useState(settings.salonName        || '');
+  const [brandName,        setBrandName]        = useState(settings.brandName        || '');
+  const [brandTagline,     setBrandTagline]     = useState(settings.brandTagline     || '');
+  const [brandTaglineTop,  setBrandTaglineTop]  = useState(settings.brandTaglineTop  || '');
   const [taxRate,        setTaxRate]       = useState(settings.taxRate ?? 7.5);
   const [ccFeePct,       setCcFeePct]      = useState(settings.ccFeePct ?? 2.9);
   const [ccFeeFlat,      setCcFeeFlat]     = useState(settings.ccFeeFlat ?? 0.30);
@@ -237,64 +238,47 @@ export default function Admin({ onClose }) {
 
         {tab === 'settings' && (
           <>
-            <Section title="🏷 Branding">
-              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            <Section title="⚙ Settings">
+              {/* Branding fields — drive header / splash / sidebar / customer
+                  emails. Saved into BOTH data/settings (staff) and
+                  data/webfront (public) so pre-login surfaces (booking
+                  page, check-in, kiosk) pick up the same values. */}
+              <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 700, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase' }}>Branding</div>
+              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Salon name</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Full business name shown in the header, sidebar, and customer emails.</div>
                 </div>
-                <input
-                  value={salonName}
-                  onChange={e => setSalonName(e.target.value)}
-                  placeholder="e.g. Meraki Nail Studio"
-                  maxLength={80}
-                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }}
-                />
+                <input value={salonName} onChange={e => setSalonName(e.target.value)} placeholder="e.g. Meraki Nail Studio" maxLength={80}
+                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
               <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Brand name (short)</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Used in cursive on the launch splash. Often the first word of your salon name.</div>
                 </div>
-                <input
-                  value={brandName}
-                  onChange={e => setBrandName(e.target.value)}
-                  placeholder="e.g. Meraki"
-                  maxLength={40}
-                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }}
-                />
+                <input value={brandName} onChange={e => setBrandName(e.target.value)} placeholder="e.g. Meraki" maxLength={40}
+                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
               <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
-                  <div style={{ fontSize: 13, color: '#333' }}>Tagline</div>
+                  <div style={{ fontSize: 13, color: '#333' }}>Tagline (above brand)</div>
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Small cursive line above the brand name on the splash. Optional.</div>
+                </div>
+                <input value={brandTaglineTop} onChange={e => setBrandTaglineTop(e.target.value)} placeholder="e.g. Welcome to" maxLength={40}
+                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
+              </div>
+              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#333' }}>Tagline (below brand)</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Small caps under the brand name on the splash. Leave blank to hide.</div>
                 </div>
-                <input
-                  value={brandTagline}
-                  onChange={e => setBrandTagline(e.target.value)}
-                  placeholder="e.g. Nail Studio"
-                  maxLength={40}
-                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }}
-                />
+                <input value={brandTagline} onChange={e => setBrandTagline(e.target.value)} placeholder="e.g. Nail Studio" maxLength={40}
+                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
-              <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
-                <Btn color="#3D95CE" onClick={async () => {
-                  const sName = salonName.trim() || null;
-                  const bName = brandName.trim() || null;
-                  const bTag  = brandTagline.trim() || null;
-                  // Save to both stores: settings (staff-only, drives the
-                  // signed-in admin UI) AND webfront (publicly readable, drives
-                  // the booking page / check-in screen / kiosk before sign-in).
-                  await Promise.all([
-                    updateSettings({ ...settings, salonName: sName, brandName: bName, brandTagline: bTag }),
-                    fetchWebfrontConfig().then(wf => saveWebfrontConfig({ ...(wf || {}), salonName: sName, brandName: bName, brandTagline: bTag })),
-                  ]);
-                  showToast('Branding saved');
-                }}>Save</Btn>
-              </div>
-            </Section>
-            <Section title="⚙ Settings">
-              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+
+              <div style={{ padding: '14px 16px 6px', fontSize: 11, fontWeight: 700, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase', borderTop: '1px solid #f0f0f0' }}>App</div>
+              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Auto-logout timeout</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Minutes of inactivity before signing out</div>
@@ -307,39 +291,51 @@ export default function Admin({ onClose }) {
                   <div style={{ fontSize: 13, color: '#333' }}>HR &amp; Reports PIN lock</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>4-digit PIN required to open HR and Reports. Leave blank to disable.</div>
                 </div>
-                <input
-                  type="password" inputMode="numeric" maxLength={4} value={pin}
-                  onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  placeholder="----"
-                  style={{ width: 80, textAlign: 'center', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 12px', fontSize: 18, letterSpacing: 6 }}
-                />
+                <input type="password" inputMode="numeric" maxLength={4} value={pin}
+                  onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="----"
+                  style={{ width: 80, textAlign: 'center', fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 12px', fontSize: 18, letterSpacing: 6 }} />
               </div>
               <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Google Review URL</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Included as a button in receipt emails sent to clients.</div>
                 </div>
-                <input
-                  type="url" value={reviewUrl}
-                  onChange={e => setReviewUrl(e.target.value)}
-                  placeholder="https://g.page/r/…/review"
-                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
-                />
+                <input type="url" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} placeholder="https://g.page/r/…/review"
+                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 12 }} />
               </div>
               <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Business EIN</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Employer Identification Number — printed on 1099-NEC forms.</div>
                 </div>
-                <input
-                  value={ein}
-                  onChange={e => setEin(e.target.value)}
-                  placeholder="XX-XXXXXXX"
-                  style={{ width: 140, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }}
-                />
+                <input value={ein} onChange={e => setEin(e.target.value)} placeholder="XX-XXXXXXX"
+                  style={{ width: 140, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
               <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
-                <Btn color="#3D95CE" onClick={() => updateSettings({ ...settings, timeoutMin: timeout, adminPin: pin || null, googleReviewUrl: reviewUrl.trim() || null, ein: ein.trim() || null })}>Save</Btn>
+                <Btn color="#3D95CE" onClick={async () => {
+                  const sName = salonName.trim()      || null;
+                  const bName = brandName.trim()      || null;
+                  const bTag  = brandTagline.trim()   || null;
+                  const bTop  = brandTaglineTop.trim()|| null;
+                  // Branding fields go to BOTH stores so pre-login + public
+                  // surfaces (booking page, check-in, kiosk) read the same
+                  // values as the signed-in admin UI.
+                  await Promise.all([
+                    updateSettings({
+                      ...settings,
+                      salonName: sName, brandName: bName, brandTagline: bTag, brandTaglineTop: bTop,
+                      timeoutMin: timeout,
+                      adminPin: pin || null,
+                      googleReviewUrl: reviewUrl.trim() || null,
+                      ein: ein.trim() || null,
+                    }),
+                    fetchWebfrontConfig().then(wf => saveWebfrontConfig({
+                      ...(wf || {}),
+                      salonName: sName, brandName: bName, brandTagline: bTag, brandTaglineTop: bTop,
+                    })),
+                  ]);
+                  showToast('Settings saved');
+                }}>Save</Btn>
               </div>
             </Section>
             <Section title="💰 Financial">
