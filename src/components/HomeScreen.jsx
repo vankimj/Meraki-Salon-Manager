@@ -86,8 +86,10 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
       {/* Top bar */}
       <div style={{ background: '#fff', borderBottom: `1px solid var(--tm-border, #ebebeb)`, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, width: '100%', boxSizing: 'border-box', gap: 8 }}>
         <div className="ms-brand-block" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg viewBox="0 0 60 60" fill="none" width={18} height={18}><circle cx="30" cy="22" r="7" fill="white"/><path d="M14 50c0-8.8 7.2-16 16-16s16 7.2 16 16" stroke="white" strokeWidth="3.5" strokeLinecap="round"/></svg>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 6px rgba(0,0,0,.10), inset 0 1px 0 rgba(255,255,255,.18)' }}>
+            <span style={{ fontFamily: '"Cinzel", Georgia, serif', fontSize: 17, fontWeight: 700, color: '#fff', letterSpacing: 0, lineHeight: 1 }}>
+              {(displayName?.trim()?.[0] || 'P').toUpperCase()}
+            </span>
           </div>
           <div style={{ minWidth: 0 }}>
             <div className="ms-brand-title" style={{ fontSize: 14, fontWeight: 700, color: 'var(--tm-text, #1a1a1a)', lineHeight: 1.2 }}>{displayName}</div>
@@ -161,34 +163,36 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
 
       {/* Hero — only shown when not signed in */}
       {!gUser && (
-        <div style={{ padding: '40px 24px 32px', flexShrink: 0, maxWidth: 720, width: '100%', alignSelf: 'center', boxSizing: 'border-box', textAlign: 'center' }}>
-          <div style={{ width: 76, height: 76, borderRadius: 22, background: 'var(--tm-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: '0 12px 32px rgba(45,122,95,.25)' }}>
-            <svg viewBox="0 0 60 60" fill="none" width={42} height={42}><circle cx="30" cy="22" r="7" fill="white"/><path d="M14 50c0-8.8 7.2-16 16-16s16 7.2 16 16" stroke="white" strokeWidth="3.5" strokeLinecap="round"/></svg>
-          </div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, color: '#1a1a1a', margin: 0, letterSpacing: '-.5px' }}>Welcome to {heroBrand}</h1>
-          <p style={{ fontSize: 14, color: '#888', marginTop: 8, marginBottom: 24, lineHeight: 1.6 }}>
-            Sign in to manage appointments, clients, and your team.
-          </p>
-          <button onClick={() => setShowAuth(true)}
-            style={{ fontSize: 15, fontWeight: 700, padding: '13px 40px', borderRadius: 12, border: 'none', background: 'var(--tm-primary, #2D7A5F)', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 6px 18px rgba(45,122,95,.28)', letterSpacing: '.02em', transition: 'transform .15s, box-shadow .15s' }}
-            onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 8px 22px rgba(45,122,95,.32)'; }}
-            onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 6px 18px rgba(45,122,95,.28)'; }}>
-            Sign in
-          </button>
-          {/* SaaS "Powered by" mark — only on the pre-login surface so it
-              feels like a footer credit rather than in-app chrome. Hidden
-              when the tenant IS Plume Nexus itself (would be redundant). */}
-          {heroBrand !== 'Plume Nexus' && (
-            <div style={{ marginTop: 36, fontSize: 11, color: '#aaa', letterSpacing: '.04em' }}>
-              Powered by{' '}
-              <a href="https://plumenexus.com" target="_blank" rel="noopener noreferrer"
-                style={{ color: '#888', textDecoration: 'none', fontWeight: 600 }}
-                onMouseEnter={e => { e.currentTarget.style.color = '#2D7A5F'; }}
-                onMouseLeave={e => { e.currentTarget.style.color = '#888'; }}>
-                Plume Nexus Salon Manager
-              </a>
+        <div style={{ position: 'relative', padding: '88px 24px 56px', flexShrink: 0, maxWidth: 720, width: '100%', alignSelf: 'center', boxSizing: 'border-box', textAlign: 'center' }}>
+          <div aria-hidden style={{ position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)', width: 640, height: 320, background: 'radial-gradient(ellipse 50% 60% at 50% 30%, rgba(91,59,140,.06) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <div style={{ fontFamily: '"Cinzel", Georgia, serif', fontSize: 11, fontWeight: 600, color: 'var(--tm-muted, #9ca3af)', letterSpacing: '.34em', textTransform: 'uppercase', marginBottom: 18 }}>
+              Welcome
             </div>
-          )}
+            <h1 style={{ fontFamily: '"Cinzel", Georgia, serif', fontSize: 'clamp(34px, 5vw, 50px)', fontWeight: 700, color: 'var(--tm-text, #1a1a1a)', margin: 0, letterSpacing: '-.01em', lineHeight: 1.1 }}>
+              {heroBrand}
+            </h1>
+            <p style={{ fontSize: 16, color: 'var(--tm-muted, #6b7280)', marginTop: 18, marginBottom: 40, lineHeight: 1.55, maxWidth: 440, marginLeft: 'auto', marginRight: 'auto', fontWeight: 400 }}>
+              Sign in to manage your day &mdash; appointments, clients, and team.
+            </p>
+            <button onClick={() => setShowAuth(true)}
+              style={{ fontSize: 15, fontWeight: 600, padding: '0 40px', height: 52, borderRadius: 26, border: 'none', background: 'var(--tm-primary, #2D7A5F)', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 10px 28px rgba(45,122,95,.22), inset 0 1px 0 rgba(255,255,255,.16)', letterSpacing: '.01em', transition: 'transform .18s ease, box-shadow .18s ease' }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 14px 36px rgba(45,122,95,.28), inset 0 1px 0 rgba(255,255,255,.2)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 10px 28px rgba(45,122,95,.22), inset 0 1px 0 rgba(255,255,255,.16)'; }}>
+              Sign in
+            </button>
+            {heroBrand !== 'Plume Nexus' && (
+              <div style={{ marginTop: 56, fontSize: 10, color: '#a8a8a8', letterSpacing: '.22em', textTransform: 'uppercase', fontWeight: 500 }}>
+                Powered by{' '}
+                <a href="https://plumenexus.com" target="_blank" rel="noopener noreferrer"
+                  style={{ color: '#7a7a7a', textDecoration: 'none', fontWeight: 600 }}
+                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--tm-primary, #2D7A5F)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = '#7a7a7a'; }}>
+                  Plume Nexus
+                </a>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
