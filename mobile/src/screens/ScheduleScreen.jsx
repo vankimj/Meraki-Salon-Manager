@@ -590,14 +590,18 @@ function WeekView({ date, techName, showAll, allTechs, workDays, timeOff, onTapA
 // reconciles. Walk-ins are supported via the "No client (walk-in)"
 // row at the top of the client picker.
 function CreateApptModal({ prefill, onClose, onCreated }) {
+  // CRITICAL: every hook below runs on every render regardless of
+  // prefill. The previous version had an early `if (!prefill) return null`
+  // after useState/useEffect but before useMemo, which made the hook
+  // count vary across renders ("Rendered more hooks than during the
+  // previous render" crash). All conditionals are now inside the JSX.
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
-
-  const [pickedClient, setPickedClient] = useState(null);  // { id, name } or null
+  const [pickedClient, setPickedClient] = useState(null);
   const [clientQuery, setClientQuery] = useState('');
-  const [pickedServices, setPickedServices] = useState([]); // [{ id, name, duration, price }]
+  const [pickedServices, setPickedServices] = useState([]);
 
   useEffect(() => {
     if (!prefill) return;
@@ -614,14 +618,14 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
     setPickedServices([]);
   }, [prefill?.date, prefill?.startTime]);
 
-  if (!prefill) return null;
-
   const totalDuration = pickedServices.reduce((s, sv) => s + (Number(sv.duration) || 30), 0) || 30;
-  const filteredClients = useMemoSafe(() => {
+  const filteredClients = useMemo(() => {
     const q = clientQuery.trim().toLowerCase();
     if (!q) return clients.slice(0, 30);
     return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 30);
   }, [clientQuery, clients]);
+
+  if (!prefill) return null;   // Safe now — every hook above already ran.
 
   function toggleService(svc) {
     setPickedServices(prev => prev.some(s => s.id === svc.id)
@@ -754,11 +758,6 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
     </Modal>
   );
 }
-
-// useMemo wrapper that lets us call hooks inside a guarded sub-render.
-// React Hooks rules require unconditional calls; useMemoSafe just
-// renames useMemo for readability where the dep array drives the work.
-function useMemoSafe(fn, deps) { return useMemo(fn, deps); }
 
 // ── Month grid view ────────────────────────────────────
 // Lightweight bird's-eye view: grid of day cells for the displayed
