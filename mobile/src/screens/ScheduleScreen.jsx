@@ -3,7 +3,7 @@ import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
   Modal, TextInput, ScrollView, Alert, RefreshControl,
 } from 'react-native';
-import { subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes } from '../lib/firestore';
+import { subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes, fetchAppointmentsByRange } from '../lib/firestore';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
 import Icon from '../components/Icon';
 
@@ -34,6 +34,7 @@ export default function ScheduleScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showAll, setShowAll] = useState(false); // admins / floor-view toggle
   const [detail,  setDetail]  = useState(null);  // selected appt for the modal
+  const [view,    setView]    = useState('day'); // 'day' | 'month'
 
   // Live subscription so an iPad check-in (or another tech editing) shows
   // up here immediately. Re-subscribes when `date` changes.
@@ -52,43 +53,64 @@ export default function ScheduleScreen() {
     setDate(d.toISOString().slice(0, 10));
   }
 
+  function shiftMonth(delta) {
+    const d = new Date(date + 'T12:00:00');
+    d.setMonth(d.getMonth() + delta, 1);   // 1st of new month avoids month-overflow weirdness
+    setDate(d.toISOString().slice(0, 10));
+  }
+
   const filtered = useMemo(() => {
     if (showAll || !techName) return appts;
     return appts.filter(a => (a.techName || '') === techName);
   }, [appts, showAll, techName]);
 
   const isToday = date === todayStr();
-  const displayDate = new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric',
-  });
+  const displayDate = view === 'month'
+    ? new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
   return (
     <View style={styles.container}>
       {/* Date nav row */}
       <View style={styles.dateRow}>
-        <TouchableOpacity style={styles.navBtn} onPress={() => shiftDate(-1)}>
+        <TouchableOpacity style={styles.navBtn} onPress={() => view === 'month' ? shiftMonth(-1) : shiftDate(-1)}>
           <Text style={styles.navBtnText}>‹</Text>
         </TouchableOpacity>
         <View style={styles.dateCenter}>
           <Text style={styles.dateText}>{displayDate}</Text>
-          <Text style={styles.apptCount}>
-            {filtered.length} appt{filtered.length !== 1 ? 's' : ''}
-            {!showAll && techName ? ` · ${techName}` : ''}
-          </Text>
+          {view === 'day' && (
+            <Text style={styles.apptCount}>
+              {filtered.length} appt{filtered.length !== 1 ? 's' : ''}
+              {!showAll && techName ? ` · ${techName}` : ''}
+            </Text>
+          )}
         </View>
-        <TouchableOpacity style={styles.navBtn} onPress={() => shiftDate(1)}>
+        <TouchableOpacity style={styles.navBtn} onPress={() => view === 'month' ? shiftMonth(1) : shiftDate(1)}>
           <Text style={styles.navBtnText}>›</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Today / All-techs toggle */}
+      {/* View + filter toggles */}
       <View style={styles.toggleRow}>
+        <View style={styles.viewSwitch}>
+          {['day', 'month'].map(m => (
+            <TouchableOpacity
+              key={m}
+              onPress={() => setView(m)}
+              style={[styles.viewSwitchBtn, view === m && styles.viewSwitchBtnActive]}
+            >
+              <Text style={[styles.viewSwitchText, view === m && styles.viewSwitchTextActive]}>
+                {m === 'day' ? 'Day' : 'Month'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
         {!isToday && (
           <TouchableOpacity style={[styles.chip, styles.chipBlue]} onPress={() => setDate(todayStr())}>
             <Text style={styles.chipBlueText}>Today</Text>
           </TouchableOpacity>
         )}
-        {techName && (
+        {techName && view === 'day' && (
           <TouchableOpacity
             style={[styles.chip, showAll ? styles.chipBlue : styles.chipMuted]}
             onPress={() => setShowAll(v => !v)}
@@ -100,7 +122,17 @@ export default function ScheduleScreen() {
         )}
       </View>
 
-      {(empLoading || loading) ? (
+      {view === 'month' && (
+        <MonthView
+          date={date}
+          techName={techName}
+          showAll={showAll}
+          onPickDay={(d) => { setDate(d); setView('day'); }}
+        />
+      )}
+
+      {view === 'day' && (
+      (empLoading || loading) ? (
         <ActivityIndicator style={{ marginTop: 40 }} color="#3D95CE" />
       ) : filtered.length === 0 ? (
         <View style={styles.emptyState}>
@@ -156,6 +188,7 @@ export default function ScheduleScreen() {
             );
           }}
         />
+      )
       )}
 
       <ApptDetailModal
@@ -168,6 +201,90 @@ export default function ScheduleScreen() {
         }}
       />
     </View>
+  );
+}
+
+// ── Month grid view ────────────────────────────────────
+// Lightweight bird's-eye view: grid of day cells for the displayed
+// month, each with the day number and a count of appointments. Tap a
+// day to drop back into Day mode focused on that date. Fetches the
+// month's appointments via fetchAppointmentsByRange (snapshot, not
+// subscription — month view is for browsing, day view re-subscribes
+// when you drill in).
+const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function MonthView({ date, techName, showAll, onPickDay }) {
+  const [byDay, setByDay] = useState({});      // 'YYYY-MM-DD' → count
+  const [loading, setLoading] = useState(true);
+
+  const anchor = useMemo(() => new Date(date + 'T12:00:00'), [date]);
+  const year   = anchor.getFullYear();
+  const month  = anchor.getMonth();          // 0-indexed
+  const monthStartIso = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+  const monthEndDay   = new Date(year, month + 1, 0).getDate();
+  const monthEndIso   = `${year}-${String(month + 1).padStart(2, '0')}-${String(monthEndDay).padStart(2, '0')}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchAppointmentsByRange(monthStartIso, monthEndIso)
+      .then(list => {
+        if (cancelled) return;
+        const filtered = (showAll || !techName)
+          ? list
+          : list.filter(a => (a.techName || '') === techName);
+        const map = {};
+        filtered.forEach(a => { if (a.date) map[a.date] = (map[a.date] || 0) + 1; });
+        setByDay(map);
+      })
+      .catch(() => { if (!cancelled) setByDay({}); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [monthStartIso, monthEndIso, techName, showAll]);
+
+  // Build a 6-row × 7-col grid. Pad with prev/next-month blanks so
+  // weekday columns stay aligned.
+  const firstWeekday = new Date(year, month, 1).getDay();   // 0 = Sunday
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= monthEndDay; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  while (cells.length < 42) cells.push(null);
+
+  const today = todayStr();
+
+  return (
+    <ScrollView style={styles.monthScroll} contentContainerStyle={{ paddingBottom: 20 }}>
+      <View style={styles.monthWeekdayRow}>
+        {WEEKDAY_LABELS.map((w, i) => (
+          <Text key={i} style={styles.monthWeekdayLabel}>{w}</Text>
+        ))}
+      </View>
+      {loading && <ActivityIndicator style={{ marginTop: 20 }} color="#3D95CE" />}
+      <View style={styles.monthGrid}>
+        {cells.map((day, idx) => {
+          if (day === null) return <View key={idx} style={styles.monthCell} />;
+          const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const count = byDay[iso] || 0;
+          const isToday = iso === today;
+          return (
+            <TouchableOpacity
+              key={idx}
+              style={[styles.monthCell, isToday && styles.monthCellToday]}
+              onPress={() => onPickDay(iso)}
+              activeOpacity={0.6}
+            >
+              <Text style={[styles.monthCellDay, isToday && styles.monthCellDayToday]}>{day}</Text>
+              {count > 0 && (
+                <View style={styles.monthCellBadge}>
+                  <Text style={styles.monthCellBadgeText}>{count}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -365,12 +482,30 @@ const styles = StyleSheet.create({
   toggleRow: {
     flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 10,
     backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#ebebeb',
+    alignItems: 'center', flexWrap: 'wrap',
   },
   chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
   chipBlue: { backgroundColor: '#EBF4FB', borderColor: '#3D95CE' },
   chipBlueText: { color: '#1a5f8a', fontSize: 12, fontWeight: '600' },
   chipMuted: { backgroundColor: '#fff', borderColor: '#e0e0e0' },
   chipMutedText: { color: '#555', fontSize: 12, fontWeight: '500' },
+
+  viewSwitch:           { flexDirection: 'row', backgroundColor: '#f0f0f0', borderRadius: 8, padding: 2, marginRight: 4 },
+  viewSwitchBtn:        { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6 },
+  viewSwitchBtnActive:  { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
+  viewSwitchText:       { fontSize: 12, color: '#666', fontWeight: '500' },
+  viewSwitchTextActive: { color: '#1a1a1a', fontWeight: '700' },
+
+  monthScroll:        { flex: 1, backgroundColor: '#f5f7fa' },
+  monthWeekdayRow:    { flexDirection: 'row', backgroundColor: '#fff', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#ebebeb' },
+  monthWeekdayLabel:  { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '700', color: '#888', letterSpacing: 0.5 },
+  monthGrid:          { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#fff' },
+  monthCell:          { width: `${100 / 7}%`, aspectRatio: 1, padding: 4, borderWidth: 0.5, borderColor: '#f0f0f0', alignItems: 'center', justifyContent: 'flex-start' },
+  monthCellToday:     { backgroundColor: '#EBF4FB' },
+  monthCellDay:       { fontSize: 13, color: '#1a1a1a', fontWeight: '500', marginTop: 2 },
+  monthCellDayToday:  { color: '#1a5f8a', fontWeight: '700' },
+  monthCellBadge:     { marginTop: 4, backgroundColor: '#3D95CE', borderRadius: 9, minWidth: 18, paddingHorizontal: 5, paddingVertical: 1, alignItems: 'center' },
+  monthCellBadgeText: { fontSize: 10, color: '#fff', fontWeight: '700' },
 
   emptyState: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
   emptyIcon: { fontSize: 44, marginBottom: 12 },
