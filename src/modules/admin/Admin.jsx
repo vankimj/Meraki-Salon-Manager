@@ -10,9 +10,7 @@ import { fetchLogs, fetchEmployees, createEmployee, saveEmployee,
          fetchBookingConfig, saveBookingConfig,
          fetchWebfrontConfig, saveWebfrontConfig,
          fetchReviewReceived, fetchReviewRequests,
-         saveReviewReceived,
-         fetchTenants, createTenantRecord, updateTenantRecord,
-         provisionNewTenant, fetchTenantStats } from '../../lib/firestore';
+         saveReviewReceived } from '../../lib/firestore';
 import { ASSIGNMENT_METHODS, ASSIGNMENT_METHOD_LABELS, ASSIGNMENT_METHOD_DESCRIPTIONS, DEFAULT_ASSIGNMENT_METHOD } from '../../lib/techAssignment';
 import { MODULES, effectivePlan, isModuleAvailableForPlan, PLAN_RANK } from '../../lib/modules';
 import { formatTime } from '../../utils/helpers';
@@ -51,7 +49,6 @@ export default function Admin({ onClose }) {
   const [showFeedback, setShowFeedback] = useState(false);
   const [webfrontCfg,  setWebfrontCfg] = useState(null);
   const [reviewsData,  setReviewsData]  = useState(null);
-  const [tenants,      setTenants]      = useState(null);
   const isSuperAdmin = gUser?.email === 'jvankim@gmail.com';
   const TABS = [
     { id: 'users',    label: 'Users'    },
@@ -61,7 +58,6 @@ export default function Admin({ onClose }) {
     { id: 'webfront', label: 'Webfront' },
     { id: 'feedback', label: 'Feedback' },
     { id: 'logs',     label: 'Logs'     },
-    ...(isSuperAdmin ? [{ id: 'tenants', label: 'Tenants' }] : []),
   ];
 
   useEffect(() => { if (tab === 'settings' && !bookingCfg) fetchBookingConfig().then(setBookingCfg).catch(() => {}); }, [tab]); // eslint-disable-line
@@ -70,7 +66,6 @@ export default function Admin({ onClose }) {
   useEffect(() => { if (tab === 'feedback') loadFeedback(); }, [tab]); // eslint-disable-line
   useEffect(() => { if (tab === 'notifs')   loadNotifs(); },   [tab]); // eslint-disable-line
   useEffect(() => { if (tab === 'reviews')  loadReviews(); },  [tab]); // eslint-disable-line
-  useEffect(() => { if (tab === 'tenants' && isSuperAdmin) loadTenants(); }, [tab]); // eslint-disable-line
   useEffect(() => {
     if (tab === 'users') {
       setReqsLoading(true);
@@ -103,12 +98,6 @@ export default function Admin({ onClose }) {
       const [requests, received] = await Promise.all([fetchReviewRequests(), fetchReviewReceived()]);
       setReviewsData({ requests, received });
     } catch { setReviewsData({ requests: [], received: [] }); }
-  }
-
-  async function loadTenants() {
-    setTenants(null);
-    try { setTenants(await fetchTenants()); }
-    catch { setTenants([]); }
   }
 
   async function handleFeedbackStatus(id, status) {
@@ -444,15 +433,6 @@ export default function Admin({ onClose }) {
                 appropriate for production-tenant admin panels. */}
             {isSuperAdmin && <DemoSeedSection />}
           </>
-        )}
-
-        {tab === 'tenants' && isSuperAdmin && (
-          <TenantsTab
-            tenants={tenants}
-            onRefresh={loadTenants}
-            onCreate={createTenantRecord}
-            onUpdate={updateTenantRecord}
-          />
         )}
 
         <div style={{ textAlign: 'center', padding: '12px 0 4px' }}>
@@ -2451,189 +2431,3 @@ function PlanBadge({ p }) {
   return <span style={{ background: bg, color: c, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, textTransform: 'uppercase' }}>{p}</span>;
 }
 
-function TenantsTab({ tenants, onRefresh, onCreate, onUpdate }) {
-  const [modal,        setModal]       = useState(null); // null | 'new' | tenantObject
-  const [saving,       setSaving]      = useState(false);
-  const [provisioning, setProvisioning]= useState(null); // tenantId currently being provisioned
-  const [stats,        setStats]       = useState({});   // { [tenantId]: { provisioned, userCount, apptCount } }
-  const [id,    setId]    = useState('');
-  const [name,  setName]  = useState('');
-  const [owner, setOwner] = useState('');
-  const [plan,  setPlan]  = useState('starter');
-  const [active,setActive]= useState(true);
-
-  // Load stats in parallel whenever tenant list refreshes
-  useEffect(() => {
-    if (!tenants?.length) return;
-    Promise.allSettled(
-      tenants.map(t => fetchTenantStats(t.id).then(s => [t.id, s]))
-    ).then(results => {
-      const map = {};
-      results.forEach(r => { if (r.status === 'fulfilled') { const [tid, s] = r.value; map[tid] = s; } });
-      setStats(map);
-    });
-  }, [tenants]); // eslint-disable-line
-
-  function openNew() {
-    setId(''); setName(''); setOwner(''); setPlan('starter'); setActive(true);
-    setModal('new');
-  }
-
-  function openEdit(t) {
-    setId(t.id); setName(t.name || ''); setOwner(t.ownerEmail || ''); setPlan(t.plan || 'starter'); setActive(t.active !== false);
-    setModal(t);
-  }
-
-  async function handleSave() {
-    if (!id.trim() || !name.trim()) return;
-    setSaving(true);
-    try {
-      const slugId = id.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
-      const data   = { name: name.trim(), ownerEmail: owner.trim(), plan, active };
-      if (modal === 'new') {
-        await onCreate(slugId, data);
-        await provisionNewTenant(slugId, owner.trim(), name.trim());
-      } else {
-        await onUpdate(modal.id, data);
-      }
-      await onRefresh();
-      setModal(null);
-    } finally { setSaving(false); }
-  }
-
-  async function handleProvision(t) {
-    setProvisioning(t.id);
-    try {
-      await provisionNewTenant(t.id, t.ownerEmail, t.name);
-      const s = await fetchTenantStats(t.id);
-      setStats(prev => ({ ...prev, [t.id]: s }));
-    } finally { setProvisioning(null); }
-  }
-
-  return (
-    <>
-      <Section title="🏢 Tenant Registry" action={
-        <div style={{ display: 'flex', gap: 6 }}>
-          <Btn onClick={onRefresh}>Refresh</Btn>
-          <Btn onClick={openNew} color="#2D7A5F">+ New Tenant</Btn>
-        </div>
-      }>
-        {tenants === null
-          ? <Empty>Loading…</Empty>
-          : tenants.length === 0
-            ? <Empty>No tenants yet. Click "+ New Tenant" to add one.</Empty>
-            : tenants.map(t => {
-                const s = stats[t.id];
-                return (
-                  <div key={t.id} style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        {/* Name row */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{t.name || t.id}</span>
-                          <PlanBadge p={t.plan || 'starter'} />
-                          {t.active === false && (
-                            <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 700, background: '#fef2f2', padding: '1px 6px', borderRadius: 8 }}>INACTIVE</span>
-                          )}
-                          {s && (s.provisioned
-                            ? <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 700 }}>✓ Provisioned</span>
-                            : <span style={{ fontSize: 10, color: '#f59e0b', fontWeight: 700 }}>⚠ Not provisioned</span>
-                          )}
-                        </div>
-                        {/* Meta row */}
-                        <div style={{ fontSize: 11, color: '#888', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
-                          <span>ID: <code style={{ background: '#f5f5f5', padding: '1px 5px', borderRadius: 4, fontSize: 10 }}>{t.id}</code></span>
-                          {t.ownerEmail && <span>{t.ownerEmail}</span>}
-                          {s?.userCount > 0 && <span>👤 {s.userCount} user{s.userCount !== 1 ? 's' : ''}</span>}
-                          {s?.apptCount > 0 && <span>📅 {s.apptCount}+ appts</span>}
-                          {t.createdAt && <span>Created {t.createdAt.slice(0, 10)}</span>}
-                        </div>
-                      </div>
-                      {/* Actions */}
-                      <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginTop: 2 }}>
-                        {s && !s.provisioned && (
-                          <button
-                            onClick={() => handleProvision(t)}
-                            disabled={provisioning === t.id}
-                            style={{ fontSize: 11, color: '#fff', background: provisioning === t.id ? '#ccc' : '#f59e0b', border: 'none', borderRadius: 6, padding: '5px 10px', cursor: provisioning === t.id ? 'default' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
-                          >
-                            {provisioning === t.id ? 'Provisioning…' : 'Provision'}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => openEdit(t)}
-                          style={{ fontSize: 11, color: '#3D95CE', background: 'none', border: '1px solid #d0e8f8', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-        }
-      </Section>
-
-      {modal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: 380, boxShadow: '0 8px 40px rgba(0,0,0,.18)' }}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18 }}>
-              {modal === 'new' ? '🏢 New Tenant' : `Edit: ${modal.id}`}
-            </div>
-
-            {modal === 'new' && (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Tenant ID <span style={{ color: '#bbb' }}>(slug — becomes the subdomain)</span></div>
-                <input value={id} onChange={e => setId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="e.g. luxenails"
-                  style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit' }} />
-                {id && <div style={{ fontSize: 10, color: '#888', marginTop: 4 }}>URL: {id}.tipflow.app</div>}
-              </div>
-            )}
-
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Salon Name</div>
-              <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Luxe Nails Studio"
-                style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit' }} />
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Owner Email</div>
-              <input value={owner} onChange={e => setOwner(e.target.value)} placeholder="owner@email.com"
-                style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit' }} />
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Plan</div>
-              <select value={plan} onChange={e => setPlan(e.target.value)}
-                style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', background: '#fff' }}>
-                {PLANS.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-              <input type="checkbox" id="tActive" checked={active} onChange={e => setActive(e.target.checked)} />
-              <label htmlFor="tActive" style={{ fontSize: 13, color: '#333', cursor: 'pointer' }}>Active</label>
-            </div>
-
-            {modal === 'new' && (
-              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 12px', marginBottom: 16, fontSize: 12, color: '#166534', lineHeight: 1.5 }}>
-                Saving will auto-provision Firestore data for this tenant: default settings, empty slide deck, and the owner email set as admin.
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setModal(null)}
-                style={{ border: '1px solid #e0e0e0', background: '#fff', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
-                Cancel
-              </button>
-              <button onClick={handleSave} disabled={saving || !id.trim() || !name.trim()}
-                style={{ background: saving || !id.trim() || !name.trim() ? '#aaa' : '#2D7A5F', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
-                {saving ? 'Creating…' : modal === 'new' ? 'Create & Provision' : 'Save Changes'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
