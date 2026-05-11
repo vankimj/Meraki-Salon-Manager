@@ -17,7 +17,7 @@ function greeting() {
 }
 
 export default function HomeScreen({ onNavigate, onAdmin }) {
-  const { gUser, isAdmin, isReadOnly, isTech, isScheduler, settings, totalChatUnread, activeTheme: t, showToast, realIsAdmin, viewAs, setViewAs, users, requirePin } = useApp();
+  const { gUser, isAdmin, isReadOnly, isTech, isScheduler, settings, totalChatUnread, activeTheme: t, showToast, realIsAdmin, viewAs, setViewAs, users, requirePin, hasFeature } = useApp();
   const [showAuth,     setShowAuth]     = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [webCfg,       setWebCfg]       = useState(null);
@@ -219,6 +219,23 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
 
       {showAuth     && <AuthModal    onClose={() => setShowAuth(false)} />}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
+
+      {/* Canary ribbon — demonstrates the feature-flag pipeline end-to-end.
+          Visible only for tenants where the `canaryRibbon` flag resolves
+          to true (see src/lib/featureFlags.js — currently `demo` tier only).
+          Safe to remove once the team is comfortable with feature flags. */}
+      {hasFeature?.('canaryRibbon') && (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0,
+          background: 'linear-gradient(90deg,#f59e0b,#fbbf24)',
+          color: '#78350f', fontSize: 11, fontWeight: 700,
+          padding: '5px 12px', textAlign: 'center', letterSpacing: '.05em',
+          textTransform: 'uppercase', zIndex: 1000,
+          boxShadow: '0 -2px 8px rgba(0,0,0,.08)',
+        }}>
+          Canary release — testing pre-release features
+        </div>
+      )}
     </div>
   );
 }

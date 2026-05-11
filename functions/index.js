@@ -3695,7 +3695,7 @@ exports.createTenantOnboarding = onCall({ cors: true }, async (request) => {
   const ownerEmailLower = (ownerEmail || '').toLowerCase();
   await Promise.all([
     db.doc(`tenants/${tenantId}`).set({ name: salonName, ownerName: ownerName || '', ownerEmail, plan: planVal, active: true, createdAt: now }),
-    db.doc(`tenants/${tenantId}/data/settings`).set({ timeoutMin: 5, createdAt: now }),
+    db.doc(`tenants/${tenantId}/data/settings`).set({ timeoutMin: 5, tier: 'free', createdAt: now }),
     db.doc(`tenants/${tenantId}/data/slides`).set({ slides: [], def: 0, cur: 0 }),
     // Slim projection — staff readable. Holds membership lists +
     // The rich users[] array lives in data/usersFull (admin-only); the

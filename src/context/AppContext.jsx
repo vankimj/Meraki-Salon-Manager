@@ -6,6 +6,7 @@ import { loadAll, saveSlides, saveUsers, saveSettings, submitAccessRequest, fetc
 import { migrateFromLegacy } from '../lib/migration';
 import { logActivity, setLoggerUser } from '../lib/logger';
 import { phSVG } from '../utils/helpers';
+import { isFeatureOn } from '../lib/featureFlags';
 
 const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
@@ -580,6 +581,17 @@ export function AppProvider({ children }) {
   const myTechName  = viewAs?.role === 'tech' ? (viewAs.techName || null) : (viewAs ? null : (_rec?.techName || null));
   const isPortalUser = !!portalClientId;
 
+  // Canary tier + feature flags — see src/lib/featureFlags.js for the
+  // resolution chain. Stored on data/settings (already loaded above),
+  // so this is essentially free — no extra read. Tier defaults to
+  // 'free' for new self-service tenants; existing tenants are
+  // backfilled by scripts/backfill-tier.cjs.
+  //
+  // Consumers use `hasFeature('name')` from useApp(), which is just
+  // isFeatureOn() pre-bound to the current tenant context.
+  const tenantCtx  = { tier: settings?.tier || 'free', featureFlags: settings?.featureFlags || {} };
+  const hasFeature = (name) => isFeatureOn(name, tenantCtx);
+
   return (
     <Ctx.Provider value={{
       slides, def, cur, setCur,
@@ -598,6 +610,7 @@ export function AppProvider({ children }) {
       ticketCheckoutOpen, setTicketCheckoutOpen,
       requirePin, pinPrompt, acceptPinPrompt, dismissPinPrompt,
       activeTheme,
+      tenantCtx, hasFeature,
     }}>
       {children}
     </Ctx.Provider>

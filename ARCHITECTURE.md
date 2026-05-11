@@ -339,6 +339,53 @@ sequenceDiagram
     Note over CF,App: Manual blocker today: Firebase Auth<br/>authorized-domains list needs each subdomain<br/>added in console — no wildcards.
 ```
 
+### Feature flags + canary rollouts
+
+New features ship behind a flag in [`src/lib/featureFlags.js`](src/lib/featureFlags.js) and roll out progressively through canary tiers. Same code is deployed to everyone in a single `npm run promote:staging`; only the flag flips per tier control who actually sees the new behavior.
+
+**Resolution chain** (highest priority wins):
+
+1. **Per-tenant override** — `tenants/{tid}/data/settings.featureFlags[name]`. Used for emergency rollback (`false`) or early-access for a paying tenant (`true`).
+2. **Tier default** — `FEATURE_TIER_DEFAULTS[name][tier]` from source code.
+3. **Global default** — `false`. Features are OFF unless explicitly enabled.
+
+**Canary tiers** (in order, lowest stakes to highest):
+
+| Tier | Use | Audience |
+|---|---|---|
+| `demo` | First canary — synthetic data, no real money at stake | `demo.plumenexus.com` |
+| `owner` | Second canary — Jonathan's own salon | Meraki |
+| `free` | Solo / starter free tier | Default for new self-service signups |
+| `pro` | Paid tier | Paying tenants on the Pro plan |
+| `enterprise` | Custom-contract tier | Large salons / chains |
+
+**Standard rollout cadence:**
+
+1. Land code behind a flag with `{ demo: true }` only (everyone else implicit false).
+2. Deploy via `promote:staging`. Soak on `demo.plumenexus.com` for 1-3 days.
+3. Flip `owner: true`. Deploy. Soak on Meraki for 3-7 days.
+4. Flip `free: true`. Soak 7-14 days.
+5. Flip `pro` and `enterprise` to true.
+6. After ≥2 weeks at 100% with no issues, **remove the flag** and inline the feature. Flags that linger become tech debt.
+
+**Tenant override examples** (use `data/settings.featureFlags`):
+
+```js
+// "Emergency: turn off the new checkout for tenant X while we debug"
+tenants/{tid}/data/settings.featureFlags = { newCheckoutFlow: false }
+
+// "Pro tenant Y bought early-access to the AI scheduling beta"
+tenants/{tid}/data/settings.featureFlags = { aiScheduling: true }
+```
+
+**Rollback patterns:**
+
+| Scenario | Action |
+|---|---|
+| Bug found in new feature, but old code is fine | Edit `FEATURE_TIER_DEFAULTS` → set the bad feature's tier(s) back to `false` → deploy. Code stays; flag flips. |
+| Bug in the new code path that affects all features | `npm run rollback:console` → Firebase Hosting → revert release. |
+| Bug affects only ONE tenant | Write `featureFlags.{name}: false` on that tenant's `data/settings`. Instant — no deploy. |
+
 ### Tenant identity matrix
 
 Quick reference for "where is tenant id known and how":
