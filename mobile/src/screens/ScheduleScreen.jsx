@@ -1145,7 +1145,10 @@ const styles = StyleSheet.create({
 
   // Modal
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,.55)' },
-  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '90%', paddingBottom: 20 },
+  // Use height (not maxHeight) so the inner ScrollView's flex:1 has
+  // bounded space to fill. Without this the sheet collapses to header
+  // + tab row only because the ScrollView body resolves to 0px.
+  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, height: '85%', paddingBottom: 20 },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingHorizontal: 18, paddingTop: 14, paddingBottom: 10,
