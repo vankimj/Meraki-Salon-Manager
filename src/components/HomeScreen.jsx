@@ -147,6 +147,20 @@ export default function HomeScreen({ onNavigate, onAdmin }) {
             onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 6px 18px rgba(45,122,95,.28)'; }}>
             Sign in
           </button>
+          {/* SaaS "Powered by" mark — only on the pre-login surface so it
+              feels like a footer credit rather than in-app chrome. Hidden
+              when the tenant IS Plume Nexus itself (would be redundant). */}
+          {heroBrand !== 'Plume Nexus' && (
+            <div style={{ marginTop: 36, fontSize: 11, color: '#aaa', letterSpacing: '.04em' }}>
+              Powered by{' '}
+              <a href="https://plumenexus.com" target="_blank" rel="noopener noreferrer"
+                style={{ color: '#888', textDecoration: 'none', fontWeight: 600 }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#2D7A5F'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#888'; }}>
+                Plume Nexus Salon Manager
+              </a>
+            </div>
+          )}
         </div>
       )}
 

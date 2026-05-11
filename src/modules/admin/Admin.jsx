@@ -29,6 +29,17 @@ export default function Admin({ onClose }) {
   const [brandName,        setBrandName]        = useState(settings.brandName        || '');
   const [brandTagline,     setBrandTagline]     = useState(settings.brandTagline     || '');
   const [brandTaglineTop,  setBrandTaglineTop]  = useState(settings.brandTaglineTop  || '');
+  const [brandColor,       setBrandColor]       = useState(settings.brandColor       || '#2D7A5F');
+  const [brandLogoUrl,     setBrandLogoUrl]     = useState(settings.brandLogoUrl     || '');
+  const [showUrlSoon,      setShowUrlSoon]      = useState(false);
+  const [tenantRecord,     setTenantRecord]     = useState(null);
+  const tenantSubdomain = tenantRecord?.subdomain || currentSubdomain();
+  const tenantAliases   = Array.isArray(tenantRecord?.aliases) ? tenantRecord.aliases : [];
+  useEffect(() => {
+    let cancelled = false;
+    fetchTenantRecord(TENANT_ID).then(t => { if (!cancelled) setTenantRecord(t); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [taxRate,        setTaxRate]       = useState(settings.taxRate ?? 7.5);
   const [ccFeePct,       setCcFeePct]      = useState(settings.ccFeePct ?? 2.9);
   const [ccFeeFlat,      setCcFeeFlat]     = useState(settings.ccFeeFlat ?? 0.30);
@@ -227,12 +238,40 @@ export default function Admin({ onClose }) {
 
         {tab === 'settings' && (
           <>
-            <Section title="⚙ Settings">
-              {/* Branding fields — drive header / splash / sidebar / customer
-                  emails. Saved into BOTH data/settings (staff) and
-                  data/webfront (public) so pre-login surfaces (booking
-                  page, check-in, kiosk) pick up the same values. */}
-              <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 700, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase' }}>Branding</div>
+            {/* ── Brand & Identity (URL + every brand field, single Save) ── */}
+            <Section title="🌐 Brand & Identity">
+              {/* Salon URL — read-only display + coming-soon CTA. */}
+              <div style={{ padding: '12px 16px' }}>
+                <div style={{ fontSize: 11, color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Your salon URL</div>
+                <div style={{
+                  padding: '10px 14px', background: '#fafafa', border: '1px solid #e8e8e8',
+                  borderRadius: 10, marginBottom: 8,
+                  fontSize: 14, fontWeight: 600, color: '#1a1a1a',
+                  fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                }}>
+                  https://{tenantSubdomain}.plumenexus.com
+                </div>
+                {tenantAliases.length > 0 && (
+                  <div style={{ padding: '8px 12px', background: '#f5f3fa', border: '1px solid #e6e0ee', borderRadius: 10, marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: '#5b3b8c', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Previous URLs (still working as 301 redirects)</div>
+                    {tenantAliases.map(a => (
+                      <div key={a} style={{ fontSize: 11, color: '#5b3b8c', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                        https://{a}.plumenexus.com → current
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button onClick={() => setShowUrlSoon(true)} style={{
+                  padding: '6px 12px', fontSize: 12, fontWeight: 600,
+                  background: '#fff', color: '#5b3b8c', border: '1px solid #d8c8ec',
+                  borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                }}>Change my URL</button>
+                <div style={{ fontSize: 11, color: '#aaa', marginTop: 8, lineHeight: 1.5 }}>
+                  Your old URL keeps working forever as a 301 redirect — bookmarks, QR codes, and shared links never break.
+                </div>
+              </div>
+
+              {/* Brand fields */}
               <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Salon name</div>
@@ -265,9 +304,65 @@ export default function Admin({ onClose }) {
                 <input value={brandTagline} onChange={e => setBrandTagline(e.target.value)} placeholder="e.g. Nail Studio" maxLength={40}
                   style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
-
-              <div style={{ padding: '14px 16px 6px', fontSize: 11, fontWeight: 700, color: '#aaa', letterSpacing: '.06em', textTransform: 'uppercase', borderTop: '1px solid #f0f0f0' }}>App</div>
               <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#333' }}>Logo URL (optional)</div>
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>If set, used in place of the default mark on the splash and shell.</div>
+                </div>
+                <input value={brandLogoUrl} onChange={e => setBrandLogoUrl(e.target.value)} placeholder="https://…/logo.png"
+                  style={{ width: 220, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 12 }} />
+              </div>
+              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #f0f0f0' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#333' }}>Brand color</div>
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Primary accent for buttons, headers, and email gradients.</div>
+                </div>
+                <input type="color" value={brandColor} onChange={e => setBrandColor(e.target.value)}
+                  style={{ width: 44, height: 34, border: '1px solid #d8d8d8', borderRadius: 8, cursor: 'pointer', padding: 2, background: '#fff' }} />
+              </div>
+              <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+                <Btn color="#3D95CE" onClick={async () => {
+                  const sName = salonName.trim()      || null;
+                  const bName = brandName.trim()      || null;
+                  const bTag  = brandTagline.trim()   || null;
+                  const bTop  = brandTaglineTop.trim()|| null;
+                  const bLogo = brandLogoUrl.trim()   || null;
+                  // Branding fields go to BOTH stores so pre-login + public
+                  // surfaces (booking page, check-in, kiosk) read the same
+                  // values as the signed-in admin UI.
+                  await Promise.all([
+                    updateSettings({
+                      ...settings,
+                      salonName: sName, brandName: bName, brandTagline: bTag, brandTaglineTop: bTop,
+                      brandColor, brandLogoUrl: bLogo,
+                    }),
+                    fetchWebfrontConfig().then(wf => saveWebfrontConfig({
+                      ...(wf || {}),
+                      salonName: sName, brandName: bName, brandTagline: bTag, brandTaglineTop: bTop,
+                      brandColor, brandLogoUrl: bLogo,
+                    })),
+                  ]);
+                  showToast('Brand saved');
+                }}>Save</Btn>
+              </div>
+            </Section>
+
+            {/* Coming-soon modal for "Change my URL" */}
+            {showUrlSoon && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16 }} onClick={() => setShowUrlSoon(false)}>
+                <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, maxWidth: 440, width: '100%', boxShadow: '0 16px 40px rgba(0,0,0,.2)' }}>
+                  <div style={{ width: 52, height: 52, borderRadius: 12, background: 'linear-gradient(135deg, #5b3b8c, #3d95ce)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, marginBottom: 14 }}>🚧</div>
+                  <h3 style={{ fontSize: 18, fontWeight: 700, color: '#1a1a1a', margin: '0 0 8px' }}>Self-serve URL change — coming soon</h3>
+                  <p style={{ fontSize: 13, color: '#666', lineHeight: 1.6, margin: '0 0 14px' }}>
+                    We're building a self-serve flow so you can change your salon URL anytime. Until then, email <a href="mailto:hello@plumenexus.com" style={{ color: '#5b3b8c', fontWeight: 600 }}>hello@plumenexus.com</a> and we'll handle it within one business day. Your old URL stays as a permanent 301 redirect so nothing breaks.
+                  </p>
+                  <button onClick={() => setShowUrlSoon(false)} style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, background: '#5b3b8c', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit' }}>Got it</button>
+                </div>
+              </div>
+            )}
+
+            <Section title="⚙ App Settings">
+              <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
                 <div>
                   <div style={{ fontSize: 13, color: '#333' }}>Auto-logout timeout</div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>Minutes of inactivity before signing out</div>
@@ -301,30 +396,7 @@ export default function Admin({ onClose }) {
                   style={{ width: 140, fontFamily: 'inherit', border: '1px solid #d8d8d8', borderRadius: 8, padding: '8px 10px', fontSize: 13 }} />
               </div>
               <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
-                <Btn color="#3D95CE" onClick={async () => {
-                  const sName = salonName.trim()      || null;
-                  const bName = brandName.trim()      || null;
-                  const bTag  = brandTagline.trim()   || null;
-                  const bTop  = brandTaglineTop.trim()|| null;
-                  // Branding fields go to BOTH stores so pre-login + public
-                  // surfaces (booking page, check-in, kiosk) read the same
-                  // values as the signed-in admin UI.
-                  await Promise.all([
-                    updateSettings({
-                      ...settings,
-                      salonName: sName, brandName: bName, brandTagline: bTag, brandTaglineTop: bTop,
-                      timeoutMin: timeout,
-                      adminPin: pin || null,
-                      googleReviewUrl: reviewUrl.trim() || null,
-                      ein: ein.trim() || null,
-                    }),
-                    fetchWebfrontConfig().then(wf => saveWebfrontConfig({
-                      ...(wf || {}),
-                      salonName: sName, brandName: bName, brandTagline: bTag, brandTaglineTop: bTop,
-                    })),
-                  ]);
-                  showToast('Settings saved');
-                }}>Save</Btn>
+                <Btn color="#3D95CE" onClick={() => updateSettings({ ...settings, timeoutMin: timeout, adminPin: pin || null, googleReviewUrl: reviewUrl.trim() || null, ein: ein.trim() || null })}>Save</Btn>
               </div>
             </Section>
             <Section title="💰 Financial">
@@ -410,17 +482,10 @@ export default function Admin({ onClose }) {
                 setThemeSaving(false);
               }}
             />
-            <Section title="ℹ Store &amp; appointment hours are edited from the Calendar view.">
-              <div style={{ padding: '10px 16px', fontSize: 12, color: '#aaa' }}>
-                Open the Calendar module and click the <strong>🕐 Hours</strong> button in the toolbar.
-              </div>
-            </Section>
             <TechRemindersSection settings={settings} updateSettings={updateSettings} />
             <PauseSection settings={settings} updateSettings={updateSettings} />
-            <DomainSection />
             <TileVisibilitySection settings={settings} updateSettings={updateSettings} />
             <NotesPreferenceSection settings={settings} updateSettings={updateSettings} />
-            <BrandingSection settings={settings} updateSettings={updateSettings} />
             <UpgradeSection settings={settings} gUser={gUser} />
             <BackupRestoreSection />
             <Section title="📦 Data Imports">
