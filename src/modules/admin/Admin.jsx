@@ -135,13 +135,13 @@ export default function Admin({ onClose }) {
           <span style={{ fontSize: 16 }}>⚙</span>
           <span style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a' }}>Admin</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: { syncing: '#f59e0b', ok: '#22c55e', err: '#ef4444', idle: '#ddd' }[syncState] || '#ddd', transition: 'background .3s', animation: syncState === 'syncing' ? 'pulse .8s infinite' : 'none' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: { syncing: '#f59e0b', ok: '#22c55e', err: '#ef4444', idle: '#ddd' }[syncState] || '#ddd', transition: 'background .3s', animation: syncState === 'syncing' ? 'pulse .8s infinite' : 'none', marginRight: 2 }} />
           <button onClick={() => setShowFeedback(true)}
-            style={{ height: 34, borderRadius: 20, border: 'none', background: '#EBF5FF', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, padding: '0 13px', fontSize: 12, fontWeight: 600, color: '#1a5f8a', fontFamily: 'inherit' }}>
+            style={{ height: 40, borderRadius: 20, border: 'none', background: '#EBF5FF', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', fontSize: 13, fontWeight: 600, color: '#1a5f8a', fontFamily: 'inherit' }}>
             <span style={{ fontSize: 15 }}>💬</span> Feedback
           </button>
-          {gUser?.photoURL && <img src={gUser.photoURL} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover' }} />}
+          {gUser?.photoURL && <img src={gUser.photoURL} alt="" style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: '1px solid #e8e8e8' }} />}
         </div>
       </div>
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}

@@ -29,10 +29,10 @@ export default function UserMenu() {
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={() => setOpen(o => !o)}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', padding: '5px 10px', borderRadius: 20, border: `1px solid ${open ? '#3D95CE' : '#e8e8e8'}`, background: open ? '#EBF4FB' : '#fff', cursor: 'pointer', fontFamily: 'inherit' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 40, fontSize: 12, color: '#555', padding: '0 14px 0 6px', borderRadius: 20, border: `1px solid ${open ? '#3D95CE' : '#e8e8e8'}`, background: open ? '#EBF4FB' : '#fff', cursor: 'pointer', fontFamily: 'inherit' }}
       >
         {gUser.photoURL && (
-          <img src={gUser.photoURL} alt="" style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }} />
+          <img src={gUser.photoURL} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
         )}
         <span className="ms-user-name" style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {firstName}
