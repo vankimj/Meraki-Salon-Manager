@@ -265,6 +265,8 @@ function fmtMsgTime(iso) {
 }
 
 function ClientChatView({ clientId, clientName, clientEmail, chat }) {
+  const { settings } = useApp();
+  const salonName = settings?.salonName || 'Plume Nexus';
   const [text,    setText]    = useState('');
   const [sending, setSending] = useState(false);
   const bottomRef = useRef(null);
