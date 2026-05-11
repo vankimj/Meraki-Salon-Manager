@@ -619,11 +619,19 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
   }, [prefill?.date, prefill?.startTime]);
 
   const totalDuration = pickedServices.reduce((s, sv) => s + (Number(sv.duration) || 30), 0) || 30;
+  // Suggestion list is intentionally short — 6 when not searching,
+  // 20 when searching. Without a cap a 600-client demo overflows the
+  // modal because React Native View doesn't clip children to its
+  // height by default, so the services grid and Create button render
+  // ON TOP of the spilled list. Capping is cheaper than nesting a
+  // ScrollView inside the modal's outer ScrollView (which fights
+  // touch-scroll on iOS).
   const filteredClients = useMemo(() => {
     const q = clientQuery.trim().toLowerCase();
-    if (!q) return clients.slice(0, 30);
-    return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 30);
+    if (!q) return clients.slice(0, 6);
+    return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 20);
   }, [clientQuery, clients]);
+  const moreClientsAvailable = (clientQuery.trim() ? clients.filter(c => (c.name || '').toLowerCase().includes(clientQuery.trim().toLowerCase())).length : clients.length) > filteredClients.length;
 
   if (!prefill) return null;   // Safe now — every hook above already ran.
 
@@ -715,6 +723,13 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                         {c.phone ? <Text style={styles.clientRowMeta}>{c.phone}</Text> : null}
                       </TouchableOpacity>
                     ))}
+                    {moreClientsAvailable && (
+                      <View style={styles.clientRowMore}>
+                        <Text style={styles.clientRowMoreText}>
+                          {clientQuery.trim() ? 'Refine your search…' : 'Type a name above to find more clients'}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 </>
               )}
@@ -1093,10 +1108,16 @@ const styles = StyleSheet.create({
 
   // Create appt modal
   searchInput:        { backgroundColor: '#fafafa', borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#1a1a1a' },
-  clientList:         { marginTop: 8, backgroundColor: '#fafafa', borderRadius: 8, maxHeight: 180 },
+  // overflow: 'hidden' is a safety net — React Native Views don't
+  // clip children to their bounds by default, so a long list spills
+  // out behind sibling sections. We also cap the rendered count in
+  // filteredClients so this should never actually clip in practice.
+  clientList:         { marginTop: 8, backgroundColor: '#fafafa', borderRadius: 8, overflow: 'hidden' },
   clientRow:          { paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: 0.5, borderBottomColor: '#eee' },
   clientRowName:      { fontSize: 14, color: '#1a1a1a' },
   clientRowMeta:      { fontSize: 11, color: '#888', marginTop: 2 },
+  clientRowMore:      { paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center' },
+  clientRowMoreText:  { fontSize: 11, color: '#888', fontStyle: 'italic' },
   pickedChip:         { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EBF4FB', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, alignSelf: 'flex-start' },
   pickedChipText:     { fontSize: 13, color: '#1a5f8a', fontWeight: '600' },
   pickedChipX:        { fontSize: 18, color: '#1a5f8a', marginLeft: 8, lineHeight: 18 },
