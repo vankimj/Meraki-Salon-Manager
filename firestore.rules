@@ -131,6 +131,12 @@ service cloud.firestore {
         allow read:  if true;
         allow write: if isTenantAdmin(tenantId);
       }
+      // Demo-seed checkpoint for the resumable seed flow. Admin-only —
+      // contains nothing sensitive, but only admins can run the seed
+      // and seeing this doc makes no sense for staff.
+      match /data/seedState {
+        allow read, write: if isTenantAdmin(tenantId);
+      }
 
       // Handbook signatures — each user reads/writes their own; admin reads all
       match /handbookSigs/{userId} {
