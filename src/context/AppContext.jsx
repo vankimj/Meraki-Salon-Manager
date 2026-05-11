@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef, useCallback, us
 import { getTheme, detectAutoTheme } from '../lib/themes';
 import { onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { auth, ALLOWED_EMAILS } from '../lib/firebase';
-import { loadAll, saveSlides, saveUsers, saveSettings, submitAccessRequest, fetchAccessRequests, deleteAccessRequest, fetchHandbook, fetchMyHandbookSig, signHandbookDoc, fetchClientByEmail, subscribeToChats, subscribeToRecentNotifications, markNotificationRead, ensureStaffEmailsBackfill } from '../lib/firestore';
+import { loadAll, saveSlides, saveUsers, saveSettings, submitAccessRequest, fetchAccessRequests, deleteAccessRequest, fetchHandbook, fetchMyHandbookSig, signHandbookDoc, fetchClientByEmail, subscribeToChats, subscribeToRecentNotifications, markNotificationRead, ensureStaffEmailsBackfill, healUsersFullIfMissing } from '../lib/firestore';
 import { migrateFromLegacy } from '../lib/migration';
 import { logActivity, setLoggerUser } from '../lib/logger';
 import { phSVG } from '../utils/helpers';
@@ -225,6 +225,16 @@ export function AppProvider({ children }) {
       loadedData = await loadAll();
       currentUsers = loadedData.users;
       currentTimeoutMin = loadedData.settings?.timeoutMin || currentTimeoutMin;
+      // Auto-heal: data/usersFull missing while data/users.staffEmails is
+      // populated means the rich array got dropped (Meraki incident
+      // 2026-05-10). Rebuild it before the bootstrap-admin path below
+      // runs — otherwise that path would persist a [Jonathan]-only array
+      // and cement the data loss.
+      const healed = await healUsersFullIfMissing(loadedData);
+      if (healed) {
+        currentUsers = healed;
+        loadedData.users = healed;
+      }
       setUsers(currentUsers);
       setSettings(s => ({ ...s, ...loadedData.settings }));
     } catch (_) {}

@@ -66,21 +66,78 @@ export async function loadAll() {
   };
 }
 
+// Self-heal: rebuild data/usersFull from data/users.staffEmails when
+// the rich array doc has gone missing (or empty) but the slim projection
+// is intact. This is the failure mode that left Meraki without a Users
+// tab for ~24h on 2026-05-10 — the symptom is silent: staff still
+// authorize via staffEmails but admins see an empty Users tab.
+//
+// Best-effort recovery — techName/name pulled from the employees
+// collection where emails match; otherwise falls back to email. Roles
+// derived from adminEmails (admin) vs default ('tech'). Admin-only
+// write; non-admin callers silently no-op (rules block).
+//
+// Returns the rebuilt array on success, null if no heal needed or write
+// failed. Callers should refresh their `users` state from the result.
+export async function healUsersFullIfMissing(loadedData) {
+  const staff = loadedData?.staffEmails || [];
+  const admins = loadedData?.adminEmails || [];
+  const usersArr = loadedData?.users || [];
+  if (!staff.length) return null;        // nothing to rebuild from
+  if (usersArr.length) return null;      // not missing — already healthy
+
+  let employees = [];
+  try {
+    const empSnap = await getDocs(tenantCol('employees'));
+    employees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (_) { /* employees unreadable for this caller — proceed without */ }
+  const empByEmail = new Map(
+    employees.filter(e => e.email).map(e => [String(e.email).toLowerCase(), e])
+  );
+  const adminSet = new Set(admins.map(e => String(e).toLowerCase()));
+  const now = new Date().toISOString();
+
+  const rebuilt = staff.map(email => {
+    const lower = String(email).toLowerCase();
+    const emp = empByEmail.get(lower);
+    const isAdmin = adminSet.has(lower);
+    return {
+      email,
+      role:      isAdmin ? 'admin' : 'tech',
+      name:      emp?.name || email,
+      picture:   emp?.photo || '',
+      techName:  isAdmin ? null : (emp?.name || null),
+      grantedAt: now,
+      _healed:   true,
+    };
+  });
+
+  try {
+    await setDoc(USERS_FULL_REF, { users: rebuilt });
+    console.warn(`[healUsersFullIfMissing] rebuilt data/usersFull from staffEmails (${rebuilt.length} users)`);
+    return rebuilt;
+  } catch (e) {
+    console.warn('[healUsersFullIfMissing] write failed:', e?.code || e?.message);
+    return null;
+  }
+}
+
 // One-time backfill: write the derived `staffEmails`/`adminEmails` arrays
 // to data/users and the rich array to data/usersFull. Called from
 // AppContext on admin load — non-admin invocations no-op silently because
-// the rules block both writes for them.
+// the rules block both writes for them. Atomic via writeBatch — a partial
+// failure was the suspected cause of the 2026-05-10 Meraki users incident.
 export async function ensureStaffEmailsBackfill(users) {
   try {
-    await Promise.all([
-      setDoc(USERS_REF, {
-        users:       deleteField(),         // purge legacy users[]
-        byEmail:     deleteField(),         // purge legacy byEmail leak
-        staffEmails: buildStaffEmails(users),
-        adminEmails: buildAdminEmails(users),
-      }, { merge: true }),
-      setDoc(USERS_FULL_REF, { users }, { merge: true }),
-    ]);
+    const batch = writeBatch(db);
+    batch.set(USERS_REF, {
+      users:       deleteField(),         // purge legacy users[]
+      byEmail:     deleteField(),         // purge legacy byEmail leak
+      staffEmails: buildStaffEmails(users),
+      adminEmails: buildAdminEmails(users),
+    }, { merge: true });
+    batch.set(USERS_FULL_REF, { users }, { merge: true });
+    await batch.commit();
   } catch (e) { console.warn('[ensureStaffEmailsBackfill] skipped:', e?.code || e?.message); }
 }
 
@@ -121,20 +178,21 @@ export function buildByEmail() { return undefined; }
 // Save splits the write across two docs:
 //   data/users      — slim projection (staff readable)
 //   data/usersFull  — rich users[] (admin only)
-// Atomic in spirit (best effort): any failure mid-flight leaves the
-// projection in a known state, since rules require admin for both, and
-// admins are the only callers. Always purges any legacy `users[]` field
-// from data/users — completes the one-shot migration on first admin save.
+// Atomic via writeBatch: both commit together or neither does. The
+// previous Promise.all approach left a partial state where one doc
+// could persist while the other rejected — suspected root cause of the
+// 2026-05-10 Meraki incident where data/usersFull went missing while
+// data/users.staffEmails survived.
 export const saveUsers = async (users) => {
-  await Promise.all([
-    setDoc(USERS_REF, {
-      users:       deleteField(),         // purge legacy users[]
-      byEmail:     deleteField(),         // purge legacy byEmail map (was leaking coworker roles)
-      staffEmails: buildStaffEmails(users),
-      adminEmails: buildAdminEmails(users),
-    }, { merge: true }),
-    setDoc(USERS_FULL_REF, { users }, { merge: true }),
-  ]);
+  const batch = writeBatch(db);
+  batch.set(USERS_REF, {
+    users:       deleteField(),         // purge legacy users[]
+    byEmail:     deleteField(),         // purge legacy byEmail map (was leaking coworker roles)
+    staffEmails: buildStaffEmails(users),
+    adminEmails: buildAdminEmails(users),
+  }, { merge: true });
+  batch.set(USERS_FULL_REF, { users }, { merge: true });
+  await batch.commit();
 };
 
 // ── Settings ───────────────────────────────────────────
@@ -334,10 +392,16 @@ export async function saveEmployee(id, data) {
 export async function createEmployee(data) {
   const { publicFields, privateFields } = splitEmployeeFields(data);
   const now = new Date().toISOString();
-  const ref = await addDoc(EMPLOYEES_COL, { ...publicFields, createdAt: now, updatedAt: now });
+  // Pre-allocate the ID so the public + private writes can ride a single
+  // batch. addDoc → setDoc sequentially could leave the public doc
+  // committed without its private/comp child if the second write fails.
+  const ref = doc(EMPLOYEES_COL);
+  const batch = writeBatch(db);
+  batch.set(ref, { ...publicFields, createdAt: now, updatedAt: now });
   if (Object.keys(privateFields).length) {
-    await setDoc(empPrivateRef(ref.id), { ...privateFields, createdAt: now, updatedAt: now });
+    batch.set(empPrivateRef(ref.id), { ...privateFields, createdAt: now, updatedAt: now });
   }
+  await batch.commit();
   return ref.id;
 }
 
