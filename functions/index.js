@@ -5882,3 +5882,91 @@ exports.listTenants = onCall(
     };
   }
 );
+
+// ── Lossless usersFull recovery from BigQuery mirror ─────────────────────────
+// Companion to client-side healUsersFullIfMissing. When data/usersFull goes
+// missing, the client first asks this function to restore from the BQ mirror
+// (which has every prior version of the doc via the firestore-bigquery-export
+// extension). If BQ has a snapshot, the original `users` array — including
+// real grantedAt timestamps, custom names, phone, instagram, all per-record
+// metadata — is rehydrated atomically. Falls back to lossy staffEmails
+// reconstruction client-side if BQ has nothing or this call fails.
+//
+// Why a server-side function: the client has no BQ credentials. This function
+// runs with default project credentials (admin SDK + BQ client) so the auth
+// is implicit. Gates on isTenantAdmin so a stranger can't trigger arbitrary
+// tenant restores.
+exports.recoverUsersFullFromBQ = onCall({ cors: true, timeoutSeconds: 30 }, async (request) => {
+  const { tenantId: tid } = request.data || {};
+  const tenantId = String(tid || TENANT_ID);
+  if (!/^[a-z0-9-]{1,40}$/.test(tenantId)) throw new HttpsError('invalid-argument', 'Invalid tenantId');
+
+  const db = getFirestore();
+  await requireTenantAdmin(db, tenantId, request);
+
+  const { BigQuery } = require('@google-cloud/bigquery');
+  const bq = new BigQuery({ projectId: 'meraki-salon-manager' });
+
+  // Match on document_name rather than path_params — IMPORT rows from the
+  // backfill script have path_params = null (only realtime triggers
+  // populate the wildcard binding). document_name is consistent across both.
+  const docName = `projects/meraki-salon-manager/databases/(default)/documents/tenants/${tenantId}/data/usersFull`;
+  let rows;
+  try {
+    [rows] = await bq.query({
+      query: `
+        SELECT data, timestamp, operation
+        FROM \`meraki-salon-manager.firestore_export.data_raw_changelog\`
+        WHERE document_name = @docName
+          AND operation != 'DELETE'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      `,
+      params: { docName },
+    });
+  } catch (e) {
+    console.error('[recoverUsersFullFromBQ] BQ query failed:', e?.message);
+    return { recovered: false, reason: 'bq_query_failed', detail: e?.message || null };
+  }
+
+  if (!rows || rows.length === 0) {
+    return { recovered: false, reason: 'no_bq_snapshot' };
+  }
+
+  const row = rows[0];
+  let parsed;
+  try { parsed = JSON.parse(row.data); }
+  catch (e) { return { recovered: false, reason: 'parse_error', detail: e?.message || null }; }
+
+  if (!parsed || !Array.isArray(parsed.users) || !parsed.users.length) {
+    return { recovered: false, reason: 'malformed_snapshot' };
+  }
+
+  // Atomic write-back: usersFull + reproject staffEmails/adminEmails so the
+  // rules layer stays consistent with the rich array.
+  const STAFF_ROLES = new Set(['admin', 'readonly', 'tech', 'scheduler']);
+  const lower = (e) => String(e || '').trim().toLowerCase();
+  const staffEmails = Array.from(new Set(parsed.users.filter(u => u && STAFF_ROLES.has(u.role) && u.email).map(u => lower(u.email))));
+  const adminEmails = Array.from(new Set(parsed.users.filter(u => u && u.role === 'admin' && u.email).map(u => lower(u.email))));
+
+  const snapshotIso = row.timestamp?.value || String(row.timestamp);
+  const batch = db.batch();
+  batch.set(db.doc(`tenants/${tenantId}/data/usersFull`), {
+    users: parsed.users,
+    _recoveredFrom: `bigquery@${snapshotIso}`,
+    _recoveredAt:   new Date().toISOString(),
+  });
+  batch.set(db.doc(`tenants/${tenantId}/data/users`), {
+    staffEmails, adminEmails,
+  }, { merge: true });
+  await batch.commit();
+
+  console.log(`[recoverUsersFullFromBQ] tenant=${tenantId} restored ${parsed.users.length} users from BQ snapshot @ ${snapshotIso}`);
+  return {
+    recovered:    true,
+    source:       'bigquery',
+    snapshotTime: snapshotIso,
+    userCount:    parsed.users.length,
+    users:        parsed.users,
+  };
+});

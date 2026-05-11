@@ -66,19 +66,27 @@ export async function loadAll() {
   };
 }
 
-// Self-heal: rebuild data/usersFull from data/users.staffEmails when
-// the rich array doc has gone missing (or empty) but the slim projection
-// is intact. This is the failure mode that left Meraki without a Users
-// tab for ~24h on 2026-05-10 — the symptom is silent: staff still
-// authorize via staffEmails but admins see an empty Users tab.
+// Self-heal: rebuild data/usersFull when the rich array doc has gone
+// missing (or empty) but the slim projection is intact. Two-tier recovery:
 //
-// Best-effort recovery — techName/name pulled from the employees
-// collection where emails match; otherwise falls back to email. Roles
-// derived from adminEmails (admin) vs default ('tech'). Admin-only
-// write; non-admin callers silently no-op (rules block).
+//   Tier 1 (lossless) — Ask the recoverUsersFullFromBQ Cloud Function to
+//   restore the latest snapshot from the BigQuery mirror. This preserves
+//   real grantedAt timestamps, custom names, phone, instagram, and every
+//   other per-record field that was ever set. Requires the BQ mirror for
+//   the data subcollection to be healthy (`fs-bq-data` extension).
 //
-// Returns the rebuilt array on success, null if no heal needed or write
-// failed. Callers should refresh their `users` state from the result.
+//   Tier 2 (lossy fallback) — Reconstruct from staffEmails projection +
+//   employees collection lookup for techName/name. grantedAt is reset to
+//   now; per-record metadata is lost. Marks rows with `_healed: true` so
+//   the source is auditable. Only fires if BQ recovery returns nothing
+//   or errors.
+//
+// This is the failure mode that left Meraki without a Users tab for ~24h
+// on 2026-05-10 — symptom is silent: staff still authorize via
+// staffEmails but admins see an empty Users tab.
+//
+// Returns the rebuilt array on success, null if no heal needed or both
+// tiers failed. Callers should refresh their `users` state from the result.
 export async function healUsersFullIfMissing(loadedData) {
   const staff = loadedData?.staffEmails || [];
   const admins = loadedData?.adminEmails || [];
@@ -86,6 +94,22 @@ export async function healUsersFullIfMissing(loadedData) {
   if (!staff.length) return null;        // nothing to rebuild from
   if (usersArr.length) return null;      // not missing — already healthy
 
+  // Tier 1: ask the Cloud Function to recover from BQ losslessly.
+  try {
+    const res = await callFn('recoverUsersFullFromBQ')({ tenantId: TENANT_ID });
+    const data = res?.data;
+    if (data?.recovered && Array.isArray(data.users) && data.users.length) {
+      console.warn(`[healUsersFullIfMissing] LOSSLESS recovery via BigQuery snapshot @ ${data.snapshotTime} (${data.users.length} users)`);
+      return data.users;
+    }
+    if (data && !data.recovered) {
+      console.warn(`[healUsersFullIfMissing] BQ recovery returned no snapshot (reason=${data.reason}); falling back to staffEmails reconstruction`);
+    }
+  } catch (e) {
+    console.warn('[healUsersFullIfMissing] BQ recovery threw, falling back to staffEmails:', e?.code || e?.message);
+  }
+
+  // Tier 2: lossy reconstruction from staffEmails + employees.
   let employees = [];
   try {
     const empSnap = await getDocs(tenantCol('employees'));
@@ -114,7 +138,7 @@ export async function healUsersFullIfMissing(loadedData) {
 
   try {
     await setDoc(USERS_FULL_REF, { users: rebuilt });
-    console.warn(`[healUsersFullIfMissing] rebuilt data/usersFull from staffEmails (${rebuilt.length} users)`);
+    console.warn(`[healUsersFullIfMissing] LOSSY rebuild from staffEmails (${rebuilt.length} users) — timestamps and per-record metadata reset to defaults`);
     return rebuilt;
   } catch (e) {
     console.warn('[healUsersFullIfMissing] write failed:', e?.code || e?.message);
