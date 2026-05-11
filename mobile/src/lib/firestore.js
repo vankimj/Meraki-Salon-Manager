@@ -163,6 +163,15 @@ export async function fetchAppointmentsByRange(startDate, endDate) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
+// Time off — used by ScheduleScreen to mark days where the tech is
+// out so the gap calculator skips them entirely. Same shape as the
+// web fetchTimeOff: each entry has { techName, startDate, endDate, ... }.
+export async function fetchTimeOff() {
+  const snap = await getDocs(tenantCol('timeOff'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+}
+
 // ── Services ───────────────────────────────────────────
 export async function fetchServices() {
   const snap = await getDocs(query(tenantCol('services'), orderBy('sortOrder')));

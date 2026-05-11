@@ -6,6 +6,7 @@ import {
 import {
   subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes,
   fetchAppointmentsByRange, createAppointment, fetchClients, fetchServices, fetchEmployees,
+  fetchTimeOff,
 } from '../lib/firestore';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
 import Icon from '../components/Icon';
@@ -38,6 +39,34 @@ function startOfWeek(d) {
 }
 function isoFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Working-hour window for a given date based on the tech's workDays
+// config. Falls back to the salon-wide DAY_START/END if the tech
+// hasn't set hours for that weekday. Returns null if the tech is
+// off that day, or { startMin, endMin } if they're working.
+const DOW_KEYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function workWindowFor(iso, workDays) {
+  const dow = DOW_KEYS[new Date(iso + 'T12:00:00').getDay()];
+  const cfg = workDays?.[dow];
+  if (!cfg) return { startMin: DAY_START_MIN, endMin: DAY_END_MIN };  // no config = full day available
+  if (cfg.on === false) return null;                                  // explicitly off
+  return {
+    startMin: cfg.start ? hhmmToMin(cfg.start) : DAY_START_MIN,
+    endMin:   cfg.end   ? hhmmToMin(cfg.end)   : DAY_END_MIN,
+  };
+}
+
+// Returns the active time-off entry covering this date for this tech,
+// or null if none. Compares ISO date strings inclusive on both ends.
+function timeOffOn(iso, techName, timeOff) {
+  if (!techName || !timeOff?.length) return null;
+  const t = techName.toLowerCase();
+  return timeOff.find(o =>
+    (o.techName || '').toLowerCase() === t &&
+    (o.startDate || '') <= iso &&
+    iso <= (o.endDate || o.startDate || '')
+  ) || null;
 }
 
 function todayStr() {
@@ -87,7 +116,7 @@ function colorsForAppt(appt, allTechs) {
 }
 
 export default function ScheduleScreen() {
-  const { techName, loading: empLoading } = useCurrentEmployee();
+  const { employee, techName, loading: empLoading } = useCurrentEmployee();
   const [date,    setDate]    = useState(todayStr());
   const [appts,   setAppts]   = useState([]);
   const [loading, setLoading] = useState(true);
@@ -97,13 +126,17 @@ export default function ScheduleScreen() {
   const [view,    setView]    = useState('day'); // 'day' | 'week' | 'month'
   const [createPrefill, setCreatePrefill] = useState(null);  // { date, startTime, techName } or null
   const [allTechs, setAllTechs] = useState([]);  // ordered tech-name list for color assignment
+  const [timeOff,  setTimeOff]  = useState([]);  // [{ techName, startDate, endDate }]
 
-  // Stable tech list for color indexing — fetched once on mount, refreshed
+  // Stable tech list + time-off snapshot — fetched on mount, refreshed
   // on tenant change (RootNav re-mounts when tenant switches, so this re-runs).
+  // Time off feeds the week-view gap calculator: a day covered by an
+  // active time-off entry for the current tech is shown as OFF instead
+  // of computed gaps.
   useEffect(() => {
     let cancelled = false;
-    fetchEmployees()
-      .then(emps => {
+    Promise.all([fetchEmployees(), fetchTimeOff()])
+      .then(([emps, off]) => {
         if (cancelled) return;
         const names = (emps || [])
           .filter(e => e.active !== false)
@@ -111,8 +144,9 @@ export default function ScheduleScreen() {
           .map(e => e.name)
           .filter(Boolean);
         setAllTechs(names);
+        setTimeOff(off || []);
       })
-      .catch(() => { if (!cancelled) setAllTechs([]); });
+      .catch(() => { if (!cancelled) { setAllTechs([]); setTimeOff([]); } });
     return () => { cancelled = true; };
   }, []);
 
@@ -238,6 +272,8 @@ export default function ScheduleScreen() {
           techName={techName}
           showAll={showAll}
           allTechs={allTechs}
+          workDays={employee?.workDays}
+          timeOff={timeOff}
           onTapAppt={(a) => setDetail(a)}
           onTapEmpty={(d, startTime) => setCreatePrefill({ date: d, startTime, techName: showAll ? '' : (techName || '') })}
           onPickDay={(d) => { setDate(d); setView('day'); }}
@@ -253,6 +289,9 @@ export default function ScheduleScreen() {
             date={date}
             showAll={showAll}
             allTechs={allTechs}
+            workDays={employee?.workDays}
+            timeOff={timeOff}
+            techName={techName}
             refreshing={refreshing}
             onRefresh={() => { setRefreshing(true); setTimeout(() => setRefreshing(false), 600); }}
             onTapAppt={(a) => setDetail(a)}
@@ -286,7 +325,13 @@ export default function ScheduleScreen() {
 // to that slot. Filled rows render the appt block sized to its
 // duration (1 SLOT_PX per 30 min). Multi-tech overlaps are stacked
 // horizontally; "Just me" mode never overlaps so most days are clean.
-function DayTimelineView({ appts, date, showAll, allTechs, refreshing, onRefresh, onTapAppt, onTapEmpty }) {
+function DayTimelineView({ appts, date, showAll, allTechs, workDays, timeOff, techName, refreshing, onRefresh, onTapAppt, onTapEmpty }) {
+  // Working-window awareness — same rules as WeekView's gap calc.
+  // Only meaningful when scoped to a single tech (showAll=false).
+  const off    = !showAll ? timeOffOn(date, techName, timeOff) : null;
+  const window = (!showAll && techName) ? workWindowFor(date, workDays) : { startMin: DAY_START_MIN, endMin: DAY_END_MIN };
+  const isOffDay = off || window === null;
+
   // Build a map of slot-index → appts that START in that slot, so
   // we can render appts overlaid on top of the slot grid.
   const slotAppts = useMemo(() => {
@@ -301,6 +346,20 @@ function DayTimelineView({ appts, date, showAll, allTechs, refreshing, onRefresh
     return map;
   }, [appts]);
 
+  if (isOffDay) {
+    return (
+      <View style={styles.dayOffState}>
+        <Text style={styles.dayOffEmoji}>🌴</Text>
+        <Text style={styles.dayOffTitle}>{off ? (off.reason || 'Time off') : 'Not a working day'}</Text>
+        <Text style={styles.dayOffBody}>
+          {off
+            ? `You're off from ${off.startDate}${off.endDate && off.endDate !== off.startDate ? ` to ${off.endDate}` : ''}.`
+            : `Your schedule shows you don't work this day of the week. Update your work days on the employees page if that's wrong.`}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: '#fff' }}
@@ -310,6 +369,7 @@ function DayTimelineView({ appts, date, showAll, allTechs, refreshing, onRefresh
       {Array.from({ length: SLOT_COUNT }).map((_, idx) => {
         const slotMin = DAY_START_MIN + idx * SLOT_MINUTES;
         const startTime = minToHHMM(slotMin);
+        const inWorkWindow = slotMin >= window.startMin && slotMin < window.endMin;
         const slotAppt = (slotAppts[idx] || [])[0];   // primary appt — overlap UI deferred
         const overlapCount = (slotAppts[idx] || []).length;
         const isHourMark = slotMin % 60 === 0;
@@ -318,10 +378,11 @@ function DayTimelineView({ appts, date, showAll, allTechs, refreshing, onRefresh
             key={idx}
             onPress={() => slotAppt ? onTapAppt(slotAppt) : onTapEmpty(startTime)}
             activeOpacity={0.6}
-            style={[styles.dayTimelineRow, { height: SLOT_PX }]}
+            disabled={!inWorkWindow && !slotAppt}
+            style={[styles.dayTimelineRow, { height: SLOT_PX }, !inWorkWindow && styles.dayTimelineRowOff]}
           >
             <View style={styles.dayTimeLabel}>
-              {isHourMark && <Text style={styles.dayTimeLabelText}>{fmtTime(startTime)}</Text>}
+              {isHourMark && <Text style={[styles.dayTimeLabelText, !inWorkWindow && { color: '#cbd0d6' }]}>{fmtTime(startTime)}</Text>}
             </View>
             <View style={[styles.dayTimelineSlot, isHourMark && styles.dayTimelineSlotHour]}>
               {slotAppt ? (() => {
@@ -364,7 +425,7 @@ function DayTimelineView({ appts, date, showAll, allTechs, refreshing, onRefresh
 // open hour, tap a block opens the detail modal.
 const WEEK_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function WeekView({ date, techName, showAll, allTechs, onTapAppt, onTapEmpty, onPickDay }) {
+function WeekView({ date, techName, showAll, allTechs, workDays, timeOff, onTapAppt, onTapEmpty, onPickDay }) {
   const [byDay, setByDay] = useState({});  // 'YYYY-MM-DD' → appts[]
   const [loading, setLoading] = useState(true);
 
@@ -408,50 +469,111 @@ function WeekView({ date, techName, showAll, allTechs, onTapAppt, onTapEmpty, on
       {days.map(d => {
         const appts = byDay[d.iso] || [];
         const isToday = d.iso === today;
+
+        // Working-hours / time-off awareness — only meaningful when
+        // we know which tech we're scoping to. In "All techs" mode we
+        // can't speak to anyone's individual schedule, so fall back
+        // to the salon-wide window.
+        const off    = !showAll ? timeOffOn(d.iso, techName, timeOff) : null;
+        const window = (!showAll && techName) ? workWindowFor(d.iso, workDays) : { startMin: DAY_START_MIN, endMin: DAY_END_MIN };
+        const isOffDay = off || window === null;
+
         return (
           <View key={d.iso} style={[styles.weekDayCard, isToday && styles.weekDayCardToday]}>
             <TouchableOpacity onPress={() => onPickDay(d.iso)} style={styles.weekDayHeader} activeOpacity={0.7}>
               <Text style={[styles.weekDayDow, isToday && styles.weekDayDowToday]}>{d.dow}</Text>
               <Text style={[styles.weekDayNum, isToday && styles.weekDayNumToday]}>{d.dayNum}</Text>
-              <Text style={styles.weekDayCount}>{appts.length} appt{appts.length !== 1 ? 's' : ''}</Text>
+              <Text style={styles.weekDayCount}>
+                {isOffDay ? (off ? 'time off' : 'off') : `${appts.length} appt${appts.length !== 1 ? 's' : ''}`}
+              </Text>
             </TouchableOpacity>
-            {appts.length === 0 ? (
+            {isOffDay ? (
+              <View style={styles.weekDayOffPill}>
+                <Text style={styles.weekDayOffPillText}>
+                  {off ? `OFF · ${off.reason || 'Time off'}` : 'NOT WORKING'}
+                </Text>
+              </View>
+            ) : appts.length === 0 ? (
               <TouchableOpacity
                 style={styles.weekDayEmpty}
-                onPress={() => onTapEmpty(d.iso, '10:00')}
+                onPress={() => onTapEmpty(d.iso, minToHHMM(window.startMin))}
                 activeOpacity={0.6}
               >
-                <Text style={styles.weekDayEmptyText}>＋ Add appointment</Text>
+                <Text style={styles.weekDayEmptyText}>
+                  ＋ Add appointment ({fmtTime(minToHHMM(window.startMin))} – {fmtTime(minToHHMM(window.endMin))})
+                </Text>
               </TouchableOpacity>
             ) : (
               <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
-                {appts.map(a => {
-                  const c = colorsForAppt(a, allTechs);
-                  return (
-                    <TouchableOpacity
-                      key={a.id}
-                      style={[styles.weekApptBlock, { backgroundColor: c.bg, borderLeftColor: c.border, opacity: c.faded ? 0.65 : 1 }]}
-                      onPress={() => onTapAppt(a)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.weekApptTime, { color: c.border }]}>{fmtTime(a.startTime)}</Text>
-                      <View style={{ flex: 1, marginLeft: 8 }}>
-                        <Text style={[styles.weekApptClient, { color: c.text }]} numberOfLines={1}>{a.clientName || 'Walk-in'}</Text>
-                        <Text style={[styles.weekApptMeta, { color: c.text, opacity: 0.75 }]} numberOfLines={1}>
-                          {showAll ? `${a.techName} · ` : ''}
-                          {(a.services || []).map(s => s.name).filter(Boolean).join(', ')}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-                <TouchableOpacity
-                  style={[styles.weekDayEmpty, { marginTop: 6 }]}
-                  onPress={() => onTapEmpty(d.iso, '10:00')}
-                  activeOpacity={0.6}
-                >
-                  <Text style={styles.weekDayEmptyText}>＋ Add</Text>
-                </TouchableOpacity>
+                {(() => {
+                  // Interleave appt blocks with gap indicators so techs can
+                  // see open time between appointments at a glance and
+                  // squeeze in walk-ins. Gap bounds are the tech's
+                  // configured work window for this day-of-week, falling
+                  // back to salon-wide hours if no per-tech config or in
+                  // All-techs mode.
+                  const liveAppts = appts.filter(a => a.status !== 'cancelled');
+                  const rows = [];
+                  const windowStart = window.startMin;
+                  const windowEnd   = window.endMin;
+                  let cursor = windowStart;
+
+                  liveAppts.forEach((a, i) => {
+                    const startMin = hhmmToMin(a.startTime);
+                    const dur      = Number(a.duration) || 30;
+                    const endMin   = startMin + dur;
+                    if (startMin - cursor >= 30) {
+                      rows.push({ kind: 'gap', from: cursor, to: startMin, key: `g-${i}` });
+                    }
+                    rows.push({ kind: 'appt', appt: a, key: a.id });
+                    cursor = Math.max(cursor, endMin);
+                  });
+                  if (windowEnd - cursor >= 30) {
+                    rows.push({ kind: 'gap', from: cursor, to: windowEnd, key: 'g-tail' });
+                  }
+
+                  return rows.map(row => {
+                    if (row.kind === 'gap') {
+                      const mins = row.to - row.from;
+                      const label = mins >= 60
+                        ? `${Math.floor(mins / 60)}h${mins % 60 ? ' ' + (mins % 60) + 'm' : ''} open`
+                        : `${mins}m open`;
+                      return (
+                        <TouchableOpacity
+                          key={row.key}
+                          style={styles.weekGapRow}
+                          onPress={() => onTapEmpty(d.iso, minToHHMM(row.from))}
+                          activeOpacity={0.6}
+                        >
+                          <View style={styles.weekGapLine} />
+                          <Text style={styles.weekGapText}>
+                            {fmtTime(minToHHMM(row.from))} – {fmtTime(minToHHMM(row.to))} · {label} ＋
+                          </Text>
+                          <View style={styles.weekGapLine} />
+                        </TouchableOpacity>
+                      );
+                    }
+                    const a = row.appt;
+                    const c = colorsForAppt(a, allTechs);
+                    return (
+                      <TouchableOpacity
+                        key={row.key}
+                        style={[styles.weekApptBlock, { backgroundColor: c.bg, borderLeftColor: c.border, opacity: c.faded ? 0.65 : 1 }]}
+                        onPress={() => onTapAppt(a)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.weekApptTime, { color: c.border }]}>{fmtTime(a.startTime)}</Text>
+                        <View style={{ flex: 1, marginLeft: 8 }}>
+                          <Text style={[styles.weekApptClient, { color: c.text }]} numberOfLines={1}>{a.clientName || 'Walk-in'}</Text>
+                          <Text style={[styles.weekApptMeta, { color: c.text, opacity: 0.75 }]} numberOfLines={1}>
+                            {showAll ? `${a.techName} · ` : ''}
+                            {(a.services || []).map(s => s.name).filter(Boolean).join(', ')}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  });
+                })()}
               </View>
             )}
           </View>
@@ -935,6 +1057,7 @@ const styles = StyleSheet.create({
 
   // Day timeline
   dayTimelineRow:     { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: '#f0f0f0' },
+  dayTimelineRowOff:  { backgroundColor: '#fafbfc' },  // out-of-hours rows are visually muted
   dayTimeLabel:       { width: 56, paddingLeft: 8, paddingTop: 2 },
   dayTimeLabelText:   { fontSize: 11, color: '#888', fontWeight: '600' },
   dayTimelineSlot:    { flex: 1, paddingVertical: 2, paddingRight: 8, justifyContent: 'flex-start', alignItems: 'stretch' },
@@ -943,6 +1066,10 @@ const styles = StyleSheet.create({
   dayApptClient:      { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
   dayApptMeta:        { fontSize: 11, color: '#666', marginTop: 2 },
   dayEmptyHint:       { fontSize: 14, color: '#dadcdf', textAlign: 'center', lineHeight: 18 },
+  dayOffState:        { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 60, paddingHorizontal: 32, backgroundColor: '#fff' },
+  dayOffEmoji:        { fontSize: 56, marginBottom: 12 },
+  dayOffTitle:        { fontSize: 18, fontWeight: '700', color: '#1a1a1a', marginBottom: 8, textAlign: 'center' },
+  dayOffBody:         { fontSize: 13, color: '#888', textAlign: 'center', lineHeight: 19 },
 
   // Week strip
   weekDayCard:        { backgroundColor: '#fff', borderRadius: 12, marginBottom: 8, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1 },
@@ -955,6 +1082,11 @@ const styles = StyleSheet.create({
   weekDayCount:       { fontSize: 11, color: '#aaa', marginLeft: 'auto' },
   weekDayEmpty:       { padding: 14, alignItems: 'center', borderRadius: 8, backgroundColor: '#f7f8fa', marginHorizontal: 8, marginBottom: 8, marginTop: 8 },
   weekDayEmptyText:   { fontSize: 12, color: '#888', fontWeight: '500' },
+  weekGapRow:         { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 8 },
+  weekGapLine:        { flex: 1, height: 1, backgroundColor: '#e8eaee' },
+  weekGapText:        { fontSize: 11, color: '#888', fontWeight: '500' },
+  weekDayOffPill:     { alignSelf: 'flex-start', marginHorizontal: 12, marginVertical: 10, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e0e0e0' },
+  weekDayOffPillText: { fontSize: 11, fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5 },
   weekApptBlock:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#f7fbfd', borderLeftWidth: 3, borderLeftColor: '#3D95CE', borderRadius: 6, marginTop: 6 },
   weekApptTime:       { fontSize: 11, fontWeight: '700', color: '#3D95CE', minWidth: 56 },
   weekApptClient:     { fontSize: 13, fontWeight: '600', color: '#1a1a1a' },
