@@ -457,6 +457,9 @@ function DayTimelineView({ appts, date, showAll, allTechs, workDays, timeOff, te
                     },
                   ]}>
                     <Text style={[styles.dayApptClient, { color: c.text }]} numberOfLines={1}>
+                      {slotAppt.techRequestType === 'specific' && (
+                        <Text style={styles.requestStar}>★ </Text>
+                      )}
                       {slotAppt.clientName || 'Walk-in'}
                       {overlapCount > 1 ? ` +${overlapCount - 1}` : ''}
                     </Text>
@@ -623,7 +626,12 @@ function WeekView({ date, techName, showAll, allTechs, workDays, timeOff, onTapA
                       >
                         <Text style={[styles.weekApptTime, { color: c.border }]}>{fmtTime(a.startTime)}</Text>
                         <View style={{ flex: 1, marginLeft: 8 }}>
-                          <Text style={[styles.weekApptClient, { color: c.text }]} numberOfLines={1}>{a.clientName || 'Walk-in'}</Text>
+                          <Text style={[styles.weekApptClient, { color: c.text }]} numberOfLines={1}>
+                            {a.techRequestType === 'specific' && (
+                              <Text style={styles.requestStar}>★ </Text>
+                            )}
+                            {a.clientName || 'Walk-in'}
+                          </Text>
                           <Text style={[styles.weekApptMeta, { color: c.text, opacity: 0.75 }]} numberOfLines={1}>
                             {showAll ? `${a.techName} · ` : ''}
                             {(a.services || []).map(s => s.name).filter(Boolean).join(', ')}
@@ -1255,12 +1263,20 @@ function ApptDetailModal({ appt, cartTab, onClose, onUpdate, onEdit, onAddToTab 
             )}
             <View style={{ flex: 1 }}>
               <Text style={styles.modalTitle} numberOfLines={1}>
+                {appt.techRequestType === 'specific' && (
+                  <Text style={styles.requestStar}>★ </Text>
+                )}
                 {appt.clientName || 'Walk-in'}
               </Text>
               <Text style={styles.modalSubtitle} numberOfLines={1}>
                 {fmtTime(appt.startTime)}{appt.duration ? ` · ${appt.duration} min` : ''}
                 {services ? ` · ${services}` : ''}
               </Text>
+              {appt.techRequestType === 'specific' && (
+                <View style={styles.requestBadge}>
+                  <Text style={styles.requestBadgeText}>★ Client requested this tech</Text>
+                </View>
+              )}
               {client?.phone && (() => {
                 // tel: and sms: schemes are permissive — pass the raw
                 // stored phone (already formatted as US "(614) 555-0123"
@@ -1592,6 +1608,13 @@ const styles = StyleSheet.create({
   modalSocialsRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   modalSocialChip:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: '#f0f4f8', borderWidth: 1, borderColor: '#dbe3eb' },
   modalSocialChipText: { fontSize: 11, color: '#3a4a5a', fontWeight: '600' },
+  // Red ★ next to the client name on appt blocks + detail modal —
+  // matches web ScheduleAdmin's "client requested this tech by name"
+  // signal so the visual cue is consistent across surfaces.
+  requestStar:        { color: '#ef4444', fontWeight: '700' },
+  requestBadge:       { alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5' },
+  requestBadgeText:   { fontSize: 11, color: '#991b1b', fontWeight: '700' },
+
   modalContactRow:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   modalPhoneText:      { fontSize: 12, color: '#1a1a1a', fontWeight: '600', marginRight: 4 },
   modalContactBtn:     { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#EBF4FB', borderWidth: 1, borderColor: '#3D95CE' },
