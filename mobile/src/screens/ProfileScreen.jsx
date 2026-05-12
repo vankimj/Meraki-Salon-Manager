@@ -1,8 +1,10 @@
 import { useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Image,
-  ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Linking,
+  ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Linking, ActionSheetIOS,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { auth } from '../lib/firebase';
 import { saveEmployee } from '../lib/firestore';
 import { clearPushTokenForUser } from '../hooks/usePushRegistration';
@@ -17,6 +19,7 @@ export default function ProfileScreen({ navigation }) {
   const [draft,   setDraft]   = useState(null);
   const [editing, setEditing] = useState(false);
   const [saving,  setSaving]  = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
     if (employee) setDraft(employee);
@@ -83,6 +86,89 @@ export default function ProfileScreen({ navigation }) {
     await auth.signOut();
   }
 
+  // Pick + upload a profile photo. Resized to 400x400 JPEG ~80% quality
+  // and stored as a base64 data-URI on the employee.photo field — same
+  // format as the web's resizeImg() pipeline so a photo set on either
+  // surface displays correctly on the other. Skips if no employee record
+  // (mobile profile screen requires an employee for self-edit anyway).
+  const pickAndUploadPhoto = useCallback(async (source /* 'camera' | 'library' */) => {
+    if (!employee?.id) {
+      Alert.alert('No employee record', 'Ask an admin to add you to the employees list first.');
+      return;
+    }
+    try {
+      // Permissions: image library / camera have separate prompts.
+      const perm = source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission needed', `Enable ${source === 'camera' ? 'camera' : 'photos'} access in Settings to add a profile picture.`);
+        return;
+      }
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.9 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.9 });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      setUploadingPhoto(true);
+      const sourceUri = result.assets[0].uri;
+      // Resize down to 400x400 JPEG so the base64 payload stays
+      // reasonable (≈40-60KB). Anything bigger bloats the Firestore
+      // doc and slows every fetch of this employee.
+      const resized = await ImageManipulator.manipulateAsync(
+        sourceUri,
+        [{ resize: { width: 400, height: 400 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      const dataUri = `data:image/jpeg;base64,${resized.base64}`;
+      await saveEmployee(employee.id, { photo: dataUri });
+      // Reflect in the local draft so the avatar updates immediately
+      // without waiting for the next useCurrentEmployee refetch.
+      setDraft(d => ({ ...(d || {}), photo: dataUri }));
+    } catch (e) {
+      console.warn('[profile] photo upload failed:', e?.message);
+      Alert.alert('Couldn\'t update photo', e?.message || 'Try again or pick a different image.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [employee?.id]);
+
+  function presentPhotoOptions() {
+    if (!employee?.id) return;   // no-op if no employee record
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Cancel', 'Take Photo', 'Choose from Library', ...(draft?.photo || employee?.photo ? ['Remove Photo'] : [])],
+          cancelButtonIndex: 0,
+          destructiveButtonIndex: (draft?.photo || employee?.photo) ? 3 : undefined,
+          title: 'Profile picture',
+        },
+        async (idx) => {
+          if (idx === 1) pickAndUploadPhoto('camera');
+          if (idx === 2) pickAndUploadPhoto('library');
+          if (idx === 3) {
+            try {
+              setUploadingPhoto(true);
+              await saveEmployee(employee.id, { photo: '' });
+              setDraft(d => ({ ...(d || {}), photo: '' }));
+            } catch (e) {
+              Alert.alert('Couldn\'t remove photo', e?.message || 'Try again.');
+            } finally {
+              setUploadingPhoto(false);
+            }
+          }
+        },
+      );
+    } else {
+      // Android — Alert with buttons (no native action sheet wrapper bundled).
+      Alert.alert('Profile picture', undefined, [
+        { text: 'Take Photo',          onPress: () => pickAndUploadPhoto('camera') },
+        { text: 'Choose from Library', onPress: () => pickAndUploadPhoto('library') },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }
+
   const displayName = employee?.name || user?.displayName || user?.email || '';
   const photo       = employee?.photo || user?.photoURL || null;
 
@@ -99,12 +185,26 @@ export default function ProfileScreen({ navigation }) {
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         {/* Identity card */}
         <View style={styles.identity}>
-          {photo
-            ? <Image source={{ uri: photo }} style={styles.avatar} />
-            : <View style={[styles.avatar, styles.avatarFallback]}>
-                <Text style={styles.avatarInitial}>{(displayName[0] || '?').toUpperCase()}</Text>
+          <TouchableOpacity
+            onPress={presentPhotoOptions}
+            disabled={!employee?.id || uploadingPhoto}
+            activeOpacity={0.75}
+            style={styles.avatarWrap}
+          >
+            {photo
+              ? <Image source={{ uri: photo }} style={styles.avatar} />
+              : <View style={[styles.avatar, styles.avatarFallback]}>
+                  <Text style={styles.avatarInitial}>{(displayName[0] || '?').toUpperCase()}</Text>
+                </View>
+            }
+            {employee?.id && (
+              <View style={styles.avatarEditBadge}>
+                {uploadingPhoto
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={styles.avatarEditBadgeText}>📷</Text>}
               </View>
-          }
+            )}
+          </TouchableOpacity>
           <Text style={styles.name}>{displayName}</Text>
           <Text style={styles.email}>{user?.email}</Text>
           {!employee && (
@@ -224,9 +324,12 @@ const styles = StyleSheet.create({
   headerBtn: { color: '#2D7A5F', fontSize: 15, fontWeight: '600' },
 
   identity:    { alignItems: 'center', paddingVertical: 22, backgroundColor: '#fff', borderRadius: 14 },
-  avatar:      { width: 88, height: 88, borderRadius: 44, marginBottom: 10 },
+  avatarWrap:  { position: 'relative', marginBottom: 10 },
+  avatar:      { width: 88, height: 88, borderRadius: 44 },
   avatarFallback: { backgroundColor: '#2D7A5F', alignItems: 'center', justifyContent: 'center' },
   avatarInitial:  { color: '#fff', fontSize: 36, fontWeight: '700' },
+  avatarEditBadge: { position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: 14, backgroundColor: '#3D95CE', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  avatarEditBadgeText: { fontSize: 14 },
   name:        { fontSize: 18, fontWeight: '700', color: '#1a1a1a' },
   email:       { fontSize: 13, color: '#888', marginTop: 4 },
 
