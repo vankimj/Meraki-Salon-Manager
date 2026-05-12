@@ -586,6 +586,39 @@ const CELEBRITIES_5 = [
 ];
 
 // ── Generate 500 regular clients ────────────────────────
+// ── Allergy pool ───────────────────────────────────────
+// Realistic salon-relevant allergies + sensitivities. Used by the
+// demo client generators below to randomly populate ~12% of clients
+// with one or two entries — enough to make the schedule's ⚠ badges
+// land naturally without over-saturating the calendar.
+const ALLERGY_POOL = [
+  'Latex',
+  'Acetone',
+  'Gel polish',
+  'Acrylic powder',
+  'Methacrylate',
+  'Formaldehyde',
+  'Toluene',
+  'Cuticle oil (citrus)',
+  'Lavender oil',
+  'Tea tree oil',
+  'Nut oils (almond, jojoba)',
+  'Sulfates',
+  'Fragrance',
+  'Nickel (tools)',
+  'Lanolin',
+];
+function pickDemoAllergies(probability = 0.12) {
+  if (Math.random() >= probability) return '';
+  const pool = [...ALLERGY_POOL];
+  const count = Math.random() < 0.7 ? 1 : 2;   // mostly one, sometimes two
+  const picks = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return picks.join(', ');
+}
+
 function generateClients() {
   const clients = [];
   const seen = new Set();
@@ -616,6 +649,7 @@ function generateClients() {
         address: Math.random() > 0.15 ? addr : '',
         birthday: Math.random() > 0.3 ? `${byear}-${bmon}-${bday}` : '',
         notes: CLIENT_NOTES[i % CLIENT_NOTES.length],
+        allergies: pickDemoAllergies(0.10),   // ~10% of regular clients
         picture: '',
         instagram: Math.random() > 0.5 ? `@${first.toLowerCase()}${last.toLowerCase().slice(0,4)}` : '',
         venmo: Math.random() > 0.4 ? `${first.toLowerCase()}${last.toLowerCase().slice(0,5)}` : '',
@@ -642,6 +676,7 @@ function generateCelebrities() {
     address:    '',
     birthday:   celeb.birthday || '',
     notes:      celeb.notes || '',
+    allergies:  pickDemoAllergies(0.18),   // ~18% of celebs — VIPs are pickier
     picture:    celeb.picture || '',
     instagram:  celeb.instagram || '',
     facebook:   '',
