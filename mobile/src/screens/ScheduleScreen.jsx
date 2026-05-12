@@ -6,7 +6,7 @@ import {
 import {
   subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes,
   fetchAppointmentsByRange, createAppointment, fetchClients, fetchServices, fetchEmployees,
-  fetchTimeOff,
+  fetchTimeOff, createClient,
 } from '../lib/firestore';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
 import Icon from '../components/Icon';
@@ -602,6 +602,11 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
   const [pickedClient, setPickedClient] = useState(null);
   const [clientQuery, setClientQuery] = useState('');
   const [pickedServices, setPickedServices] = useState([]);
+  // Inline new-client form state — opens when user taps "+ New client".
+  const [newClientOpen,  setNewClientOpen]  = useState(false);
+  const [newClientName,  setNewClientName]  = useState('');
+  const [newClientPhone, setNewClientPhone] = useState('');
+  const [creatingClient, setCreatingClient] = useState(false);
 
   useEffect(() => {
     if (!prefill) return;
@@ -616,6 +621,9 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
     setPickedClient(null);
     setClientQuery('');
     setPickedServices([]);
+    setNewClientOpen(false);
+    setNewClientName('');
+    setNewClientPhone('');
   }, [prefill?.date, prefill?.startTime]);
 
   const totalDuration = pickedServices.reduce((s, sv) => s + (Number(sv.duration) || 30), 0) || 30;
@@ -637,8 +645,44 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
       : [...prev, { id: svc.id, name: svc.name, duration: svc.duration || 30, price: Number(svc.price) || 0 }]);
   }
 
+  // Inline client creation. Phone is required so every appt has a way
+  // to reach the customer (matches the platform-wide rule "no walk-ins,
+  // every client has a phone number"). On success, the new client gets
+  // selected as the appt's client and the form collapses.
+  async function saveNewClient() {
+    const name = newClientName.trim();
+    const phone = newClientPhone.trim();
+    if (!name)  { Alert.alert('Name required', 'Enter the client\'s name.'); return; }
+    if (!phone) { Alert.alert('Phone required', 'Enter a phone number — every client needs one.'); return; }
+    setCreatingClient(true);
+    try {
+      const id = await createClient({
+        name,
+        phone,
+        email: '',
+        notes: '',
+        createdAt: new Date().toISOString(),
+        createdFrom: 'mobile_appt_create',
+      });
+      const created = { id, name, phone };
+      setClients(prev => [created, ...prev]);
+      setPickedClient({ id, name });
+      setNewClientOpen(false);
+      setNewClientName('');
+      setNewClientPhone('');
+    } catch (e) {
+      Alert.alert('Couldn\'t create client', e?.message || 'Please try again.');
+    } finally {
+      setCreatingClient(false);
+    }
+  }
+
   async function save() {
     if (working) return;
+    if (!pickedClient?.id) {
+      Alert.alert('Pick a client', 'Choose an existing client or tap “＋ New client” to add one. Every appointment needs a real client record.');
+      return;
+    }
     if (pickedServices.length === 0) {
       Alert.alert('Add at least one service', 'Pick the service(s) the client is booking.');
       return;
@@ -649,8 +693,8 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
         date:      prefill.date,
         startTime: prefill.startTime,
         techName:  prefill.techName || '',
-        clientId:  pickedClient?.id || '',
-        clientName: pickedClient?.name || 'Walk-in',
+        clientId:  pickedClient.id,
+        clientName: pickedClient.name,
         services:  pickedServices,
         duration:  totalDuration,
         status:    'scheduled',
@@ -697,7 +741,7 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                 <>
                   <TextInput
                     style={styles.searchInput}
-                    placeholder="Search clients…  (or leave blank for walk-in)"
+                    placeholder="Search clients by name…"
                     placeholderTextColor="#bbb"
                     value={clientQuery}
                     onChangeText={setClientQuery}
@@ -707,12 +751,50 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                     nestedScrollEnabled
                     keyboardShouldPersistTaps="handled"
                   >
-                    <TouchableOpacity
-                      style={styles.clientRow}
-                      onPress={() => setPickedClient({ id: '', name: 'Walk-in' })}
-                    >
-                      <Text style={styles.clientRowName}>👤 Walk-in</Text>
-                    </TouchableOpacity>
+                    {newClientOpen ? (
+                      <View style={styles.newClientForm}>
+                        <Text style={styles.newClientLabel}>New client</Text>
+                        <TextInput
+                          style={styles.newClientInput}
+                          placeholder="Full name *"
+                          placeholderTextColor="#bbb"
+                          value={newClientName}
+                          onChangeText={setNewClientName}
+                          autoFocus
+                        />
+                        <TextInput
+                          style={styles.newClientInput}
+                          placeholder="Phone number *"
+                          placeholderTextColor="#bbb"
+                          value={newClientPhone}
+                          onChangeText={setNewClientPhone}
+                          keyboardType="phone-pad"
+                        />
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                          <TouchableOpacity
+                            style={[styles.newClientBtn, styles.newClientBtnGhost]}
+                            onPress={() => { setNewClientOpen(false); setNewClientName(''); setNewClientPhone(''); }}
+                            disabled={creatingClient}
+                          >
+                            <Text style={styles.newClientBtnGhostText}>Cancel</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.newClientBtn, styles.newClientBtnPrimary, creatingClient && { opacity: 0.5 }]}
+                            onPress={saveNewClient}
+                            disabled={creatingClient}
+                          >
+                            <Text style={styles.newClientBtnPrimaryText}>{creatingClient ? 'Saving…' : 'Save & select'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.clientRow, styles.clientRowNew]}
+                        onPress={() => setNewClientOpen(true)}
+                      >
+                        <Text style={styles.clientRowNewText}>＋ New client</Text>
+                      </TouchableOpacity>
+                    )}
                     {filteredClients.map(c => (
                       <TouchableOpacity
                         key={c.id}
@@ -1112,8 +1194,18 @@ const styles = StyleSheet.create({
   // Android; iOS handles nested scrolling natively.
   clientList:         { marginTop: 8, backgroundColor: '#fafafa', borderRadius: 8, height: 240 },
   clientRow:          { paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: 0.5, borderBottomColor: '#eee' },
+  clientRowNew:       { backgroundColor: '#f0faf6', borderBottomColor: '#d1ead8' },
+  clientRowNewText:   { fontSize: 14, color: '#2D7A5F', fontWeight: '700' },
   clientRowName:      { fontSize: 14, color: '#1a1a1a' },
   clientRowMeta:      { fontSize: 11, color: '#888', marginTop: 2 },
+  newClientForm:      { padding: 12, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', gap: 8 },
+  newClientLabel:     { fontSize: 11, fontWeight: '700', color: '#2D7A5F', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+  newClientInput:     { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#1a1a1a', backgroundColor: '#fff' },
+  newClientBtn:       { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  newClientBtnPrimary:    { backgroundColor: '#2D7A5F' },
+  newClientBtnPrimaryText:{ color: '#fff', fontWeight: '700', fontSize: 13 },
+  newClientBtnGhost:      { backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb' },
+  newClientBtnGhostText:  { color: '#666', fontWeight: '600', fontSize: 13 },
   pickedChip:         { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EBF4FB', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, alignSelf: 'flex-start' },
   pickedChipText:     { fontSize: 13, color: '#1a5f8a', fontWeight: '600' },
   pickedChipX:        { fontSize: 18, color: '#1a5f8a', marginLeft: 8, lineHeight: 18 },
