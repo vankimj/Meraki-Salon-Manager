@@ -6,7 +6,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { auth } from '../lib/firebase';
-import { saveEmployee } from '../lib/firestore';
+import { saveEmployee, fetchTimeOff, createTimeOff, deleteTimeOff } from '../lib/firestore';
 import { clearPushTokenForUser } from '../hooks/usePushRegistration';
 import { clearCurrentTenant } from '../lib/currentTenant';
 import { getPrefs, setTheme, setAutoLogoutMin, subscribePrefs } from '../lib/userPrefs';
@@ -23,6 +23,23 @@ export default function ProfileScreen({ navigation }) {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [prefs, setPrefs] = useState(getPrefs());
   useEffect(() => subscribePrefs(setPrefs), []);
+  // Time off — list of upcoming entries for THIS tech, refetched when
+  // the employee record changes (sign-in, tenant switch).
+  const [myTimeOff, setMyTimeOff] = useState([]);
+  const [timeOffOpen, setTimeOffOpen] = useState(false);
+  async function reloadTimeOff() {
+    if (!employee?.name) { setMyTimeOff([]); return; }
+    try {
+      const all = await fetchTimeOff();
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const mine = all.filter(t =>
+        (t.techName || '').toLowerCase() === employee.name.toLowerCase() &&
+        (t.endDate || t.startDate || '') >= todayIso
+      );
+      setMyTimeOff(mine);
+    } catch { setMyTimeOff([]); }
+  }
+  useEffect(() => { reloadTimeOff(); }, [employee?.id, employee?.name]);
 
   useEffect(() => {
     if (employee) setDraft(employee);
@@ -135,6 +152,66 @@ export default function ProfileScreen({ navigation }) {
       setUploadingPhoto(false);
     }
   }, [employee?.id]);
+
+  // ── Working-hours editing ─────────────────────────────
+  // Each weekday is { on, start, end }. Persisted on the employee
+  // record (the same field the schedule grid + week-view gap math
+  // already read from). Tapping a row opens an action sheet with
+  // toggle + time presets; full hour-by-hour editing keeps the UI
+  // tractable on a phone without dragging in a date-time picker
+  // native module.
+  async function setWorkDay(dow, patch) {
+    if (!employee?.id) return;
+    const current = employee.workDays?.[dow] || { on: true, start: '09:00', end: '18:00' };
+    const next = { ...current, ...patch };
+    const workDays = { ...(employee.workDays || {}), [dow]: next };
+    try {
+      await saveEmployee(employee.id, { workDays });
+      setDraft(d => ({ ...(d || {}), workDays }));
+    } catch (e) {
+      Alert.alert('Couldn\'t save hours', e?.message || 'Try again.');
+    }
+  }
+  function pickWorkDay(dow) {
+    const cfg = (draft?.workDays?.[dow] || employee?.workDays?.[dow] || { on: true, start: '09:00', end: '18:00' });
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: `${dow} hours`,
+          options: ['Cancel', cfg.on ? 'Mark this day OFF' : 'Mark this day ON', 'Set hours…'],
+          cancelButtonIndex: 0,
+        },
+        (idx) => {
+          if (idx === 1) setWorkDay(dow, { on: !cfg.on });
+          if (idx === 2) editWorkDayHours(dow);
+        },
+      );
+    } else {
+      Alert.alert(`${dow} hours`, undefined, [
+        { text: cfg.on ? 'Mark this day OFF' : 'Mark this day ON', onPress: () => setWorkDay(dow, { on: !cfg.on }) },
+        { text: 'Set hours…', onPress: () => editWorkDayHours(dow) },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }
+  function editWorkDayHours(dow) {
+    const cfg = (draft?.workDays?.[dow] || employee?.workDays?.[dow] || { start: '09:00', end: '18:00' });
+    pickFromSheet({
+      title: `${dow} start time`,
+      options: HOUR_OPTIONS,
+      currentLabel: HOUR_LABEL[cfg.start] || cfg.start,
+      onPick: (start) => {
+        setWorkDay(dow, { start, on: true });
+        // After start, prompt for end.
+        setTimeout(() => pickFromSheet({
+          title: `${dow} end time`,
+          options: HOUR_OPTIONS,
+          currentLabel: HOUR_LABEL[cfg.end] || cfg.end,
+          onPick: (end) => setWorkDay(dow, { end, on: true }),
+        }), 350);
+      },
+    });
+  }
 
   // ── Settings sheet pickers ────────────────────────────
   // Each one shows an iOS action sheet (with Android Alert fallback)
@@ -367,6 +444,65 @@ export default function ProfileScreen({ navigation }) {
           </View>
         )}
 
+        {/* Working hours — only when an employee record exists.
+            Per-day on/off + start/end. Schedule grid + week-view gap
+            calculator already read from this same employee.workDays
+            field, so changes here flow through immediately. */}
+        {employee?.id && (
+          <View style={{ marginTop: 18 }}>
+            <Text style={styles.sectionLabel}>Working hours</Text>
+            {WEEK_DOW.map(dow => {
+              const cfg = (draft?.workDays?.[dow] || employee?.workDays?.[dow]);
+              const off = cfg?.on === false;
+              const value = off
+                ? 'Off'
+                : `${HOUR_LABEL[cfg?.start || '09:00'] || cfg?.start || '9:00 AM'} – ${HOUR_LABEL[cfg?.end || '18:00'] || cfg?.end || '6:00 PM'}`;
+              return (
+                <SettingRow key={dow} label={dow} value={value} onPress={() => pickWorkDay(dow)} />
+              );
+            })}
+          </View>
+        )}
+
+        {/* Time off — list of upcoming entries for this tech, plus a
+            tappable "+ Add" row to create new (PTO / sick / personal). */}
+        {employee?.id && (
+          <View style={{ marginTop: 18 }}>
+            <Text style={styles.sectionLabel}>Time off</Text>
+            {myTimeOff.length === 0 ? (
+              <View style={styles.cardRow}>
+                <Text style={styles.settingsBody}>No upcoming time off scheduled.</Text>
+              </View>
+            ) : (
+              myTimeOff.map(t => (
+                <TouchableOpacity
+                  key={t.id}
+                  style={styles.timeOffRow}
+                  onPress={() => Alert.alert(
+                    timeOffTypeLabel(t.type),
+                    `${formatDateRange(t)}${t.reason ? '\n\n' + t.reason : ''}`,
+                    [
+                      { text: 'Delete', style: 'destructive', onPress: async () => {
+                        try { await deleteTimeOff(t.id); reloadTimeOff(); }
+                        catch (e) { Alert.alert('Couldn\'t delete', e?.message || 'Try again.'); }
+                      } },
+                      { text: 'Close', style: 'cancel' },
+                    ],
+                  )}
+                  activeOpacity={0.6}
+                >
+                  <Text style={styles.timeOffRowType}>{timeOffTypeLabel(t.type)}</Text>
+                  <Text style={styles.timeOffRowRange}>{formatDateRange(t)}</Text>
+                  {!!t.reason && <Text style={styles.timeOffRowReason} numberOfLines={1}>{t.reason}</Text>}
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity style={styles.timeOffAddBtn} onPress={() => setTimeOffOpen(true)} activeOpacity={0.6}>
+              <Text style={styles.timeOffAddBtnText}>＋ Add time off</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Notifications — only show when an employee record exists,
             since the prefs live on that doc. */}
         {employee?.id && (
@@ -418,9 +554,184 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.signOutText}>Sign out</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <AddTimeOffModal
+        open={timeOffOpen}
+        onClose={() => setTimeOffOpen(false)}
+        onSaved={() => { setTimeOffOpen(false); reloadTimeOff(); }}
+        techName={employee?.name}
+      />
     </KeyboardAvoidingView>
   );
 }
+
+// Time-off type label — mirrors web's typeLabel().
+function timeOffTypeLabel(t) {
+  if (t === 'sick') return '🩹 Sick';
+  if (t === 'personal') return '🏠 Personal';
+  return '🌴 Vacation';
+}
+function formatDateRange(t) {
+  const fmt = (iso) => { try { return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return iso; } };
+  if (!t.endDate || t.endDate === t.startDate) return fmt(t.startDate);
+  return `${fmt(t.startDate)} – ${fmt(t.endDate)}`;
+}
+
+// ── Add time off modal ────────────────────────────────
+// Three fields: start date (YYYY-MM-DD), end date (YYYY-MM-DD,
+// defaults to start), type, optional reason. Date inputs are plain
+// text — we deliberately avoid pulling in a native date picker module
+// so this doesn't trigger another dev-client rebuild. Today's date is
+// pre-filled into both fields as a sensible starting point.
+function AddTimeOffModal({ open, onClose, onSaved, techName }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(today);
+  const [endDate,   setEndDate]   = useState(today);
+  const [type,      setType]      = useState('vacation');
+  const [reason,    setReason]    = useState('');
+  const [saving,    setSaving]    = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setStartDate(today);
+      setEndDate(today);
+      setType('vacation');
+      setReason('');
+    }
+  }, [open, today]);
+
+  if (!open) return null;
+  const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+  const valid = isoRe.test(startDate) && isoRe.test(endDate) && endDate >= startDate;
+
+  async function save() {
+    if (!valid || saving) return;
+    if (!techName) { Alert.alert('No tech', 'Need an employee record to attribute time off to.'); return; }
+    setSaving(true);
+    try {
+      await createTimeOff({ techName, startDate, endDate, type, reason: reason.trim() });
+      onSaved?.();
+    } catch (e) {
+      Alert.alert('Couldn\'t save', e?.message || 'Try again.');
+    } finally { setSaving(false); }
+  }
+
+  const TYPES = [
+    { id: 'vacation', label: '🌴 Vacation' },
+    { id: 'sick',     label: '🩹 Sick' },
+    { id: 'personal', label: '🏠 Personal' },
+  ];
+
+  return (
+    <Modal visible={open} animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={timeOffStyles.backdrop}>
+          <View style={timeOffStyles.sheet}>
+            <View style={timeOffStyles.header}>
+              <Text style={timeOffStyles.title}>New time off</Text>
+              <TouchableOpacity onPress={onClose} style={timeOffStyles.closeBtn}>
+                <Text style={timeOffStyles.closeBtnText}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+              <Text style={timeOffStyles.label}>Type</Text>
+              <View style={timeOffStyles.typeRow}>
+                {TYPES.map(t => (
+                  <TouchableOpacity
+                    key={t.id}
+                    onPress={() => setType(t.id)}
+                    style={[timeOffStyles.typeChip, type === t.id && timeOffStyles.typeChipActive]}
+                  >
+                    <Text style={[timeOffStyles.typeChipText, type === t.id && timeOffStyles.typeChipTextActive]}>{t.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[timeOffStyles.label, { marginTop: 16 }]}>Start date</Text>
+              <TextInput
+                style={timeOffStyles.input}
+                value={startDate}
+                onChangeText={setStartDate}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor="#bbb"
+                keyboardType="numbers-and-punctuation"
+                maxLength={10}
+              />
+
+              <Text style={[timeOffStyles.label, { marginTop: 12 }]}>End date</Text>
+              <TextInput
+                style={timeOffStyles.input}
+                value={endDate}
+                onChangeText={setEndDate}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor="#bbb"
+                keyboardType="numbers-and-punctuation"
+                maxLength={10}
+              />
+              {!valid && (startDate || endDate) && (
+                <Text style={timeOffStyles.hint}>Use YYYY-MM-DD; end date must be on or after start.</Text>
+              )}
+
+              <Text style={[timeOffStyles.label, { marginTop: 16 }]}>Reason (optional)</Text>
+              <TextInput
+                style={[timeOffStyles.input, { minHeight: 80, textAlignVertical: 'top' }]}
+                value={reason}
+                onChangeText={setReason}
+                placeholder="What's it for?"
+                placeholderTextColor="#bbb"
+                multiline
+                maxLength={400}
+              />
+
+              <TouchableOpacity
+                style={[timeOffStyles.saveBtn, (!valid || saving) && { opacity: 0.5 }, { marginTop: 18 }]}
+                onPress={save}
+                disabled={!valid || saving}
+              >
+                <Text style={timeOffStyles.saveBtnText}>{saving ? 'Saving…' : 'Save time off'}</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const timeOffStyles = StyleSheet.create({
+  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,.55)' },
+  sheet:    { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, height: '80%', paddingBottom: 20 },
+  header:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  title:    { flex: 1, fontSize: 16, fontWeight: '700', color: '#1a1a1a' },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f5f5' },
+  closeBtnText: { fontSize: 22, color: '#666', lineHeight: 24 },
+  label:    { fontSize: 11, fontWeight: '700', color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  input:    { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#1a1a1a', backgroundColor: '#fafafa' },
+  hint:     { fontSize: 11, color: '#b91c1c', marginTop: 4 },
+  typeRow:  { flexDirection: 'row', gap: 6 },
+  typeChip: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#f5f5f5', borderWidth: 1, borderColor: '#e5e7eb', alignItems: 'center' },
+  typeChipActive: { backgroundColor: '#EBF4FB', borderColor: '#3D95CE' },
+  typeChipText:        { fontSize: 13, fontWeight: '600', color: '#666' },
+  typeChipTextActive:  { color: '#1a5f8a', fontWeight: '700' },
+  saveBtn:     { backgroundColor: '#2D7A5F', borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+  saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+});
+
+// 30-min slot options for the work-hours start/end pickers, 7 AM
+// through 9 PM. Anything outside this is rare enough that the user
+// can edit on web instead.
+const HOUR_OPTIONS = [];
+const HOUR_LABEL   = {};
+for (let h = 7; h <= 21; h++) {
+  for (const m of [0, 30]) {
+    const v = `${String(h).padStart(2, '0')}:${m === 0 ? '00' : '30'}`;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const display = `${(h % 12 || 12)}:${m === 0 ? '00' : '30'} ${ampm}`;
+    HOUR_OPTIONS.push({ label: display, value: v });
+    HOUR_LABEL[v] = display;
+  }
+}
+const WEEK_DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // One row in the Settings list — shows a label on the left + the
 // current value on the right, tap to open a sheet picker. Same pattern
@@ -508,6 +819,13 @@ const styles = StyleSheet.create({
   settingRowLabel:   { fontSize: 14, color: '#1a1a1a', fontWeight: '500' },
   settingRowValue:   { fontSize: 14, color: '#888', fontWeight: '500' },
   settingRowChevron: { fontSize: 20, color: '#cbd0d6', lineHeight: 22 },
+
+  timeOffRow:        { backgroundColor: '#fff', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, marginBottom: 8 },
+  timeOffRowType:    { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
+  timeOffRowRange:   { fontSize: 12, color: '#666', marginTop: 2 },
+  timeOffRowReason:  { fontSize: 11, color: '#888', marginTop: 4, fontStyle: 'italic' },
+  timeOffAddBtn:     { paddingVertical: 11, alignItems: 'center', borderRadius: 12, backgroundColor: '#f0faf6', borderWidth: 1, borderColor: '#bbf7d0' },
+  timeOffAddBtnText: { fontSize: 13, color: '#2D7A5F', fontWeight: '700' },
 
   tenantRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, marginBottom: 8 },
   tenantRowActive: { backgroundColor: '#f0faf6', borderWidth: 1, borderColor: '#2D7A5F' },

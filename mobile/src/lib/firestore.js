@@ -171,6 +171,17 @@ export async function fetchTimeOff() {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
 }
+export async function createTimeOff(data) {
+  const ref = await addDoc(tenantCol('timeOff'), {
+    ...data,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  return ref.id;
+}
+export async function deleteTimeOff(id) {
+  await deleteDoc(doc(tenantCol('timeOff'), id));
+}
 
 // ── Services ───────────────────────────────────────────
 export async function fetchServices() {
