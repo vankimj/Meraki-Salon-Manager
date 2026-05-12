@@ -12,7 +12,7 @@ import CoachMark from '../../components/CoachMark';
 // ── helpers ────────────────────────────────────────────
 function blankClient() {
   return {
-    name: '', phone: '', email: '', address: '', birthday: '', notes: '',
+    name: '', phone: '', email: '', address: '', birthday: '', allergies: '', notes: '',
     picture: '',
     instagram: '', facebook: '', tiktok: '', venmo: '',
     instagramTags: [],
@@ -548,6 +548,17 @@ function ClientModal({ client, allClients = [], initialMode = 'edit', onChange, 
                 {isView
                   ? <CopyVal value={client.address} />
                   : <input value={client.address || ''} onChange={e => onChange({ address: e.target.value })} placeholder="123 Main St, City, State" style={inp} />
+                }
+              </Field>
+              {/* Allergies — surfaces a red ⚠ banner on appt blocks
+                  in the schedule grid so techs can re-confirm before
+                  starting the service. Free-text comma-separated. */}
+              <Field label={<span style={{ color: client.allergies ? '#991b1b' : undefined, fontWeight: client.allergies ? 700 : undefined }}>{client.allergies ? '⚠ Allergies' : 'Allergies'}</span>}>
+                {isView
+                  ? (client.allergies
+                      ? <span style={{ color: '#991b1b', fontWeight: 700, background: '#fef2f2', border: '1px solid #fca5a5', padding: '4px 10px', borderRadius: 8, display: 'inline-block', fontSize: 13 }}>⚠ {client.allergies}</span>
+                      : <ViewVal>—</ViewVal>)
+                  : <input value={client.allergies || ''} onChange={e => onChange({ allergies: e.target.value })} placeholder="e.g. Latex, acetone, gel" style={{ ...inp, borderColor: client.allergies ? '#f59e0b' : undefined, background: client.allergies ? '#fffbeb' : undefined }} />
                 }
               </Field>
               <Field label="Notes">

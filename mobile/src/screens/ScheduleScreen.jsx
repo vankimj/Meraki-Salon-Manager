@@ -170,16 +170,19 @@ export default function ScheduleScreen() {
   useEffect(() => subscribeTab(setTabSnap), []);
   const [allTechs, setAllTechs] = useState([]);  // ordered tech-name list for color assignment
   const [timeOff,  setTimeOff]  = useState([]);  // [{ techName, startDate, endDate }]
+  // Map of clientId → minimal client snapshot ({ allergies }). Used by
+  // the calendar views to flag appts whose client has allergies on
+  // file. Loaded once per tenant; keys never change for an existing
+  // client so we don't refresh on every schedule update.
+  const [clientsById, setClientsById] = useState({});
 
-  // Stable tech list + time-off snapshot — fetched on mount, refreshed
-  // on tenant change (RootNav re-mounts when tenant switches, so this re-runs).
-  // Time off feeds the week-view gap calculator: a day covered by an
-  // active time-off entry for the current tech is shown as OFF instead
-  // of computed gaps.
+  // Stable tech list + time-off snapshot + client allergies map — all
+  // fetched on mount, refreshed on tenant change (RootNav re-mounts on
+  // tenant switch, so this re-runs).
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchEmployees(), fetchTimeOff()])
-      .then(([emps, off]) => {
+    Promise.all([fetchEmployees(), fetchTimeOff(), fetchClients()])
+      .then(([emps, off, clients]) => {
         if (cancelled) return;
         const names = (emps || [])
           .filter(e => e.active !== false)
@@ -188,8 +191,17 @@ export default function ScheduleScreen() {
           .filter(Boolean);
         setAllTechs(names);
         setTimeOff(off || []);
+        // Slim projection — id → { allergies } so we don't keep huge
+        // base64 client photos in memory just to look up an allergy
+        // string. Built once; never mutated, so calendar renders are
+        // O(1) per appt block.
+        const map = {};
+        (clients || []).forEach(c => {
+          if (c.id) map[c.id] = { allergies: c.allergies || '' };
+        });
+        setClientsById(map);
       })
-      .catch(() => { if (!cancelled) { setAllTechs([]); setTimeOff([]); } });
+      .catch(() => { if (!cancelled) { setAllTechs([]); setTimeOff([]); setClientsById({}); } });
     return () => { cancelled = true; };
   }, []);
 
@@ -325,6 +337,7 @@ export default function ScheduleScreen() {
           techName={techName}
           showAll={showAll}
           allTechs={allTechs}
+          clientsById={clientsById}
           workDays={employee?.workDays}
           timeOff={timeOff}
           onTapAppt={(a) => setDetail(a)}
@@ -342,6 +355,7 @@ export default function ScheduleScreen() {
             date={date}
             showAll={showAll}
             allTechs={allTechs}
+            clientsById={clientsById}
             workDays={employee?.workDays}
             timeOff={timeOff}
             techName={techName}
@@ -384,7 +398,7 @@ export default function ScheduleScreen() {
 // to that slot. Filled rows render the appt block sized to its
 // duration (1 SLOT_PX per 30 min). Multi-tech overlaps are stacked
 // horizontally; "Just me" mode never overlaps so most days are clean.
-function DayTimelineView({ appts, date, showAll, allTechs, workDays, timeOff, techName, refreshing, onRefresh, onTapAppt, onTapEmpty }) {
+function DayTimelineView({ appts, date, showAll, allTechs, clientsById, workDays, timeOff, techName, refreshing, onRefresh, onTapAppt, onTapEmpty }) {
   // Working-window awareness — same rules as WeekView's gap calc.
   // Only meaningful when scoped to a single tech (showAll=false).
   const off    = !showAll ? timeOffOn(date, techName, timeOff) : null;
@@ -460,6 +474,9 @@ function DayTimelineView({ appts, date, showAll, allTechs, workDays, timeOff, te
                       {slotAppt.techRequestType === 'specific' && (
                         <Text style={styles.requestStar}>★ </Text>
                       )}
+                      {!!clientsById?.[slotAppt.clientId]?.allergies && (
+                        <Text style={styles.allergyWarn}>⚠ </Text>
+                      )}
                       {slotAppt.clientName || 'Walk-in'}
                       {overlapCount > 1 ? ` +${overlapCount - 1}` : ''}
                     </Text>
@@ -487,7 +504,7 @@ function DayTimelineView({ appts, date, showAll, allTechs, workDays, timeOff, te
 // open hour, tap a block opens the detail modal.
 const WEEK_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function WeekView({ date, techName, showAll, allTechs, workDays, timeOff, onTapAppt, onTapEmpty, onPickDay }) {
+function WeekView({ date, techName, showAll, allTechs, clientsById, workDays, timeOff, onTapAppt, onTapEmpty, onPickDay }) {
   const [byDay, setByDay] = useState({});  // 'YYYY-MM-DD' → appts[]
   const [loading, setLoading] = useState(true);
 
@@ -629,6 +646,9 @@ function WeekView({ date, techName, showAll, allTechs, workDays, timeOff, onTapA
                           <Text style={[styles.weekApptClient, { color: c.text }]} numberOfLines={1}>
                             {a.techRequestType === 'specific' && (
                               <Text style={styles.requestStar}>★ </Text>
+                            )}
+                            {!!clientsById?.[a.clientId]?.allergies && (
+                              <Text style={styles.allergyWarn}>⚠ </Text>
                             )}
                             {a.clientName || 'Walk-in'}
                           </Text>
@@ -1277,6 +1297,11 @@ function ApptDetailModal({ appt, cartTab, onClose, onUpdate, onEdit, onAddToTab 
                   <Text style={styles.requestBadgeText}>★ Client requested this tech</Text>
                 </View>
               )}
+              {!!client?.allergies && (
+                <View style={styles.allergyBadge}>
+                  <Text style={styles.allergyBadgeText}>⚠ Allergies: {client.allergies}</Text>
+                </View>
+              )}
               {client?.phone && (() => {
                 // tel: and sms: schemes are permissive — pass the raw
                 // stored phone (already formatted as US "(614) 555-0123"
@@ -1614,6 +1639,13 @@ const styles = StyleSheet.create({
   requestStar:        { color: '#ef4444', fontWeight: '700' },
   requestBadge:       { alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5' },
   requestBadgeText:   { fontSize: 11, color: '#991b1b', fontWeight: '700' },
+  // Allergy ⚠ on appt blocks + a prominent red banner in the detail
+  // modal. Same color family as requestBadge for visual consistency,
+  // but the banner spans full-width to make sure the tech sees it
+  // before they start the appointment.
+  allergyWarn:        { color: '#b45309', fontWeight: '700' },
+  allergyBadge:       { alignSelf: 'stretch', marginTop: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#f59e0b' },
+  allergyBadgeText:   { fontSize: 12, color: '#92400e', fontWeight: '700' },
 
   modalContactRow:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   modalPhoneText:      { fontSize: 12, color: '#1a1a1a', fontWeight: '600', marginRight: 4 },

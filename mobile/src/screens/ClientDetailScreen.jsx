@@ -79,6 +79,7 @@ export default function ClientDetailScreen({ route, navigation }) {
         email:      draft.email || '',
         address:    draft.address || '',
         birthday:   draft.birthday || '',
+        allergies:  draft.allergies || '',
         notes:      draft.notes || '',
         instagram:  draft.instagram || '',
         facebook:   draft.facebook || '',
@@ -153,6 +154,7 @@ export default function ClientDetailScreen({ route, navigation }) {
               <Field label="Email"    value={draft.email}    onChange={v => set('email', v)}    editing={editing} keyboard="email-address" mail={!editing && draft.email} />
               <Field label="Address"  value={draft.address}  onChange={v => set('address', v)}  editing={editing} multiline />
               <Field label="Birthday" value={draft.birthday} onChange={v => set('birthday', v)} editing={editing} placeholder="YYYY-MM-DD" />
+              <Field label="⚠ Allergies" value={draft.allergies} onChange={v => set('allergies', v)} editing={editing} placeholder="e.g. Latex, acetone, gel" warn />
               <Field label="Notes"    value={draft.notes}    onChange={v => set('notes', v)}    editing={editing} multiline rows={4}
                      placeholder="Allergies, preferences, last polish, anything the next stylist should know..." />
             </>
@@ -195,12 +197,12 @@ export default function ClientDetailScreen({ route, navigation }) {
   );
 }
 
-function Field({ label, value, onChange, editing, multiline, rows, placeholder, keyboard, tel, mail }) {
+function Field({ label, value, onChange, editing, multiline, rows, placeholder, keyboard, tel, mail, warn }) {
   if (!editing) {
     if (!value) return null;
     return (
-      <View style={styles.viewRow}>
-        <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={[styles.viewRow, warn && styles.viewRowWarn]}>
+        <Text style={[styles.fieldLabel, warn && styles.fieldLabelWarn]}>{label}</Text>
         {tel ? (
           <View>
             <Text style={styles.fieldValue}>{value}</Text>
@@ -226,7 +228,7 @@ function Field({ label, value, onChange, editing, multiline, rows, placeholder, 
             <Text style={[styles.fieldValue, styles.linkText]}>{value}</Text>
           </TouchableOpacity>
         ) : (
-          <Text style={styles.fieldValue}>{value}</Text>
+          <Text style={[styles.fieldValue, warn && styles.fieldValueWarn]}>{value}</Text>
         )}
       </View>
     );
@@ -287,6 +289,11 @@ const styles = StyleSheet.create({
   contactBtnRow:  { flexDirection: 'row', gap: 8, marginTop: 8 },
   contactBtn:     { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 14, backgroundColor: '#EBF4FB', borderWidth: 1, borderColor: '#3D95CE' },
   contactBtnText: { fontSize: 13, fontWeight: '700', color: '#1a5f8a' },
+  // Warn variant — used for the Allergies field so it stands out from
+  // the rest of the profile rows. Red tint on the card + label + value.
+  viewRowWarn:    { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5' },
+  fieldLabelWarn: { color: '#991b1b' },
+  fieldValueWarn: { color: '#991b1b', fontWeight: '700' },
   editInput:  { fontSize: 14, color: '#1a1a1a', padding: 0 },
 
   visitCard:  { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },

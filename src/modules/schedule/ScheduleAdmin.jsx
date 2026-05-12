@@ -1066,6 +1066,7 @@ function openNew(techName, slotMins) {
               timeOff={timeOff}
               techs={displayTechs}
               allTechs={techs}
+              clients={clients}
               techExtended={techExtended}
               empWorkDays={empWorkDays}
               slots={slots}
@@ -1428,6 +1429,12 @@ function WeekGrid({ weekStart, appts, clients, employees, allTechs, onApptClick,
                       const blockBg     = isCancelled ? '#fef2f2' : isDone ? '#f3f4f6' : col.bg;
                       const blockBorder = isCancelled ? '#EF4444' : isDone ? '#9ca3af' : col.solid;
                       const blockText   = isCancelled ? '#991b1b' : isDone ? '#6b7280' : col.text;
+                      // Allergy lookup — surfaces a ⚠ on the block so the
+                      // tech sees it before opening the appt. Falls back
+                      // to no-op for walk-ins / unlinked appts.
+                      const apptAllergies = appt.clientId
+                        ? (clients.find(c => c.id === appt.clientId)?.allergies || '')
+                        : '';
                       return (
                         <div key={appt.id} onClick={e => { e.stopPropagation(); onApptClick(appt); }}
                           style={{ padding: '3px 5px', borderRadius: 5, background: blockBg, borderLeft: `3px solid ${blockBorder}`, cursor: 'pointer', opacity: isCancelled ? 0.6 : 1 }}>
@@ -1435,6 +1442,9 @@ function WeekGrid({ weekStart, appts, clients, employees, allTechs, onApptClick,
                             <div style={{ fontSize: 10, fontWeight: 700, color: blockText, lineHeight: 1.2, flex: 1 }}>
                               {minsToStr(strToMins(appt.startTime))}
                             </div>
+                            {!!apptAllergies && (
+                              <span title={`Allergies: ${apptAllergies}`} style={{ fontSize: 12, color: '#b45309', lineHeight: 1, fontWeight: 700 }}>⚠</span>
+                            )}
                             {appt.techRequestType === 'specific' ? (
                               <span title="Client asked for this tech" style={{ fontSize: 13, color: '#ef4444', lineHeight: 1, fontWeight: 700 }}>★</span>
                             ) : appt.techRequestType === 'auto' ? (
@@ -1469,7 +1479,7 @@ function WeekGrid({ weekStart, appts, clients, employees, allTechs, onApptClick,
 }
 
 // ── Day grid ──────────────────────────────────────────
-function DayGrid({ date, appts, timeOff = [], techs, allTechs, techExtended, empWorkDays, slots, dayStart, walkInOpen, walkInClose, techColWidth, focusedTech, onToggleFocusTech, onSlotClick, onApptClick, onApptReschedule }) {
+function DayGrid({ date, appts, timeOff = [], techs, allTechs, clients = [], techExtended, empWorkDays, slots, dayStart, walkInOpen, walkInClose, techColWidth, focusedTech, onToggleFocusTech, onSlotClick, onApptClick, onApptReschedule }) {
   // Pointer-event drag-to-reschedule. Works on both mouse and touch
   // (iPad/iPhone) — HTML5 D&D doesn't work on touch devices natively.
   // Dragging happens in two phases:
@@ -1867,6 +1877,14 @@ function DayGrid({ date, appts, timeOff = [], techs, allTechs, techExtended, emp
                     <span title="Front desk assigned this tech" style={{ fontSize: 11, flexShrink: 0, lineHeight: 1 }}>📋</span>
                   )
                 )}
+                {(() => {
+                  const allergies = appt.clientId
+                    ? (clients.find(c => c.id === appt.clientId)?.allergies || '')
+                    : '';
+                  return allergies ? (
+                    <span title={`Allergies: ${allergies}`} style={{ fontSize: 12, color: '#b45309', fontWeight: 700, lineHeight: 1, flexShrink: 0 }}>⚠</span>
+                  ) : null;
+                })()}
                 <div style={{ fontSize: isOverlap ? 11 : 13, fontWeight: 700, color: blockText, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                   {appt.clientName || 'Walk-in'}
                 </div>
