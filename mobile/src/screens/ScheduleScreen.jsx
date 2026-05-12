@@ -1148,6 +1148,33 @@ function ApptDetailModal({ appt, onClose, onUpdate, onEdit }) {
                 {fmtTime(appt.startTime)}{appt.duration ? ` · ${appt.duration} min` : ''}
                 {services ? ` · ${services}` : ''}
               </Text>
+              {client?.phone && (() => {
+                // tel: and sms: schemes are permissive — pass the raw
+                // stored phone (already formatted as US "(614) 555-0123"
+                // or international "+44 20 7946 0958"). iOS strips
+                // anything non-numeric so both forms route correctly.
+                const tel = `tel:${client.phone}`;
+                const sms = `sms:${client.phone}`;
+                return (
+                  <View style={styles.modalContactRow}>
+                    <Text style={styles.modalPhoneText}>{client.phone}</Text>
+                    <TouchableOpacity
+                      style={styles.modalContactBtn}
+                      onPress={() => Linking.openURL(tel).catch(() => {})}
+                      activeOpacity={0.6}
+                    >
+                      <Text style={styles.modalContactBtnText}>📞 Call</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.modalContactBtn}
+                      onPress={() => Linking.openURL(sms).catch(() => {})}
+                      activeOpacity={0.6}
+                    >
+                      <Text style={styles.modalContactBtnText}>💬 Text</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })()}
               {socials.length > 0 && (
                 <View style={styles.modalSocialsRow}>
                   {socials.map(s => (
@@ -1433,6 +1460,10 @@ const styles = StyleSheet.create({
   modalSocialsRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   modalSocialChip:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: '#f0f4f8', borderWidth: 1, borderColor: '#dbe3eb' },
   modalSocialChipText: { fontSize: 11, color: '#3a4a5a', fontWeight: '600' },
+  modalContactRow:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  modalPhoneText:      { fontSize: 12, color: '#1a1a1a', fontWeight: '600', marginRight: 4 },
+  modalContactBtn:     { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#EBF4FB', borderWidth: 1, borderColor: '#3D95CE' },
+  modalContactBtnText: { fontSize: 12, fontWeight: '700', color: '#1a5f8a' },
 
   tabRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
