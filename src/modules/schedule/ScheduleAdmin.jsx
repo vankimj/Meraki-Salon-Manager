@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { parsePhoneNumberFromString as lpnParse, AsYouType as AsYouTypeFormatter } from 'libphonenumber-js';
 import { fetchAppointments, fetchAppointmentsByRange, fetchAppointmentById, subscribeToAppointments, subscribeToAppointmentsByRange, createAppointment, saveAppointment, deleteAppointment, deleteRecurringGroup, fetchRecurringGroup, fetchClients, createClient, fetchServices, fetchEmployees, fetchUserPrefs, saveUserPrefs, subscribeQueue, updateWaitlistEntry, removeWaitlistEntry, subscribeTurnRoster, saveTurnRoster, subscribeTimeOff, createTimeOff, updateTimeOff, deleteTimeOff, fetchClientVisits } from '../../lib/firestore';
 import CheckoutModal from '../checkout/CheckoutModal';
 import RefundModal from '../checkout/RefundModal';
@@ -132,45 +133,54 @@ function loadOverlay(allTechs) {
 }
 
 // US phone normalization. Strip everything that isn't a digit, drop a
-// leading "1" country code, then require exactly 10 digits. Returns
-// { digits, formatted, valid } so callers can validate AND store the
-// canonical "+1 (614) 555-0123" form (with explicit country code).
-// Used for both client-record write formatting and duplicate-detection
-// comparisons (which compare on `digits` only, ignoring formatting).
+// International phone helpers via libphonenumber-js. US numbers entered
+// without a country code are auto-treated as US (default). Anything
+// starting with "+" is parsed against the appropriate country's rules.
+//
+// Returns { digits, formatted, valid, empty }:
+//   - digits    canonical comparable identity (E.164 minus the +)
+//   - formatted human-readable display string
+//   - valid     true iff parsing succeeded and the number is a real
+//               phone number for that country
+//   - empty     no input
+//
+// digits is what duplicate-detection compares on (numbers stored in
+// E.164 across all countries compare cleanly without per-country
+// normalization headaches).
 function normalizePhone(input) {
   const raw = String(input || '');
   if (!raw.trim()) return { digits: '', formatted: '', valid: true, empty: true };
-  let digits = raw.replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
-  const valid = digits.length === 10;
-  const formatted = valid
-    ? `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
-    : raw.trim();
-  return { digits, formatted, valid, empty: false };
+  try {
+    const parsed = raw.startsWith('+')
+      ? lpnParse(raw)
+      : lpnParse(raw, 'US');
+    if (parsed?.isValid()) {
+      return {
+        digits:    parsed.format('E.164').replace('+', ''),
+        formatted: parsed.format('INTERNATIONAL'),
+        valid:     true,
+        empty:     false,
+      };
+    }
+  } catch (_) {}
+  // Fall back to digit-only canonicalization for anything we can't
+  // parse — keeps legacy data flowing without losing the input.
+  return { digits: raw.replace(/\D/g, ''), formatted: raw.trim(), valid: false, empty: false };
 }
 
-// Display formatter for phones already in storage. Normalizes anything
-// stored as raw digits, dotted, dashed, or +1-prefixed to canonical
-// "(614) 555-0123". Falls back to the original string for non-US or
-// otherwise unparseable values so we never silently swallow data.
 function displayPhone(p) {
   if (!p) return '';
   const info = normalizePhone(p);
   return info.valid ? info.formatted : String(p);
 }
 
-// Live "as you type" US phone formatter. Accepts any partial input,
-// returns the best-effort masked string for display. Differs from
-// normalizePhone() in that it DOESN'T require 10 digits — it formats
-// progressively while the user is still typing.
+// Live "as you type" formatter. AsYouType from libphonenumber-js
+// handles US auto-formatting AND international (when a + is present).
 function formatPhoneAsYouType(input) {
-  let d = String(input || '').replace(/\D/g, '');
-  if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
-  d = d.slice(0, 10);
-  if (d.length === 0)  return '';
-  if (d.length <= 3)   return `+1 (${d}`;
-  if (d.length <= 6)   return `+1 (${d.slice(0, 3)}) ${d.slice(3)}`;
-  return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  const text = String(input || '');
+  if (!text) return '';
+  const ayt = new AsYouTypeFormatter(text.startsWith('+') ? undefined : 'US');
+  return ayt.input(text);
 }
 
 // Common email-domain suggestions, surfaced once the user has typed past
@@ -1979,17 +1989,16 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
     const email     = emailRaw.toLowerCase();
     if (!name) { window.alert('Please enter the client\'s name.'); return; }
 
-    // Phone: normalize to canonical "(xxx) xxx-xxxx", reject anything that
-    // isn't 10 digits (with optional leading +1). This way every client
-    // record stored from Schedule has a consistent format, and the
-    // duplicate-check below can compare digits-to-digits reliably.
+    // Phone: parse via libphonenumber-js — accepts US numbers without
+    // country code (default) and international numbers when they start
+    // with "+". Stored format is INTERNATIONAL (e.g. "+1 614 555 0123",
+    // "+44 20 7946 0958") so it round-trips cleanly across countries.
     const phoneInfo = normalizePhone(rawPhone);
     if (!phoneInfo.empty && !phoneInfo.valid) {
-      window.alert('Phone number is not valid. Please enter a 10-digit US phone (e.g. 614-555-0123).');
+      window.alert('Phone number is not valid. Enter a US phone like (614) 555-0123, or an international one with country code: +44 20 7946 0958.');
       return;
     }
     const phone = phoneInfo.formatted;
-    // Phone is required (no-anonymous-customers rule). Email stays optional.
     if (!phone) { window.alert('Phone number is required for every client.'); return; }
     if (email && !EMAIL_RE.test(email)) { window.alert('That email address looks invalid.'); return; }
 
@@ -2373,7 +2382,7 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                 onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))}
                 style={{ ...inp, marginBottom: 6 }} />
               <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                <input type="tel" inputMode="tel" placeholder="Phone * (614) 555-0123" value={newClient.phone}
+                <input type="tel" inputMode="tel" placeholder="Phone *  (614) 555-0123  ·  +44 20 7946 0958" value={newClient.phone}
                   onChange={e => setNewClient(p => ({ ...p, phone: formatPhoneAsYouType(e.target.value) }))}
                   style={{ ...inp, flex: 1 }} />
                 <div style={{ flex: 1, position: 'relative' }}>

@@ -41,23 +41,41 @@ function isoFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// US-format phone helpers — mirror src/utils/phone.js on web. Format
-// digits as "(xxx) xxx-xxxx" while typing, accept up to 10 digits + an
-// optional leading 1. validatePhone returns true only for exactly 10
-// digits — strict because the no-anonymous-customers rule depends on
-// every client having a reachable number.
+// International phone helpers via libphonenumber-js (Google's standard
+// metadata). US-style numbers without a country code are auto-treated
+// as US (the salon's home country); international numbers must include
+// a leading "+" and country code. The "as you type" formatter feeds
+// libphonenumber's AsYouType class for live formatting per-country.
+//
+// On save we store the canonical E.164 form ("+16145550123") because
+// it's what Twilio + most platforms expect for SMS routing.
+import { AsYouType, parsePhoneNumberFromString, isValidPhoneNumber } from 'libphonenumber-js';
+
+const DEFAULT_COUNTRY = 'US';
+
 function formatPhoneInput(raw) {
-  const digits = String(raw || '').replace(/\D/g, '').replace(/^1/, '').slice(0, 10);
-  if (digits.length === 0) return '';
-  if (digits.length <= 3) return `(${digits}`;
-  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-}
-function phoneDigits(raw) {
-  return String(raw || '').replace(/\D/g, '').replace(/^1/, '');
+  const text = String(raw || '');
+  // AsYouType keeps the leading + when present, otherwise assumes the
+  // default country and formats nationally — e.g. "(614) 555-0123"
+  // for US, "020 7946 0958" for UK with country code.
+  const formatter = new AsYouType(text.startsWith('+') ? undefined : DEFAULT_COUNTRY);
+  return formatter.input(text);
 }
 function isValidPhone(raw) {
-  return phoneDigits(raw).length === 10;
+  const text = String(raw || '').trim();
+  if (!text) return false;
+  return text.startsWith('+')
+    ? isValidPhoneNumber(text)
+    : isValidPhoneNumber(text, DEFAULT_COUNTRY);
+}
+// Normalize to E.164 ("+1614...") for storage. Returns null if invalid.
+function toE164(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const parsed = text.startsWith('+')
+    ? parsePhoneNumberFromString(text)
+    : parsePhoneNumberFromString(text, DEFAULT_COUNTRY);
+  return parsed?.isValid() ? parsed.format('E.164') : null;
 }
 
 // Working-hour window for a given date based on the tech's workDays
@@ -695,10 +713,15 @@ function CreateApptModal({ prefill, editAppt, onClose, onCreated }) {
     const name = newClientName.trim();
     if (!name) { Alert.alert('Name required', 'Enter the client\'s name.'); return; }
     if (!isValidPhone(newClientPhone)) {
-      Alert.alert('Phone number not valid', 'Enter a 10-digit US phone — e.g. (614) 555-0123.');
+      Alert.alert(
+        'Phone number not valid',
+        'Enter a US phone like (614) 555-0123, or an international one with country code: +44 20 7946 0958.',
+      );
       return;
     }
-    const phone = formatPhoneInput(newClientPhone);   // canonical "(xxx) xxx-xxxx"
+    // Store E.164 ("+16145550123") so Twilio and any future SMS sends
+    // route correctly regardless of caller country.
+    const phone = toE164(newClientPhone) || formatPhoneInput(newClientPhone);
     setCreatingClient(true);
     try {
       const id = await createClient({
@@ -839,12 +862,11 @@ function CreateApptModal({ prefill, editAppt, onClose, onCreated }) {
                         />
                         <TextInput
                           style={styles.newClientInput}
-                          placeholder="Phone * (614) 555-0123"
+                          placeholder="Phone *  US: (614) 555-0123  ·  Intl: +44 20 7946 0958"
                           placeholderTextColor="#bbb"
                           value={newClientPhone}
                           onChangeText={t => setNewClientPhone(formatPhoneInput(t))}
                           keyboardType="phone-pad"
-                          maxLength={14}
                         />
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
                           <TouchableOpacity
