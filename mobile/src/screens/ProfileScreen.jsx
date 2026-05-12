@@ -169,8 +169,10 @@ export default function ProfileScreen({ navigation }) {
     }
   }
 
-  const displayName = employee?.name || user?.displayName || user?.email || '';
-  const photo       = employee?.photo || user?.photoURL || null;
+  const displayName = draft?.name || employee?.name || user?.displayName || user?.email || '';
+  // Prefer the local draft so a freshly-uploaded photo shows immediately
+  // after save, before useCurrentEmployee's next re-fetch swaps it in.
+  const photo       = draft?.photo || employee?.photo || user?.photoURL || null;
 
   if (empLoading) {
     return <ActivityIndicator style={{ marginTop: 60 }} color="#3D95CE" />;
@@ -201,7 +203,7 @@ export default function ProfileScreen({ navigation }) {
               <View style={styles.avatarEditBadge}>
                 {uploadingPhoto
                   ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.avatarEditBadgeText}>📷</Text>}
+                  : <Text style={styles.avatarEditBadgeText}>＋</Text>}
               </View>
             )}
           </TouchableOpacity>
@@ -329,7 +331,7 @@ const styles = StyleSheet.create({
   avatarFallback: { backgroundColor: '#2D7A5F', alignItems: 'center', justifyContent: 'center' },
   avatarInitial:  { color: '#fff', fontSize: 36, fontWeight: '700' },
   avatarEditBadge: { position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: 14, backgroundColor: '#3D95CE', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
-  avatarEditBadgeText: { fontSize: 14 },
+  avatarEditBadgeText: { fontSize: 18, color: '#fff', fontWeight: '700', lineHeight: 20 },
   name:        { fontSize: 18, fontWeight: '700', color: '#1a1a1a' },
   email:       { fontSize: 13, color: '#888', marginTop: 4 },
 
