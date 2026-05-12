@@ -401,6 +401,15 @@ export default function ScheduleAdmin({ onOpenClient } = {}) {
 
   async function handleSave(appt, original) {
     try {
+      // No-anonymous-customers rule (2026-05-12): every NEW appointment
+      // must reference a real client record. Existing walk-in appts
+      // (legacy / GG-imported, no clientId) stay editable without
+      // forcing a fresh assignment, since there are thousands of them
+      // and the user might just be tweaking notes / status / time.
+      if (!appt.id && !appt.clientId) {
+        alert('Pick an existing client from the search box, or use "+ Create new client contact" to add one. Anonymous appointments are no longer allowed — every client needs a phone number.');
+        return;
+      }
       const dur = appt.services.reduce((sum, s) => sum + (Number(s.duration) || 0), 0) || 60;
       // Out-of-hours warning is now surfaced inline in ApptModal's Review
       // panel before the user clicks Save (one consolidated review surface
@@ -1980,7 +1989,8 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
       return;
     }
     const phone = phoneInfo.formatted;
-    if (!phone && !email) { window.alert('Please add a phone or email so we can reach the client.'); return; }
+    // Phone is required (no-anonymous-customers rule). Email stays optional.
+    if (!phone) { window.alert('Phone number is required for every client.'); return; }
     if (email && !EMAIL_RE.test(email)) { window.alert('That email address looks invalid.'); return; }
 
     // Duplicate check: scan the in-memory clients list for matches on
@@ -2363,7 +2373,7 @@ function ApptModal({ appt, mode, clients, services, techs, onChange, onSwitchEdi
                 onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))}
                 style={{ ...inp, marginBottom: 6 }} />
               <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                <input type="tel" inputMode="tel" placeholder="+1 (555) 555-5555" value={newClient.phone}
+                <input type="tel" inputMode="tel" placeholder="Phone * (614) 555-0123" value={newClient.phone}
                   onChange={e => setNewClient(p => ({ ...p, phone: formatPhoneAsYouType(e.target.value) }))}
                   style={{ ...inp, flex: 1 }} />
                 <div style={{ flex: 1, position: 'relative' }}>
@@ -3103,18 +3113,21 @@ function ClientSearch({ clients, clientId, clientName, onChange }) {
           if (!clientId) onChange({ clientId: '', clientName: val });
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Search clients by name, or type walk-in name…"
+        placeholder="Search clients by name…"
         style={inp}
       />
       {open && (
         <div style={{ position: 'absolute', left: 0, right: 0, top: 'calc(100% + 2px)', background: '#fff', border: '1px solid #d8d8d8', borderRadius: 8, zIndex: 200, maxHeight: 320, overflowY: 'auto', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', boxShadow: '0 6px 20px rgba(0,0,0,.12)' }}>
-          <div
-            onMouseDown={() => { onChange({ clientId: '', clientName: query || '' }); setOpen(false); }}
-            style={{ padding: '8px 12px', fontSize: 12, color: '#888', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <span style={{ fontSize: 14 }}>👤</span>
-            Walk-in{query ? ` — record name "${query}"` : ' (anonymous)'}
-          </div>
+          {/* Walk-in / anonymous shortcut intentionally removed — every
+              appointment must have a real client record (with phone) per
+              the no-anonymous-customers rule. If the search returns no
+              match, use the "+ Create new client contact" button below
+              the picker to mint a real record on the spot. */}
+          {filtered.length === 0 && (
+            <div style={{ padding: '12px', fontSize: 12, color: '#888', textAlign: 'center', borderBottom: '1px solid #f0f0f0' }}>
+              No matches{query ? ` for “${query}”` : ''}. Close this menu and tap <strong style={{ color: '#92400e' }}>+ Create new client contact</strong> below.
+            </div>
+          )}
           {filtered.map(c => (
             <div
               key={c.id}
