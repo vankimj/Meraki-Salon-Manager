@@ -619,19 +619,15 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
   }, [prefill?.date, prefill?.startTime]);
 
   const totalDuration = pickedServices.reduce((s, sv) => s + (Number(sv.duration) || 30), 0) || 30;
-  // Suggestion list is intentionally short — 6 when not searching,
-  // 20 when searching. Without a cap a 600-client demo overflows the
-  // modal because React Native View doesn't clip children to its
-  // height by default, so the services grid and Create button render
-  // ON TOP of the spilled list. Capping is cheaper than nesting a
-  // ScrollView inside the modal's outer ScrollView (which fights
-  // touch-scroll on iOS).
+  // Full client catalog flows into a bounded inner ScrollView so the
+  // user can scroll through everyone without hijacking the outer
+  // modal scroll. Cap at 200 visible rows for perf — anyone past
+  // that should narrow with search.
   const filteredClients = useMemo(() => {
     const q = clientQuery.trim().toLowerCase();
-    if (!q) return clients.slice(0, 6);
-    return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 20);
+    if (!q) return clients.slice(0, 200);
+    return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 200);
   }, [clientQuery, clients]);
-  const moreClientsAvailable = (clientQuery.trim() ? clients.filter(c => (c.name || '').toLowerCase().includes(clientQuery.trim().toLowerCase())).length : clients.length) > filteredClients.length;
 
   if (!prefill) return null;   // Safe now — every hook above already ran.
 
@@ -706,7 +702,11 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                     value={clientQuery}
                     onChangeText={setClientQuery}
                   />
-                  <View style={styles.clientList}>
+                  <ScrollView
+                    style={styles.clientList}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                  >
                     <TouchableOpacity
                       style={styles.clientRow}
                       onPress={() => setPickedClient({ id: '', name: 'Walk-in' })}
@@ -723,21 +723,19 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                         {c.phone ? <Text style={styles.clientRowMeta}>{c.phone}</Text> : null}
                       </TouchableOpacity>
                     ))}
-                    {moreClientsAvailable && (
-                      <View style={styles.clientRowMore}>
-                        <Text style={styles.clientRowMoreText}>
-                          {clientQuery.trim() ? 'Refine your search…' : 'Type a name above to find more clients'}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
+                  </ScrollView>
                 </>
               )}
 
               <Text style={[styles.sectionLabel, { marginTop: 18 }]}>
                 Services ({pickedServices.length} · {totalDuration} min)
               </Text>
-              <View style={styles.serviceGrid}>
+              <ScrollView
+                style={styles.serviceGridScroll}
+                contentContainerStyle={styles.serviceGrid}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
                 {services.map(svc => {
                   const active = pickedServices.some(s => s.id === svc.id);
                   return (
@@ -755,7 +753,7 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                     </TouchableOpacity>
                   );
                 })}
-              </View>
+              </ScrollView>
 
               <TouchableOpacity
                 style={[styles.primaryBtn, (working || pickedServices.length === 0) && { opacity: 0.5 }, { marginTop: 22 }]}
@@ -1108,20 +1106,19 @@ const styles = StyleSheet.create({
 
   // Create appt modal
   searchInput:        { backgroundColor: '#fafafa', borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#1a1a1a' },
-  // overflow: 'hidden' is a safety net — React Native Views don't
-  // clip children to their bounds by default, so a long list spills
-  // out behind sibling sections. We also cap the rendered count in
-  // filteredClients so this should never actually clip in practice.
-  clientList:         { marginTop: 8, backgroundColor: '#fafafa', borderRadius: 8, overflow: 'hidden' },
+  // Both inner lists are bounded ScrollViews so the user can scroll
+  // through the full client + service catalog without the modal's
+  // outer ScrollView interfering. nestedScrollEnabled is required for
+  // Android; iOS handles nested scrolling natively.
+  clientList:         { marginTop: 8, backgroundColor: '#fafafa', borderRadius: 8, height: 240 },
   clientRow:          { paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: 0.5, borderBottomColor: '#eee' },
   clientRowName:      { fontSize: 14, color: '#1a1a1a' },
   clientRowMeta:      { fontSize: 11, color: '#888', marginTop: 2 },
-  clientRowMore:      { paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center' },
-  clientRowMoreText:  { fontSize: 11, color: '#888', fontStyle: 'italic' },
   pickedChip:         { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EBF4FB', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, alignSelf: 'flex-start' },
   pickedChipText:     { fontSize: 13, color: '#1a5f8a', fontWeight: '600' },
   pickedChipX:        { fontSize: 18, color: '#1a5f8a', marginLeft: 8, lineHeight: 18 },
-  serviceGrid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  serviceGridScroll:  { marginTop: 4, height: 220 },
+  serviceGrid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingBottom: 4 },
   serviceChip:        { borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#fff', minWidth: '47%' },
   serviceChipActive:  { borderColor: '#3D95CE', backgroundColor: '#EBF4FB' },
   serviceChipName:    { fontSize: 12, fontWeight: '600', color: '#1a1a1a' },
