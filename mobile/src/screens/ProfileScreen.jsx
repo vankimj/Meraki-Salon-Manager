@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { auth } from '../lib/firebase';
 import { saveEmployee, fetchTimeOff, createTimeOff, deleteTimeOff } from '../lib/firestore';
 import { clearPushTokenForUser } from '../hooks/usePushRegistration';
@@ -576,6 +577,13 @@ function formatDateRange(t) {
   if (!t.endDate || t.endDate === t.startDate) return fmt(t.startDate);
   return `${fmt(t.startDate)} – ${fmt(t.endDate)}`;
 }
+function parseIsoDate(iso) {
+  // Use noon local time so DST shifts can't bump us to the previous day.
+  return iso ? new Date(iso + 'T12:00:00') : new Date();
+}
+function isoFromDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 // ── Add time off modal ────────────────────────────────
 // Three fields: start date (YYYY-MM-DD), end date (YYYY-MM-DD,
@@ -648,28 +656,32 @@ function AddTimeOffModal({ open, onClose, onSaved, techName }) {
               </View>
 
               <Text style={[timeOffStyles.label, { marginTop: 16 }]}>Start date</Text>
-              <TextInput
-                style={timeOffStyles.input}
-                value={startDate}
-                onChangeText={setStartDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#bbb"
-                keyboardType="numbers-and-punctuation"
-                maxLength={10}
+              <DateTimePicker
+                value={parseIsoDate(startDate)}
+                mode="date"
+                display="inline"
+                minimumDate={new Date(today + 'T00:00:00')}
+                onChange={(_, d) => {
+                  if (!d) return;
+                  const iso = isoFromDate(d);
+                  setStartDate(iso);
+                  // Keep endDate >= startDate automatically
+                  if (endDate < iso) setEndDate(iso);
+                }}
+                themeVariant="light"
               />
 
               <Text style={[timeOffStyles.label, { marginTop: 12 }]}>End date</Text>
-              <TextInput
-                style={timeOffStyles.input}
-                value={endDate}
-                onChangeText={setEndDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#bbb"
-                keyboardType="numbers-and-punctuation"
-                maxLength={10}
+              <DateTimePicker
+                value={parseIsoDate(endDate)}
+                mode="date"
+                display="inline"
+                minimumDate={parseIsoDate(startDate)}
+                onChange={(_, d) => { if (d) setEndDate(isoFromDate(d)); }}
+                themeVariant="light"
               />
-              {!valid && (startDate || endDate) && (
-                <Text style={timeOffStyles.hint}>Use YYYY-MM-DD; end date must be on or after start.</Text>
+              {!valid && (
+                <Text style={timeOffStyles.hint}>End date must be on or after start.</Text>
               )}
 
               <Text style={[timeOffStyles.label, { marginTop: 16 }]}>Reason (optional)</Text>
