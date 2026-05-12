@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
-  Modal, TextInput, ScrollView, Alert, RefreshControl,
+  Modal, TextInput, ScrollView, Alert, RefreshControl, Image, Linking,
 } from 'react-native';
 import {
   subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes,
   fetchAppointmentsByRange, createAppointment, fetchClients, fetchServices, fetchEmployees,
-  fetchTimeOff, createClient, updateAppointment,
+  fetchTimeOff, createClient, updateAppointment, fetchClient,
 } from '../lib/firestore';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
 import Icon from '../components/Icon';
@@ -1038,16 +1038,43 @@ function MonthView({ date, techName, showAll, onPickDay }) {
   );
 }
 
-// ── Detail modal (status, check-in, notes) ─────────────
+// Build the social links shown in the appt detail. Centralized so the
+// formatting matches across web + mobile and the URL builders are
+// auditable. Falls back to a tel:/sms: scheme for phone where useful.
+function buildClientLinks(client) {
+  if (!client) return [];
+  const out = [];
+  const norm = (v) => String(v || '').trim().replace(/^@/, '');
+  if (client.instagram) out.push({ kind: 'instagram', label: '@' + norm(client.instagram), url: `https://instagram.com/${norm(client.instagram)}` });
+  if (client.facebook) {
+    const fb = String(client.facebook).trim();
+    const url = fb.startsWith('http') ? fb : `https://facebook.com/${norm(fb)}`;
+    out.push({ kind: 'facebook', label: norm(fb), url });
+  }
+  if (client.tiktok) out.push({ kind: 'tiktok', label: '@' + norm(client.tiktok), url: `https://tiktok.com/@${norm(client.tiktok)}` });
+  if (client.venmo)  out.push({ kind: 'venmo',  label: '@' + norm(client.venmo),  url: `https://venmo.com/${norm(client.venmo)}` });
+  return out;
+}
+const SOCIAL_EMOJI = { instagram: '📸', facebook: '👥', tiktok: '🎵', venmo: '💸' };
+
+// ── Detail modal (status, check-in, notes, client snapshot) ─────────────
 function ApptDetailModal({ appt, onClose, onUpdate, onEdit }) {
   const [notes,   setNotes]   = useState('');
   const [working, setWorking] = useState(false);
   const [tab,     setTab]     = useState('actions');
+  const [client,  setClient]  = useState(null);   // loaded lazily
 
   useEffect(() => {
     if (appt) {
       setNotes(appt.notes || '');
       setTab('actions');
+      setClient(null);
+      // Fetch the full client record by ID so the modal can show
+      // the photo + socials. Skip if the appt is unlinked (legacy
+      // walk-in with no clientId).
+      if (appt.clientId) {
+        fetchClient(appt.clientId).then(c => setClient(c)).catch(() => setClient(null));
+      }
     }
   }, [appt?.id]);
 
@@ -1096,6 +1123,9 @@ function ApptDetailModal({ appt, onClose, onUpdate, onEdit }) {
 
   const services = (appt.services || []).map(s => s.name).filter(Boolean).join(', ')
     || appt.serviceName || '';
+  const photoUri = client?.picture || null;
+  const socials  = buildClientLinks(client);
+  const initial  = (appt.clientName || '?')[0].toUpperCase();
 
   return (
     <Modal visible={!!appt} animationType="slide" transparent onRequestClose={onClose}>
@@ -1103,6 +1133,13 @@ function ApptDetailModal({ appt, onClose, onUpdate, onEdit }) {
         <View style={styles.modalSheet}>
           {/* Header */}
           <View style={styles.modalHeader}>
+            {photoUri ? (
+              <Image source={{ uri: photoUri }} style={styles.modalAvatar} />
+            ) : (
+              <View style={[styles.modalAvatar, styles.modalAvatarFallback]}>
+                <Text style={styles.modalAvatarInitial}>{initial}</Text>
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text style={styles.modalTitle} numberOfLines={1}>
                 {appt.clientName || 'Walk-in'}
@@ -1111,6 +1148,22 @@ function ApptDetailModal({ appt, onClose, onUpdate, onEdit }) {
                 {fmtTime(appt.startTime)}{appt.duration ? ` · ${appt.duration} min` : ''}
                 {services ? ` · ${services}` : ''}
               </Text>
+              {socials.length > 0 && (
+                <View style={styles.modalSocialsRow}>
+                  {socials.map(s => (
+                    <TouchableOpacity
+                      key={s.kind}
+                      style={styles.modalSocialChip}
+                      onPress={() => Linking.openURL(s.url).catch(() => {})}
+                      activeOpacity={0.6}
+                    >
+                      <Text style={styles.modalSocialChipText}>
+                        {SOCIAL_EMOJI[s.kind]} {s.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
             {onEdit && (
               <TouchableOpacity onPress={() => onEdit(appt)} style={styles.modalEditBtn}>
@@ -1374,6 +1427,12 @@ const styles = StyleSheet.create({
   modalCloseText: { fontSize: 22, color: '#666', lineHeight: 24 },
   modalEditBtn:     { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: '#EBF4FB', borderWidth: 1, borderColor: '#3D95CE', marginRight: 8 },
   modalEditBtnText: { fontSize: 13, fontWeight: '700', color: '#1a5f8a' },
+  modalAvatar:         { width: 48, height: 48, borderRadius: 24 },
+  modalAvatarFallback: { backgroundColor: '#e8eaee', alignItems: 'center', justifyContent: 'center' },
+  modalAvatarInitial:  { fontSize: 20, fontWeight: '700', color: '#888' },
+  modalSocialsRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  modalSocialChip:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: '#f0f4f8', borderWidth: 1, borderColor: '#dbe3eb' },
+  modalSocialChipText: { fontSize: 11, color: '#3a4a5a', fontWeight: '600' },
 
   tabRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
