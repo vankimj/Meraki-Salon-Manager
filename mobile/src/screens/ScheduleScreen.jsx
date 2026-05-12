@@ -6,7 +6,7 @@ import {
 import {
   subscribeAppointments, setAppointmentStatus, checkInAppointment, setAppointmentNotes,
   fetchAppointmentsByRange, createAppointment, fetchClients, fetchServices, fetchEmployees,
-  fetchTimeOff, createClient,
+  fetchTimeOff, createClient, updateAppointment,
 } from '../lib/firestore';
 import useCurrentEmployee from '../hooks/useCurrentEmployee';
 import Icon from '../components/Icon';
@@ -39,6 +39,25 @@ function startOfWeek(d) {
 }
 function isoFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// US-format phone helpers — mirror src/utils/phone.js on web. Format
+// digits as "(xxx) xxx-xxxx" while typing, accept up to 10 digits + an
+// optional leading 1. validatePhone returns true only for exactly 10
+// digits — strict because the no-anonymous-customers rule depends on
+// every client having a reachable number.
+function formatPhoneInput(raw) {
+  const digits = String(raw || '').replace(/\D/g, '').replace(/^1/, '').slice(0, 10);
+  if (digits.length === 0) return '';
+  if (digits.length <= 3) return `(${digits}`;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+function phoneDigits(raw) {
+  return String(raw || '').replace(/\D/g, '').replace(/^1/, '');
+}
+function isValidPhone(raw) {
+  return phoneDigits(raw).length === 10;
 }
 
 // Working-hour window for a given date based on the tech's workDays
@@ -125,6 +144,7 @@ export default function ScheduleScreen() {
   const [detail,  setDetail]  = useState(null);  // selected appt for the modal
   const [view,    setView]    = useState('day'); // 'day' | 'week' | 'month'
   const [createPrefill, setCreatePrefill] = useState(null);  // { date, startTime, techName } or null
+  const [editAppt, setEditAppt] = useState(null);            // existing appt being edited or null
   const [allTechs, setAllTechs] = useState([]);  // ordered tech-name list for color assignment
   const [timeOff,  setTimeOff]  = useState([]);  // [{ techName, startDate, endDate }]
 
@@ -303,6 +323,7 @@ export default function ScheduleScreen() {
       <ApptDetailModal
         appt={detail}
         onClose={() => setDetail(null)}
+        onEdit={(a) => { setDetail(null); setEditAppt(a); }}
         onUpdate={(patch) => {
           // Optimistic local update; live sub will reconcile.
           setAppts(prev => prev.map(a => a.id === detail.id ? { ...a, ...patch } : a));
@@ -312,8 +333,9 @@ export default function ScheduleScreen() {
 
       <CreateApptModal
         prefill={createPrefill}
-        onClose={() => setCreatePrefill(null)}
-        onCreated={() => setCreatePrefill(null)}
+        editAppt={editAppt}
+        onClose={() => { setCreatePrefill(null); setEditAppt(null); }}
+        onCreated={() => { setCreatePrefill(null); setEditAppt(null); }}
       />
     </View>
   );
@@ -589,12 +611,15 @@ function WeekView({ date, techName, showAll, allTechs, workDays, timeOff, onTapA
 // catalog, and a duration. Save → createAppointment → live sub
 // reconciles. Walk-ins are supported via the "No client (walk-in)"
 // row at the top of the client picker.
-function CreateApptModal({ prefill, onClose, onCreated }) {
+// Create OR Edit appointment. Pass `prefill` (date/startTime/techName)
+// to open in create mode; pass `editAppt` (full existing appt) to open
+// in edit mode. The two are mutually exclusive — caller picks which.
+// In edit mode the title/CTA flip to "Edit appointment" / "Save changes"
+// and save goes through updateAppointment instead of createAppointment.
+function CreateApptModal({ prefill, editAppt, onClose, onCreated }) {
   // CRITICAL: every hook below runs on every render regardless of
-  // prefill. The previous version had an early `if (!prefill) return null`
-  // after useState/useEffect but before useMemo, which made the hook
-  // count vary across renders ("Rendered more hooks than during the
-  // previous render" crash). All conditionals are now inside the JSX.
+  // open state. Conditional rendering is INSIDE the JSX, never via
+  // an early return between hook calls.
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -602,14 +627,20 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
   const [pickedClient, setPickedClient] = useState(null);
   const [clientQuery, setClientQuery] = useState('');
   const [pickedServices, setPickedServices] = useState([]);
+  // Editable time fields — only used in edit mode but the state stays
+  // declared unconditionally to keep hook order stable.
+  const [editStartTime, setEditStartTime] = useState('');
   // Inline new-client form state — opens when user taps "+ New client".
   const [newClientOpen,  setNewClientOpen]  = useState(false);
   const [newClientName,  setNewClientName]  = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
   const [creatingClient, setCreatingClient] = useState(false);
 
+  const open = !!(prefill || editAppt);
+  const isEdit = !!editAppt;
+
   useEffect(() => {
-    if (!prefill) return;
+    if (!open) return;
     setLoading(true);
     Promise.all([fetchClients(), fetchServices()])
       .then(([cs, svc]) => {
@@ -618,13 +649,24 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
       })
       .catch(() => { setClients([]); setServices([]); })
       .finally(() => setLoading(false));
-    setPickedClient(null);
-    setClientQuery('');
-    setPickedServices([]);
     setNewClientOpen(false);
     setNewClientName('');
     setNewClientPhone('');
-  }, [prefill?.date, prefill?.startTime]);
+    if (isEdit) {
+      setPickedClient(editAppt.clientId
+        ? { id: editAppt.clientId, name: editAppt.clientName || '' }
+        : null);
+      setPickedServices((editAppt.services || []).map(s => ({
+        id: s.id, name: s.name, duration: Number(s.duration) || 30, price: Number(s.price) || 0,
+      })));
+      setEditStartTime(editAppt.startTime || '');
+    } else {
+      setPickedClient(null);
+      setPickedServices([]);
+      setEditStartTime('');
+    }
+    setClientQuery('');
+  }, [prefill?.date, prefill?.startTime, editAppt?.id]);
 
   const totalDuration = pickedServices.reduce((s, sv) => s + (Number(sv.duration) || 30), 0) || 30;
   // Full client catalog flows into a bounded inner ScrollView so the
@@ -637,7 +679,7 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
     return clients.filter(c => (c.name || '').toLowerCase().includes(q)).slice(0, 200);
   }, [clientQuery, clients]);
 
-  if (!prefill) return null;   // Safe now — every hook above already ran.
+  if (!open) return null;   // Safe now — every hook above already ran.
 
   function toggleService(svc) {
     setPickedServices(prev => prev.some(s => s.id === svc.id)
@@ -651,9 +693,12 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
   // selected as the appt's client and the form collapses.
   async function saveNewClient() {
     const name = newClientName.trim();
-    const phone = newClientPhone.trim();
-    if (!name)  { Alert.alert('Name required', 'Enter the client\'s name.'); return; }
-    if (!phone) { Alert.alert('Phone required', 'Enter a phone number — every client needs one.'); return; }
+    if (!name) { Alert.alert('Name required', 'Enter the client\'s name.'); return; }
+    if (!isValidPhone(newClientPhone)) {
+      Alert.alert('Phone number not valid', 'Enter a 10-digit US phone — e.g. (614) 555-0123.');
+      return;
+    }
+    const phone = formatPhoneInput(newClientPhone);   // canonical "(xxx) xxx-xxxx"
     setCreatingClient(true);
     try {
       const id = await createClient({
@@ -687,39 +732,55 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
       Alert.alert('Add at least one service', 'Pick the service(s) the client is booking.');
       return;
     }
+    if (isEdit && !/^\d{1,2}:\d{2}$/.test(editStartTime)) {
+      Alert.alert('Start time not valid', 'Use 24-hour HH:MM format (e.g. 14:30).');
+      return;
+    }
     setWorking(true);
     try {
-      await createAppointment({
-        date:      prefill.date,
-        startTime: prefill.startTime,
-        techName:  prefill.techName || '',
-        clientId:  pickedClient.id,
-        clientName: pickedClient.name,
-        services:  pickedServices,
-        duration:  totalDuration,
-        status:    'scheduled',
-        notes:     '',
-        techRequestType: 'scheduler',
-      });
+      if (isEdit) {
+        await updateAppointment(editAppt.id, {
+          startTime: editStartTime,
+          clientId:  pickedClient.id,
+          clientName: pickedClient.name,
+          services:  pickedServices,
+          duration:  totalDuration,
+        });
+      } else {
+        await createAppointment({
+          date:      prefill.date,
+          startTime: prefill.startTime,
+          techName:  prefill.techName || '',
+          clientId:  pickedClient.id,
+          clientName: pickedClient.name,
+          services:  pickedServices,
+          duration:  totalDuration,
+          status:    'scheduled',
+          notes:     '',
+          techRequestType: 'scheduler',
+        });
+      }
       onCreated?.();
     } catch (e) {
-      Alert.alert('Couldn\'t create appointment', e?.message || 'Please try again.');
+      Alert.alert(isEdit ? 'Couldn\'t save changes' : 'Couldn\'t create appointment', e?.message || 'Please try again.');
     } finally {
       setWorking(false);
     }
   }
 
   return (
-    <Modal visible={!!prefill} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={open} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalSheet}>
           <View style={styles.modalHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.modalTitle}>New appointment</Text>
+              <Text style={styles.modalTitle}>{isEdit ? 'Edit appointment' : 'New appointment'}</Text>
               <Text style={styles.modalSubtitle}>
-                {new Date(prefill.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                {' · '}{fmtTime(prefill.startTime)}
-                {prefill.techName ? ` · ${prefill.techName}` : ' · (no tech assigned)'}
+                {(() => {
+                  const ctx = isEdit ? editAppt : prefill;
+                  const tech = ctx.techName;
+                  return `${new Date(ctx.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTime(isEdit ? editStartTime : ctx.startTime)}${tech ? ' · ' + tech : ' · (no tech)'}`;
+                })()}
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.modalClose}>
@@ -731,6 +792,20 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
             <ActivityIndicator style={{ marginTop: 30 }} color="#3D95CE" />
           ) : (
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+              {isEdit && (
+                <>
+                  <Text style={styles.sectionLabel}>Start time (24-hour)</Text>
+                  <TextInput
+                    style={[styles.searchInput, { marginBottom: 16 }]}
+                    placeholder="14:30"
+                    placeholderTextColor="#bbb"
+                    value={editStartTime}
+                    onChangeText={setEditStartTime}
+                    keyboardType="numbers-and-punctuation"
+                    maxLength={5}
+                  />
+                </>
+              )}
               <Text style={styles.sectionLabel}>Client</Text>
               {pickedClient ? (
                 <TouchableOpacity onPress={() => setPickedClient(null)} style={styles.pickedChip}>
@@ -764,11 +839,12 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                         />
                         <TextInput
                           style={styles.newClientInput}
-                          placeholder="Phone number *"
+                          placeholder="Phone * (614) 555-0123"
                           placeholderTextColor="#bbb"
                           value={newClientPhone}
-                          onChangeText={setNewClientPhone}
+                          onChangeText={t => setNewClientPhone(formatPhoneInput(t))}
                           keyboardType="phone-pad"
+                          maxLength={14}
                         />
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
                           <TouchableOpacity
@@ -843,7 +919,9 @@ function CreateApptModal({ prefill, onClose, onCreated }) {
                 disabled={working || pickedServices.length === 0}
               >
                 <Text style={styles.primaryBtnText}>
-                  {working ? 'Creating…' : `Create appointment (${totalDuration} min)`}
+                  {working
+                    ? (isEdit ? 'Saving…' : 'Creating…')
+                    : (isEdit ? `Save changes (${totalDuration} min)` : `Create appointment (${totalDuration} min)`)}
                 </Text>
               </TouchableOpacity>
             </ScrollView>
@@ -939,7 +1017,7 @@ function MonthView({ date, techName, showAll, onPickDay }) {
 }
 
 // ── Detail modal (status, check-in, notes) ─────────────
-function ApptDetailModal({ appt, onClose, onUpdate }) {
+function ApptDetailModal({ appt, onClose, onUpdate, onEdit }) {
   const [notes,   setNotes]   = useState('');
   const [working, setWorking] = useState(false);
   const [tab,     setTab]     = useState('actions');
@@ -1012,6 +1090,11 @@ function ApptDetailModal({ appt, onClose, onUpdate }) {
                 {services ? ` · ${services}` : ''}
               </Text>
             </View>
+            {onEdit && (
+              <TouchableOpacity onPress={() => onEdit(appt)} style={styles.modalEditBtn}>
+                <Text style={styles.modalEditBtnText}>Edit</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={onClose} style={styles.modalClose}>
               <Text style={styles.modalCloseText}>×</Text>
             </TouchableOpacity>
@@ -1267,6 +1350,8 @@ const styles = StyleSheet.create({
   modalSubtitle: { fontSize: 12, color: '#888', marginTop: 2 },
   modalClose: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f5f5' },
   modalCloseText: { fontSize: 22, color: '#666', lineHeight: 24 },
+  modalEditBtn:     { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: '#EBF4FB', borderWidth: 1, borderColor: '#3D95CE', marginRight: 8 },
+  modalEditBtnText: { fontSize: 13, fontWeight: '700', color: '#1a5f8a' },
 
   tabRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
