@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native';
 import { auth } from '../lib/firebase';
-import { subscribeToChat, sendChatMessage, markChatRead } from '../lib/firestore';
+import { subscribeToChat, sendChatMessage, sendSmsToClient, sendEmailToClient, markChatRead } from '../lib/firestore';
 import Icon from '../components/Icon';
 
 function fmtTime(iso) {
@@ -17,7 +17,9 @@ export default function ChatThreadScreen({ route }) {
   const [thread,  setThread]  = useState(null);
   const [loading, setLoading] = useState(true);
   const [draft,   setDraft]   = useState('');
+  const [subject, setSubject] = useState('Message from your salon');  // email only
   const [sending, setSending] = useState(false);
+  const [channel, setChannel] = useState('app');   // 'app' | 'sms' | 'email'
   const listRef = useRef(null);
 
   // Live subscription to the chat doc.
@@ -48,21 +50,27 @@ export default function ChatThreadScreen({ route }) {
     if (!text || sending) return;
     setSending(true);
     try {
-      const me = auth.currentUser;
-      const message = {
-        from: 'staff',
-        text,
-        at:   new Date().toISOString(),
-        sender: me?.displayName || me?.email || 'Staff',
-      };
-      await sendChatMessage(clientId, { name: clientName, email: clientEmail }, message);
+      if (channel === 'sms') {
+        await sendSmsToClient(clientId, text);
+      } else if (channel === 'email') {
+        await sendEmailToClient(clientId, subject.trim() || 'Message from your salon', text);
+      } else {
+        const me = auth.currentUser;
+        const message = {
+          from: 'staff',
+          text,
+          at:   new Date().toISOString(),
+          sender: me?.displayName || me?.email || 'Staff',
+        };
+        await sendChatMessage(clientId, { name: clientName, email: clientEmail }, message);
+      }
       setDraft('');
     } catch (e) {
       console.warn('[chat] send failed:', e?.message);
     } finally {
       setSending(false);
     }
-  }, [draft, sending, clientId, clientName, clientEmail]);
+  }, [draft, sending, channel, subject, clientId, clientName, clientEmail]);
 
   if (loading) {
     return <ActivityIndicator style={{ marginTop: 60 }} color="#3D95CE" />;
@@ -102,12 +110,56 @@ export default function ChatThreadScreen({ route }) {
         }}
       />
 
+      {/* Channel picker — App is always available; SMS / Email gate
+          on whether the thread doc has the contact info on file. */}
+      <View style={styles.channelRow}>
+        {[
+          { id: 'app',   label: '💬 App',  enabled: true },
+          { id: 'sms',   label: '📱 SMS',  enabled: !!thread?.clientPhone },
+          { id: 'email', label: '✉️ Email', enabled: !!(thread?.clientEmail || clientEmail) },
+        ].map(c => (
+          <TouchableOpacity
+            key={c.id}
+            disabled={!c.enabled}
+            onPress={() => setChannel(c.id)}
+            style={[
+              styles.channelChip,
+              channel === c.id && c.enabled && styles.channelChipActive,
+              !c.enabled && styles.channelChipDisabled,
+            ]}
+          >
+            <Text style={[
+              styles.channelChipText,
+              channel === c.id && c.enabled && styles.channelChipTextActive,
+              !c.enabled && styles.channelChipTextDisabled,
+            ]}>{c.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {channel === 'email' && (
+        <View style={styles.subjectWrap}>
+          <TextInput
+            style={styles.subjectInput}
+            value={subject}
+            onChangeText={setSubject}
+            placeholder="Subject"
+            placeholderTextColor="#bbb"
+            maxLength={200}
+          />
+        </View>
+      )}
+
       <View style={styles.composer}>
         <TextInput
           style={styles.composerInput}
           value={draft}
           onChangeText={setDraft}
-          placeholder="Type a message…"
+          placeholder={
+            channel === 'sms'   ? 'Send as SMS…'
+            : channel === 'email' ? 'Email body…'
+            : 'Type a message…'
+          }
           placeholderTextColor="#bbb"
           multiline
           maxLength={2000}
@@ -138,6 +190,18 @@ const styles = StyleSheet.create({
   bubbleTextStaff: { color: '#fff' },
   bubbleTime:  { fontSize: 10, color: '#aaa', marginTop: 3, marginHorizontal: 6 },
 
+  channelRow: {
+    flexDirection: 'row', gap: 6, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 4,
+    backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#ebebeb',
+  },
+  channelChip:        { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, backgroundColor: '#f5f5f5', borderWidth: 1, borderColor: '#e5e7eb' },
+  channelChipActive:  { backgroundColor: '#EBF4FB', borderColor: '#3D95CE' },
+  channelChipDisabled:{ opacity: 0.4 },
+  channelChipText:        { fontSize: 12, fontWeight: '600', color: '#666' },
+  channelChipTextActive:  { color: '#1a5f8a', fontWeight: '700' },
+  channelChipTextDisabled:{ color: '#aaa' },
+  subjectWrap:  { paddingHorizontal: 10, paddingTop: 4, paddingBottom: 4, backgroundColor: '#fff' },
+  subjectInput: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#1a1a1a', backgroundColor: '#fafafa' },
   composer: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 8,
     paddingHorizontal: 10, paddingVertical: 8, paddingBottom: Platform.OS === 'ios' ? 8 : 10,

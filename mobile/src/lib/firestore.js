@@ -2,7 +2,7 @@ import {
   collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc,
   query, where, orderBy, limit, onSnapshot, arrayUnion, increment,
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, callFn } from './firebase';
 import { getCurrentTenant } from './currentTenant';
 
 // tenantCol/tenantDoc read getCurrentTenant() at CALL time so a tenant
@@ -240,4 +240,17 @@ export async function markChatRead(clientId) {
   try {
     await updateDoc(doc(CHATS_COL, clientId), { unreadStaff: 0 });
   } catch {}
+}
+
+// Outbound SMS / Email — wraps the same sendDirectSms / sendDirectEmail
+// Cloud Functions the web ChatAdmin uses. Server-side appends to the
+// chats thread with channel='sms' or channel='email' so the conversation
+// stays in one place regardless of which channel was used.
+export async function sendSmsToClient(clientId, body) {
+  const res = await callFn('sendDirectSms')({ tenantId: getCurrentTenant(), clientId, body });
+  return res?.data || { ok: true };
+}
+export async function sendEmailToClient(clientId, subject, body) {
+  const res = await callFn('sendDirectEmail')({ tenantId: getCurrentTenant(), clientId, subject, body });
+  return res?.data || { ok: true };
 }
